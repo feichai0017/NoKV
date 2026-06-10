@@ -2,7 +2,7 @@
 // filesystem.rs to keep that file focused on the Filesystem trait impl.
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 
 use fuser::{
     Errno, FileAttr, FileHandle, FileType as FuseFileType, FopenFlags, Generation, INodeNo,
@@ -12,8 +12,8 @@ use nokv_meta::{
     DentryWithAttr, PublishArtifactStagedSession, ReadDirPlusPage, RenameReplaceResult,
 };
 use nokv_object::{
-    manifest_digest_uri, DirtyChunkExtent, FileReadPipeline, ObjectError, ObjectReadBlock,
-    PendingChunkedWrite,
+    chunk_manifests_from_stored_chunks, manifest_digest_uri, DirtyChunkExtent, FileReadPipeline,
+    ObjectError, ObjectReadBlock, PendingChunkedWrite,
 };
 use nokv_types::{AdvisoryLockRequest, DentryName, FileType, InodeAttr, InodeId};
 
@@ -32,10 +32,9 @@ use super::options::{
 };
 use super::posix::{inode_id, resolve_fallocate_size};
 use super::write_session::{
-    buffered_publish_ranges, buffered_ranges_block_count, cleanup_written_objects,
-    forget_staged_blocks, fuse_manifest_id, push_buffered_write, select_unstaged_blocks,
-    take_buffered_upload_ranges, BufferedWriteRange, PendingBufferedUpload, SequentialDigest,
-    WriteHandle, WriteStageReservation,
+    cleanup_written_objects, forget_staged_blocks, fuse_manifest_id, has_buffered_upload_ready,
+    push_buffered_write, select_unstaged_blocks, take_buffered_upload_ranges, BufferedWriteRange,
+    PendingBufferedRange, PendingBufferedUpload, WriteHandle, WriteStageReservation,
 };
 use super::{NoKvFuse, ReadHandle};
 
@@ -448,10 +447,10 @@ where
         let raw = self.next_handle.fetch_add(1, Ordering::Relaxed);
         self.read_handles.write().map_err(|_| Errno::EIO)?.insert(
             raw,
-            ReadHandle {
+            Arc::new(ReadHandle {
                 attr,
-                reader: FileReadPipeline::new(self.options.read_pipeline),
-            },
+                reader: Mutex::new(FileReadPipeline::new(self.options.read_pipeline)),
+            }),
         );
         Ok(FileHandle(raw))
     }
@@ -462,26 +461,25 @@ where
         offset: u64,
         size: u32,
     ) -> Result<Option<Vec<u8>>, Errno> {
-        let Some((attr, mut reader)) = self
+        let Some(handle) = self
             .read_handles
             .read()
             .map_err(|_| Errno::EIO)?
             .get(&fh.0)
-            .map(|handle| (handle.attr.clone(), handle.reader.clone()))
+            .cloned()
         else {
             return Ok(None);
         };
+        let mut reader = handle.reader.lock().map_err(|_| Errno::EIO)?.clone();
         let bytes = self
-            .service_read_file_with_known_attr_pipeline(&attr, offset, size as usize, &mut reader)
+            .service_read_file_with_known_attr_pipeline(
+                &handle.attr,
+                offset,
+                size as usize,
+                &mut reader,
+            )
             .map_err(errno)?;
-        if let Some(handle) = self
-            .read_handles
-            .write()
-            .map_err(|_| Errno::EIO)?
-            .get_mut(&fh.0)
-        {
-            handle.reader = reader;
-        }
+        *handle.reader.lock().map_err(|_| Errno::EIO)? = reader;
         Ok(Some(bytes))
     }
 
@@ -492,10 +490,10 @@ where
         offset: u64,
         size: u32,
     ) -> Result<Vec<u8>, Errno> {
-        if let Some(bytes) = self.read_from_handle(fh, offset, size)? {
+        if let Some(bytes) = self.read_from_read_handle(fh, offset, size)? {
             return Ok(bytes);
         }
-        if let Some(bytes) = self.read_from_read_handle(fh, offset, size)? {
+        if let Some(bytes) = self.read_from_handle(fh, offset, size)? {
             return Ok(bytes);
         }
         let inode = self.metadata_inode(ino)?;
@@ -651,7 +649,6 @@ where
             writer,
             buffered: Vec::new(),
             pending_uploads: Vec::new(),
-            sequential_digest: Some(SequentialDigest::new()),
             staged_block_offsets: HashSet::new(),
             dirty: false,
         })
@@ -690,11 +687,6 @@ where
                         .map_err(errno)?,
                 );
             }
-            if let Some(digest) = handle.sequential_digest.as_mut() {
-                if !digest.append(offset, data) {
-                    handle.sequential_digest = None;
-                }
-            }
             push_buffered_write(&mut handle.buffered, offset, data);
             handle.size = handle.size.max(end);
             handle.dirty = true;
@@ -722,12 +714,6 @@ where
             );
         }
         handle.size = size;
-        match handle.sequential_digest.as_ref().map(|digest| digest.len) {
-            Some(len) if len == size => {}
-            Some(_) if size == 0 => handle.sequential_digest = Some(SequentialDigest::new()),
-            Some(_) => handle.sequential_digest = None,
-            None => {}
-        }
         handle.dirty = true;
         Ok(())
     }
@@ -791,7 +777,7 @@ where
             self.overlay_dirty_extents(&mut bytes, offset, writer.dirty_extents())?;
         }
         for upload in &handle.pending_uploads {
-            self.overlay_buffered_ranges(&mut bytes, offset, &upload.ranges)?;
+            self.overlay_pending_ranges(&mut bytes, offset, &upload.ranges)?;
         }
         self.overlay_buffered_ranges(&mut bytes, offset, &handle.buffered)?;
         Ok(Some(bytes))
@@ -841,7 +827,12 @@ where
                         if first_error.is_none() {
                             first_error = Some(errno);
                         }
-                        failed_ranges.extend(upload.ranges);
+                        failed_ranges.extend(
+                            upload
+                                .ranges
+                                .into_iter()
+                                .map(PendingBufferedRange::into_buffered),
+                        );
                     }
                 }
             }
@@ -886,6 +877,9 @@ where
                 let Some(handle) = handles.get_mut(&fh.0) else {
                     return Err(Errno::EBADF);
                 };
+                if !has_buffered_upload_ready(&handle.buffered, force) {
+                    return Ok(());
+                }
                 let taken = take_buffered_upload_ranges(&mut handle.buffered, force)?;
                 if taken.is_empty() {
                     return Ok(());
@@ -903,25 +897,40 @@ where
                 }
                 let prepared = handle.prepared.clone().ok_or(Errno::EIO)?;
                 let writer = handle.writer.as_mut().ok_or(Errno::EIO)?;
-                let block_count = buffered_ranges_block_count(&ranges)?;
-                let block_index_base = writer.reserve_blocks(block_count);
+                let upload = writer.prepare_upload(ranges).map_err(errno)?;
+                let Some(upload) = upload else {
+                    if force {
+                        continue;
+                    }
+                    return Ok(());
+                };
                 WriteStageReservation {
                     prepared,
                     manifest_id: writer.options().manifest_id.clone(),
-                    block_index_base,
-                    ranges,
+                    block_index_base: upload.block_index_base,
+                    ranges: upload.ranges,
                 }
             };
-            let publish_ranges = buffered_publish_ranges(&reservation.ranges);
-            let pending = match self.backend.stage_prepared_artifact_ranges_async(
+            let pending_ranges = reservation
+                .ranges
+                .into_iter()
+                .map(PendingBufferedRange::from_chunk_range)
+                .collect::<Vec<_>>();
+            let pending = match self.backend.stage_prepared_artifact_shared_ranges_async(
                 &reservation.prepared,
                 &reservation.manifest_id,
-                &publish_ranges,
+                &pending_ranges,
                 reservation.block_index_base,
             ) {
                 Ok(pending) => pending,
                 Err(err) => {
-                    self.restore_buffered_ranges(fh, reservation.ranges);
+                    self.restore_buffered_ranges(
+                        fh,
+                        pending_ranges
+                            .into_iter()
+                            .map(PendingBufferedRange::into_buffered)
+                            .collect(),
+                    );
                     return Err(errno(err));
                 }
             };
@@ -943,7 +952,7 @@ where
             }
             handle.pending_uploads.push(PendingBufferedUpload {
                 pending,
-                ranges: reservation.ranges,
+                ranges: pending_ranges,
             });
             if !force {
                 return Ok(());
@@ -1004,7 +1013,9 @@ where
                             len,
                             &[ObjectReadBlock {
                                 object_key: block.object_key.clone(),
+                                digest_uri: "sha256:test".to_owned(),
                                 object_offset,
+                                object_len: block.len,
                                 len,
                                 output_offset: 0,
                             }],
@@ -1052,6 +1063,38 @@ where
         Ok(())
     }
 
+    pub(super) fn overlay_pending_ranges(
+        &self,
+        output: &mut [u8],
+        output_offset: u64,
+        ranges: &[PendingBufferedRange],
+    ) -> Result<(), Errno> {
+        if output.is_empty() {
+            return Ok(());
+        }
+        let output_limit = output_offset
+            .checked_add(u64::try_from(output.len()).map_err(|_| Errno::EINVAL)?)
+            .ok_or(Errno::EINVAL)?;
+        for range in ranges {
+            let range_end = range
+                .offset
+                .checked_add(u64::try_from(range.len()).map_err(|_| Errno::EINVAL)?)
+                .ok_or(Errno::EINVAL)?;
+            let start = range.offset.max(output_offset);
+            let end = range_end.min(output_limit);
+            if start >= end {
+                continue;
+            }
+            let source_start = usize::try_from(start - range.offset).map_err(|_| Errno::EINVAL)?;
+            let source_end = usize::try_from(end - range.offset).map_err(|_| Errno::EINVAL)?;
+            let output_start = usize::try_from(start - output_offset).map_err(|_| Errno::EINVAL)?;
+            let output_end = usize::try_from(end - output_offset).map_err(|_| Errno::EINVAL)?;
+            output[output_start..output_end]
+                .copy_from_slice(&range.as_slice()[source_start..source_end]);
+        }
+        Ok(())
+    }
+
     pub(super) fn publish_handle(&self, fh: FileHandle) -> Result<(), Errno> {
         let has_write_handle = self
             .write_handles
@@ -1095,17 +1138,12 @@ where
                     .rebind_prepared_dentry_version(&mut prepared, version);
             }
         }
-        let digest_uri = snapshot
-            .sequential_digest
-            .as_ref()
-            .and_then(|digest| digest.digest_uri_for_size(snapshot.size))
-            .unwrap_or_else(|| {
-                manifest_digest_uri(
-                    snapshot.size,
-                    self.backend.prepared_generation(&prepared),
-                    writer.staged_chunks(),
-                )
-            });
+        let digest_uri = manifest_digest_uri(
+            snapshot.size,
+            self.backend.prepared_generation(&prepared),
+            writer.staged_chunks(),
+        );
+        let chunks = chunk_manifests_from_stored_chunks(writer.staged_chunks());
         self.backend
             .publish_prepared_artifact_staged_session(
                 prepared,
@@ -1117,7 +1155,7 @@ where
                     content_type: "application/octet-stream".to_owned(),
                     manifest_id: fuse_manifest_id(snapshot.parent, snapshot.inode),
                     size: snapshot.size,
-                    chunks: writer.staged_chunks().to_vec(),
+                    chunks,
                     staged: writer.staged_objects().clone(),
                     mode: snapshot.mode,
                     uid: snapshot.uid,
@@ -1135,7 +1173,6 @@ where
             handle.size = snapshot.size;
             handle.prepared = None;
             handle.writer = None;
-            handle.sequential_digest = Some(SequentialDigest::new());
             handle.staged_block_offsets.clear();
             handle.dirty = false;
         }

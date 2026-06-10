@@ -352,11 +352,11 @@ where
             .filter(|range| !range.bytes.is_empty())
             .map(|range| ChunkWriteRange {
                 logical_offset: range.offset,
-                bytes: range.bytes.clone(),
+                bytes: range.bytes.clone().into(),
             })
             .collect::<Vec<_>>();
         match self.objects.write_ranges_with_block_index_base(
-            &dirty_ranges,
+            dirty_ranges,
             ChunkWriteOptions {
                 manifest_id: manifest_id.to_owned(),
                 mount: self.mount.get(),
@@ -512,11 +512,11 @@ where
             .filter(|range| !range.bytes.is_empty())
             .map(|range| ChunkWriteRange {
                 logical_offset: range.offset,
-                bytes: range.bytes.clone(),
+                bytes: range.bytes.clone().into(),
             })
             .collect::<Vec<_>>();
-        let written = self.objects.write_ranges(
-            &dirty_ranges,
+        let written = self.objects.write_ranges_with_block_index_base(
+            dirty_ranges,
             ChunkWriteOptions {
                 manifest_id: request.manifest_id.clone(),
                 mount: self.mount.get(),
@@ -525,6 +525,7 @@ where
                 chunk_size: DEFAULT_CHUNK_SIZE,
                 block_size: DEFAULT_BLOCK_SIZE,
             },
+            0,
         )?;
         let staged = written.staged_objects()?;
         self.object_puts
@@ -533,7 +534,8 @@ where
             .fetch_add(written.object_put_bytes, Ordering::Relaxed);
 
         let old_chunks = self.prepared_old_chunks(prepared)?;
-        let chunks = merge_session_chunks(request.size, old_chunks.clone(), written.chunks)?;
+        let dirty_chunks = written.chunk_manifests();
+        let chunks = merge_session_chunks(request.size, old_chunks.clone(), dirty_chunks)?;
         self.manifest_chunks
             .fetch_add(chunks.len() as u64, Ordering::Relaxed);
         self.manifest_blocks

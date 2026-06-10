@@ -23,12 +23,14 @@ NoKV
     metadata command atomicity
     body descriptors
     checkpoint/artifact publish points
+    layout leases and block read plans
     watch/snapshot/cache invalidation metadata
 
   delegates:
     file body durability
     object replication
     object lifecycle storage
+    NVMe residency and transport placement as soft data-plane state
 ```
 
 This keeps the system focused. Object stores already provide elastic byte
@@ -70,11 +72,12 @@ AI training / agent process
   -> FUSE, Rust SDK, or Python/fsspec
   -> NoKV metadata service
   -> Holt metadata engine
-  -> S3-compatible object store
+  -> NoKV data fabric
+  -> local NVMe hot blocks and S3-compatible cold blocks
 ```
 
-FUSE is the compatibility path. Native clients are the performance path for
-data loaders, checkpoint writers, Ray jobs, and agent runtimes that can call a
+FUSE is the mounted-file path. Native clients are the performance path for data
+loaders, checkpoint writers, Ray jobs, and agent runtimes that can call a
 library directly.
 
 ## Target Architecture
@@ -92,21 +95,25 @@ flowchart TB
     Router --> Metad["NoKV metad"]
     Metad --> Command["MetadataCommand"]
     Command --> Shard["metadata shard"]
-    Shard --> Raft["Raft log"]
-    Raft --> Holt["Holt state machine"]
+    Shard --> Fence["owner epoch fence"]
+    Fence --> Holt["single-owner Holt shard"]
 
-    Fuse --> Cache["node-local cache"]
-    Python --> Cache
-    Rust --> Cache
-    Cache --> Object["S3-compatible object store"]
-    Metad --> Object
+    Control["small control plane"] --> Router
+    Control --> Lease["owner leases + shard map"]
+
+    Fuse --> Fabric["data fabric"]
+    Python --> Fabric
+    Rust --> Fabric
+    Fabric --> NVMe["local / peer NVMe hot tier"]
+    Fabric --> Object["S3-compatible cold durable tier"]
 ```
 
-The current implementation is a client/server `metad` path backed by Holt and
-OpenRaft. A single-node deployment is represented as a one-voter metadata
-group; local 3-voter smoke coverage exists, while production membership,
-learner read scaling, checkpoint archive, and multi-machine operations remain
-the distributed hardening work.
+The current implementation is a client/server `metad` path backed by a
+**single-node** embedded Holt MVCC engine — there is no replication and no
+consensus group. The object-backed metadata archive (backup/restore) is
+implemented; production multi-node operation (subtree sharding, owner-lease +
+epoch fencing) remains the distributed hardening work described under Metadata
+Distribution.
 
 ## Kubernetes Deployment Target
 
@@ -136,14 +143,18 @@ production multi-node metadata operations remain product direction.
 
 ## Metadata Distribution
 
-The first distributed version should use one metadata shard per mount. A shard
-is a Raft group whose state machine is a Holt instance.
+The first distributed version shards by subtree (a mount, or a subtree within a
+mount) — one single-owner Holt engine per shard. Shards are *not* consensus-
+replicated: a small control group grants owner-leases and holds the kilobyte
+shard map, and a monotonic epoch fences a deposed owner at the commit boundary.
+Failover restores a shard's Holt checkpoint image from object storage (the same
+mechanism as metadata DR) onto a new owner.
 
 ```text
 client
   -> metadata router
-  -> shard leader
-  -> Raft commit
+  -> shard owner
+  -> owner epoch fence
   -> Holt atomic batch apply
   -> watch/cache invalidation event
   -> response
@@ -161,6 +172,43 @@ workspace/channel shard
 Cross-shard rename and cross-mount atomic transactions are not part of the
 first distributed target. Same-shard rename remains atomic. Cross-shard rename
 can return `EXDEV` until a handoff or transaction protocol exists.
+
+## Data Fabric
+
+NoKV's metadata manifest names immutable block identity and durable object
+location. It does not name a specific NVMe device or cache slot. Those are
+data-plane placements and can change without a metadata commit.
+
+```text
+metadata truth:
+  inode, generation, logical offsets, block digest, S3 object key
+
+soft placement:
+  block digest -> local hot-tier presence / ttl / health
+```
+
+The first data-fabric skeleton is already in `nokv-object`: `LocalObjectStore`
+is the node-local NVMe-shaped hot tier and `TieredObjectStore` fronts it with a
+cold durable object backend. Reads check hot placement first, fall back to
+S3-compatible storage, can refresh the hot tier on full-object reads, and use
+`ObjectStore::get_many` to fetch coalesced read-plan ranges in one object-layer
+batch. The hot tier now has a process-local residency index rebuilt from disk on
+open, optional max-byte admission with LRU eviction, and inline or background
+hot-fill modes with in-flight duplicate-key coalescing. `resolve_block_placements`
+currently marks blocks as `LocalNvmeRead` or `ObjectTcpGet` from local hot-tier
+presence; it is soft placement state, not a metadata record. `LayoutReadExecutor`
+now makes this the SDK read path for layout-open plans and exposes transport,
+tiered-backend, and local-hot residency counters for the native data plane.
+The current transport surface is intentionally small:
+
+```text
+ObjectTcpGet        S3-compatible cold read
+LocalNvmeRead       node-local hot-tier read
+```
+
+The metadata service only returns the layout lease and block descriptors. The
+client-side data fabric chooses the fastest available transport for each block.
+If every hot transport misses or fails, S3 remains the durable fallback.
 
 ## Metadata Model
 
@@ -204,6 +252,8 @@ v0 local:
   Rust metadata client for path and inode namespace operations
   Rust file client for direct object upload, metadata publish, body read
   plans, and direct object range reads
+  native layout-open RPCs, read lease RPC, ordered batched read-plan RPC, and
+  digest-carrying block read plans
   close-to-open FUSE reads and buffered writes
   artifact publish
   durable object GC queue, explicit cleanup API, and background worker
@@ -214,6 +264,8 @@ v0 local:
   read-only FUSE snapshot mounts
 
 v1 usable filesystem:
+  native zero-copy read client over the layout-open boundary
+  JuiceFS-style chunk/slice data path with bounded buffers and background flush
   fuller FUSE semantics beyond buffered write publish
   FUSE over the metadata server
   Python/fsspec
@@ -221,12 +273,14 @@ v1 usable filesystem:
 
 v2 cluster:
   metadata router
-  Raft-backed metadata shards
+  subtree-sharded single-owner Holt metadata shards
+  control-plane owner leases and epoch fencing
   CSI
   node-local cache
   watch-driven invalidation
 
 v3 AI platform:
+  tiered NVMe/S3 data fabric
   checkpoint retention
   dataset prefetch policy
   workspace scoped views

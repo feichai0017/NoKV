@@ -169,6 +169,7 @@ pub struct ObjectGcRecord {
     pub size: u64,
     pub digest_uri: String,
     pub enqueue_version: u64,
+    pub enqueue_unix_ms: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -180,6 +181,32 @@ pub struct SnapshotPin {
     /// Wall-clock deadline (unix ms) after which this pin no longer protects its
     /// snapshot from GC. Holders renew to extend it; an abandoned pin expires so
     /// a crashed client can never block reclamation forever.
+    pub lease_expires_unix_ms: u64,
+}
+
+/// A read capability for one immutable artifact generation — the result of
+/// opening a file for reading. It pins **nothing** durably: it is a client-side
+/// token naming `(inode, generation)` plus the MVCC `read_version` observed at
+/// open. Range reads carry `generation` and validate it against the file's
+/// *current* attr (a CAS). The live generation's blocks are never GC-reclaimed,
+/// so a read against it is always safe; if the artifact was superseded (a new
+/// generation published, an immutable-CoW rewrite), the CAS fails fast with
+/// `StaleBodyGeneration` and the caller re-opens — never a silent stale read.
+///
+/// This is the formal `open()` boundary for the read path: it freezes the layout
+/// a reader sees (generation == the immutable `BodyDescriptor`/block map) so a
+/// differently-parallelized consumer can issue arbitrary range reads against one
+/// consistent view, with zero metadata written on open. To read a *superseded*
+/// (historical) generation that may be reclaimed, take a durable snapshot pin
+/// instead — that is the only thing that holds an old version against GC.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ReadLease {
+    pub inode: InodeId,
+    pub generation: u64,
+    pub read_version: u64,
+    /// Wall-clock freshness hint (unix ms). Advisory only — the lease holds no
+    /// durable state, so expiry just suggests the caller re-open to re-validate
+    /// the generation; it does not gate GC.
     pub lease_expires_unix_ms: u64,
 }
 

@@ -108,7 +108,8 @@ stays narrow*).
 
 The mechanism that makes "metadata off the data path" real and provable.
 
-`open()` returns an **immutable layout lease** for the file's generation:
+The target native `open()` returns an **immutable layout lease** for the file's
+generation:
 
 ```text
 open(path) -> {
@@ -119,38 +120,49 @@ open(path) -> {
 ```
 
 The client then computes `block → object range` itself and reads object ranges
-directly; **metad is provably off the read path** (this is the 3FS layout-on-open
-contract). NoKV is ~70% there: `read_plan` / `WireBodyReadPlan` + `generation`
-already exist — the work is to **promote them into the formal `open()` wire
-boundary** and make the lease immutable-for-that-generation. Freshness comes from
-the watch log + a short TTL; a divergent write mints a new generation (new keys),
-so a stale lease can never read wrong bytes — it just misses the newest write.
+directly; **metad is provably off the byte-transfer path** (this is the 3FS
+layout-on-open contract). The current implementation exposes that boundary as
+`OpenPathReadPlan`: one RPC resolves the file, returns a
+generation-scoped read lease, and returns immutable block read plans carrying
+`digest_uri`, all from one metadata snapshot. `ReadBodyPlan` remains for
+generation-scoped follow-up reads and prefetch. Freshness comes from the watch
+log + a short TTL; a divergent write mints a new generation (new keys), so a
+stale lease can never read wrong bytes — it just misses the newest write.
 
 ---
 
 ## 5. Data Path & Tiering
 
 **Capacity tier:** content-addressed immutable object blocks (the durable truth).
-**Bandwidth tier:** local NVMe + (later) RDMA/GPUDirect.
+**Bandwidth tier:** local NVMe hot tier + S3-compatible object storage.
 
-Tiering is universal across the SOTA — `HBM → pinned DRAM → local NVMe(+GPUDirect)
-→ object/remote`, all LRU/LFU/TTL with pinned-memory staging. AIStore treats S3 as
-a *fast tier, not a dumb cache* (cold 1.08 GiB/s → warm 16.45 GiB/s as page cache
-absorbs hot objects). The headline law, validated on hardware (JuiceFS): **GPU
-utilization tracks cache hit rate almost linearly** — so the cache is not an
-optimization, it *is* the product on the read path.
+The metadata manifest records only durable, portable block identity:
+`generation`, logical offsets, block digest, and S3-compatible object key. It
+does **not** record local NVMe paths or cache slots. Those are soft placement
+decisions made by the data path.
+
+```text
+layout lease
+  -> block descriptors
+  -> data fabric transport choice:
+       ObjectTcpGet        S3-compatible cold read
+       LocalNvmeRead       node-local hot-tier read
+```
 
 NoKV's existing pieces map directly: `BlockCache{off|memory|disk}` +
-`WritebackCache` + `ObjectPrefetcher` + `ObjectReadPlanCache`. The gaps:
-- **A native zero-copy read client (USRBIO-style):** an io_uring-style ring +
-  registered shared-memory buffers + Direct-I/O, to escape FUSE's ~400K-4KiB-
-  reads/s spinlock ceiling. Two modes: **no-page-cache** for the one-shot
-  sequential GPU-feed scan (3FS spends host DRAM on training, not cache), and
-  **cache-on** for shuffled/reused reads.
-- **GPUDirect Storage designed into the path from the start** (leapfrog 3FS,
-  which has not shipped it) — but RDMA/GPUDirect is an **accelerator, never a
-  dependency** (Tair runs TCP-only at ~20 GB/s). Plan it; do not claim it until
-  the verbs exist.
+`WritebackCache` + `ObjectPrefetcher` + `ObjectReadPlanCache` +
+`ObjectStore::get_many`. The first data fabric target is a tiered NVMe/S3 path:
+check node-local NVMe, fall back to S3, batch coalesced read-plan ranges through
+the object layer, and refresh hot blocks asynchronously. The
+`resolve_block_placements` helper is the first placement resolver: it marks
+local hot hits as `LocalNvmeRead` and cold fallbacks as `ObjectTcpGet`. The
+`LayoutReadExecutor` is the SDK data-plane entry: it consumes the layout-open
+plan, keeps readahead/cache behavior in the read pipeline, and records
+`local_nvme_hits`, `object_fallbacks`, and `coalesced_ranges`.
+
+The native performance path is an SDK `GetBatch`/layout-lease path, not FUSE:
+batch read plans, coalesced object ranges, local hot-tier hits, and background
+hot refresh.
 
 ---
 
@@ -261,8 +273,10 @@ matching the HDFS-RBF State-Store + FoundationDB-pattern hybrid:
 - **Cross-shard rename = `EXDEV` in v1**, later a 2-phase subtree handoff with
   pending-intent recovery — **not** a multi-key distributed txn, **not** a
   CephFS-style runtime dynamic subtree migration (operationally fragile).
-- Reconcile with the existing single-node durability: **OpenRaft/WAL is the
-  single-shard durability log, NOT the scale-out plane.**
+- Reconcile with the existing single-node durability: Holt WAL is the local
+  single-owner durability boundary; a future replicated command/WAL tail belongs
+  to the shard owner layer, not to Holt's public API and not to the scale-out
+  control plane.
 - **Durable two-level allocator** (inode-id ranges + epoch; per-shard monotonic
   commit-version as a Holt counter) — recover by reading the counter, never by
   scanning. (NoKV already recovers the allocator from a System record.)
@@ -312,14 +326,15 @@ Critical path (metadata correctness across failover; a native data path beating
 
 1. **Durable two-level allocator** (inode ranges + epoch; per-shard counter).
 2. **Metadata throughput benchmark** (Holt vs SQLite/RocksDB) — prove the thesis.
-3. **Layout lease**: promote `read_plan`/`WireBodyReadPlan` into the formal
-   `open()` wire boundary; read-mode-open = zero meta state.
+3. **Native layout-open**: already exposed over metadata RPC; next work is making
+   the SDK/FUSE read paths consume it through a JuiceFS-style pipelined data path.
 4. **Checkpoint shard-index + async pipelined save** (the HERO) — `(FQN, offsets,
    lengths)` + `ByteMeta`, batch/scatter write, reshard-on-read. *MLPerf bench.*
 5. **Tiered cache/prefetch maturation** per access pattern (§6).
 6. **Subtree sharding + lease control plane** (§10).
 7. **KV-cache / serving backend** (§9) — the Alibaba/ByteDance-inference wedge.
-8. **Native zero-copy read client** (USRBIO-style) + GPUDirect-ready path.
+8. **Native read client** with chunk/slice planning, bounded buffers,
+   coalesced object reads, and local hot-tier refresh.
 9. **Minimal CSI** for per-pod workspace mounts.
 
 **Decide now:** tenancy (today `MountId`/object-key/`RecordFamily` have no tenant
@@ -336,8 +351,8 @@ binding — v1 vs v3?).
   checkpoint store"*, benchmarked on MLPerf Storage v2.0 + GEMINI wasted-time.
   (2) Map immutable-block + atomic-publish + leased-pin onto Tair's
   `KVCacheManager` pattern: be the **persistent NVMe/object KV-cache tier** behind
-  their manager — content/prefix-hash keyed, prefix-aware eviction, ~20 GB/s TCP
-  with RDMA/GPUDirect as accelerator. *Honest line: "I build the correct,
+  their manager — content/prefix-hash keyed, prefix-aware eviction, and a
+  practical TCP/NVMe/object path. *Honest line: "I build the correct,
   cost-efficient storage substrate your KVCacheManager/EasyCkpt plug into; I'm not
   re-implementing the engine or chasing 3FS bandwidth."*
 - **ByteDance training/inference infra.** They wrote ByteCheckpoint (NSDI'25) —

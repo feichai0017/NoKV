@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 #
-# Run JuiceFS-style compatibility gates against an already mounted NoKV
-# FUSE mount.
+# Run external POSIX gates against an already mounted NoKV FUSE mount.
 #
 # This script intentionally does not start NoKV. It is for external POSIX
 # suites that must exercise the mounted filesystem boundary, similar to the
@@ -11,9 +10,9 @@ set -euo pipefail
 
 PYTHON_BIN="${NOKV_PYTHON_BIN:-python3}"
 MOUNT_DIR="${NOKV_FUSE_MOUNT:-}"
-TESTS="${NOKV_FUSE_COMPAT_TESTS:-basic xattr}"
-WORK_DIR="${NOKV_FUSE_COMPAT_WORKDIR:-}"
-KEEP_WORKDIR="${NOKV_FUSE_COMPAT_KEEP:-0}"
+TESTS="${NOKV_FUSE_POSIX_TESTS:-basic xattr}"
+WORK_DIR="${NOKV_FUSE_POSIX_WORKDIR:-}"
+KEEP_WORKDIR="${NOKV_FUSE_POSIX_KEEP:-0}"
 PJDFSTEST_DIR="${NOKV_PJDFSTEST_DIR:-}"
 PJDFSTEST_REPO="${NOKV_PJDFSTEST_REPO:-https://github.com/pjd/pjdfstest.git}"
 LTP_RUNLTP="${NOKV_LTP_RUNLTP:-}"
@@ -23,16 +22,16 @@ TARGET_PJDFSTEST_DIR=""
 
 usage() {
     cat <<EOF
-Usage: NOKV_FUSE_MOUNT=/mnt/nokv scripts/run-fuse-compat-gate.sh
+Usage: NOKV_FUSE_MOUNT=/mnt/nokv scripts/run-fuse-posix-gate.sh
 
-Runs compatibility checks against an already mounted NoKV FUSE mount.
+Runs POSIX semantics checks against an already mounted NoKV FUSE mount.
 
 Environment:
   NOKV_FUSE_MOUNT                 required mountpoint
-  NOKV_FUSE_COMPAT_TESTS          space-separated tests (default: "basic xattr")
+  NOKV_FUSE_POSIX_TESTS           space-separated tests (default: "basic xattr")
                                   available: basic xattr pjdfstest ltp
-  NOKV_FUSE_COMPAT_WORKDIR        temporary work directory
-  NOKV_FUSE_COMPAT_KEEP=1         keep temporary work directory
+  NOKV_FUSE_POSIX_WORKDIR         temporary work directory
+  NOKV_FUSE_POSIX_KEEP=1          keep temporary work directory
   NOKV_PJDFSTEST_DIR              existing pjdfstest checkout
   NOKV_PJDFSTEST_REPO             pjdfstest repo to clone when needed
   NOKV_LTP_RUNLTP                 path to runltp, or command name if in PATH
@@ -81,14 +80,14 @@ cleanup() {
     if [[ "$OWN_WORK_DIR" -eq 1 && "$KEEP_WORKDIR" != "1" ]]; then
         rm -rf "$WORK_DIR"
     elif [[ -n "$WORK_DIR" ]]; then
-        echo "NoKV compatibility workdir: $WORK_DIR" >&2
+        echo "NoKV POSIX gate workdir: $WORK_DIR" >&2
     fi
     exit "$status"
 }
 
 prepare_workdir() {
     if [[ -z "$WORK_DIR" ]]; then
-        WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/nokv-fuse-compat.XXXXXX")"
+        WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/nokv-fuse-posix.XXXXXX")"
         OWN_WORK_DIR=1
     else
         mkdir -p "$WORK_DIR"
@@ -96,14 +95,14 @@ prepare_workdir() {
 }
 
 run_basic() {
-    echo "==> fuse-compat: basic namespace/data smoke"
+    echo "==> fuse-posix: basic namespace/data smoke"
     "$PYTHON_BIN" - "$MOUNT_DIR" <<'PY'
 import os
 import shutil
 import sys
 
 root = sys.argv[1]
-base = os.path.join(root, "nokv-compat-basic")
+base = os.path.join(root, "nokv-posix-basic")
 shutil.rmtree(base, ignore_errors=True)
 os.makedirs(base)
 
@@ -159,7 +158,7 @@ PY
 }
 
 run_xattr() {
-    echo "==> fuse-compat: xattr smoke"
+    echo "==> fuse-posix: xattr smoke"
     "$PYTHON_BIN" - "$MOUNT_DIR" <<'PY'
 import errno
 import os
@@ -167,7 +166,7 @@ import shutil
 import sys
 
 root = sys.argv[1]
-base = os.path.join(root, "nokv-compat-xattr")
+base = os.path.join(root, "nokv-posix-xattr")
 shutil.rmtree(base, ignore_errors=True)
 os.makedirs(base)
 path = os.path.join(base, "file")
@@ -179,12 +178,12 @@ if not all(hasattr(os, name) for name in ("setxattr", "getxattr", "listxattr", "
     shutil.rmtree(base, ignore_errors=True)
     sys.exit(0)
 
-os.setxattr(path, "user.nokv.compat", b"value")
-assert os.getxattr(path, "user.nokv.compat") == b"value"
-assert "user.nokv.compat" in os.listxattr(path)
-os.removexattr(path, "user.nokv.compat")
+os.setxattr(path, "user.nokv.posix", b"value")
+assert os.getxattr(path, "user.nokv.posix") == b"value"
+assert "user.nokv.posix" in os.listxattr(path)
+os.removexattr(path, "user.nokv.posix")
 try:
-    os.getxattr(path, "user.nokv.compat")
+    os.getxattr(path, "user.nokv.posix")
 except OSError as err:
     allowed = {
         getattr(errno, "ENODATA", 61),
@@ -200,7 +199,7 @@ PY
 }
 
 prepare_pjdfstest() {
-    TARGET_PJDFSTEST_DIR="$MOUNT_DIR/nokv-compat-pjdfstest"
+    TARGET_PJDFSTEST_DIR="$MOUNT_DIR/nokv-posix-pjdfstest"
     rm -rf "$TARGET_PJDFSTEST_DIR"
     if [[ -n "$PJDFSTEST_DIR" ]]; then
         cp -R "$PJDFSTEST_DIR" "$TARGET_PJDFSTEST_DIR"
@@ -211,7 +210,7 @@ prepare_pjdfstest() {
 }
 
 run_pjdfstest() {
-    echo "==> fuse-compat: pjdfstest"
+    echo "==> fuse-posix: pjdfstest"
     require_cmd make
     require_cmd prove
     prepare_pjdfstest
@@ -234,7 +233,7 @@ run_pjdfstest() {
 }
 
 run_ltp() {
-    echo "==> fuse-compat: LTP filesystem suite"
+    echo "==> fuse-posix: LTP filesystem suite"
     local runltp="$LTP_RUNLTP"
     if [[ -z "$runltp" ]]; then
         runltp="runltp"
@@ -260,7 +259,7 @@ for test_name in $TESTS; do
         "")
             ;;
         *)
-            echo "error: unknown compatibility test: $test_name" >&2
+            echo "error: unknown POSIX gate test: $test_name" >&2
             exit 2
             ;;
     esac

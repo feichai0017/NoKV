@@ -18,18 +18,25 @@ pub enum CodecError {
     TrailingBytes,
 }
 
-pub fn encode_allocator_state(last_commit_version: u64, next_inode: u64) -> Vec<u8> {
-    let mut out = Vec::with_capacity(16);
+/// Durable allocator high-water reservation: `(last_commit_version, next_inode,
+/// epoch)`. `epoch` is the monotonic identity of the allocation authority,
+/// bumped only when a control plane transfers ownership of an inode range so a
+/// fenced owner reservation can be rejected.
+pub fn encode_allocator_state(last_commit_version: u64, next_inode: u64, epoch: u64) -> Vec<u8> {
+    let mut out = Vec::with_capacity(24);
     push_u64(&mut out, last_commit_version);
     push_u64(&mut out, next_inode);
+    push_u64(&mut out, epoch);
     out
 }
 
-pub fn decode_allocator_state(bytes: &[u8]) -> Result<(u64, u64), CodecError> {
+pub fn decode_allocator_state(bytes: &[u8]) -> Result<(u64, u64, u64), CodecError> {
     let mut input = Decoder::new(bytes);
-    let state = (input.u64()?, input.u64()?);
+    let last_commit_version = input.u64()?;
+    let next_inode = input.u64()?;
+    let epoch = input.u64()?;
     input.finish()?;
-    Ok(state)
+    Ok((last_commit_version, next_inode, epoch))
 }
 
 pub fn encode_inode_attr(attr: &InodeAttr) -> Vec<u8> {
@@ -215,6 +222,7 @@ pub fn encode_object_gc_record(record: &ObjectGcRecord) -> Vec<u8> {
     push_u64(&mut out, record.size);
     put_string(&mut out, &record.digest_uri);
     push_u64(&mut out, record.enqueue_version);
+    push_u64(&mut out, record.enqueue_unix_ms);
     out
 }
 
@@ -227,6 +235,7 @@ pub fn decode_object_gc_record(bytes: &[u8]) -> Result<ObjectGcRecord, CodecErro
         size: input.u64()?,
         digest_uri: input.string()?,
         enqueue_version: input.u64()?,
+        enqueue_unix_ms: input.u64()?,
     };
     input.finish()?;
     Ok(record)

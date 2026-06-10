@@ -269,77 +269,117 @@ fn rpc_supports_remote_fuse_advisory_locks() {
 }
 
 #[test]
-fn rpc_read_path_plan_returns_metadata_and_object_plan() {
+fn rpc_batch_read_plans_return_per_item_envelopes() {
     let server = test_server();
-    let prepared = server
-        .service()
-        .prepare_artifact_create_path("/artifact.bin")
-        .unwrap();
-    let published = server
-        .service()
-        .publish_prepared_artifact(
-            prepared.clone(),
-            nokv_types::BodyDescriptor {
-                producer: "rpc-test".to_owned(),
-                digest_uri: "sha256:test".to_owned(),
-                size: 12,
-                content_type: "application/octet-stream".to_owned(),
-                manifest_id: "artifact.bin".to_owned(),
-                generation: prepared.generation,
-                chunk_size: nokv_object::DEFAULT_CHUNK_SIZE,
-                block_size: nokv_object::DEFAULT_BLOCK_SIZE as u64,
-            },
-            vec![nokv_types::ChunkManifest {
-                chunk_index: 0,
-                logical_offset: 0,
-                len: 12,
-                slices: vec![nokv_types::SliceManifest {
-                    slice_id: 1,
-                    logical_offset: 0,
-                    len: 12,
-                    blocks: vec![nokv_types::BlockDescriptor {
-                        object_key: "blocks/demo".to_owned(),
-                        logical_offset: 0,
-                        object_offset: 0,
-                        len: 12,
-                        digest_uri: "sha256:test".to_owned(),
-                    }],
-                }],
-            }],
-            0o644,
-            1000,
-            1000,
-        )
-        .unwrap()
-        .entry;
+    publish_synthetic_file(&server, "/artifact.bin", "artifact.bin", false);
+    let entry = expect_dentry(request_envelope(
+        &server,
+        MetadataRpcRequest::LookupPath {
+            path: "/artifact.bin".to_owned(),
+        },
+    ));
+    let inode = entry.attr.inode;
+    let generation = entry.body.as_ref().unwrap().generation;
 
     let envelope = request_envelope(
         &server,
-        MetadataRpcRequest::ReadPathPlan {
-            path: "/artifact.bin".to_owned(),
-            offset: 6,
-            len: 6,
-            expected_generation: Some(published.attr.generation),
+        MetadataRpcRequest::Batch {
+            requests: vec![
+                MetadataRpcRequest::ReadBodyPlan {
+                    inode,
+                    generation,
+                    offset: 1,
+                    len: 2,
+                },
+                MetadataRpcRequest::ReadBodyPlan {
+                    inode,
+                    generation: generation - 1,
+                    offset: 0,
+                    len: 1,
+                },
+                MetadataRpcRequest::ReadBodyPlan {
+                    inode,
+                    generation,
+                    offset: 2,
+                    len: 2,
+                },
+            ],
         },
     );
-    assert!(envelope.ok, "unexpected read path plan error: {envelope:?}");
-    let MetadataRpcResult::PathReadPlan { metadata, plan } = envelope.result.unwrap() else {
-        panic!("unexpected read path plan result")
+
+    assert!(envelope.ok, "unexpected batch error: {envelope:?}");
+    let MetadataRpcResult::Batch { results } = envelope.result.unwrap() else {
+        panic!("unexpected batch read plan result")
     };
-    assert_eq!(metadata.attr.inode, published.attr.inode.get());
-    assert_eq!(metadata.body.unwrap().digest_uri, "sha256:test");
-    assert_eq!(plan.output_len, 6);
-    assert_eq!(plan.blocks.len(), 1);
-    assert_eq!(plan.blocks[0].object_offset, 6);
-    assert_eq!(plan.blocks[0].len, 6);
+    assert_eq!(results.len(), 3);
+
+    let first = &results[0];
+    assert!(first.ok, "unexpected first item error: {first:?}");
+    let MetadataRpcResult::BodyReadPlan { plan } = first.result.as_ref().unwrap() else {
+        panic!("unexpected first item result")
+    };
+    assert_eq!(plan.output_len, 2);
+    assert_eq!(plan.blocks[0].object_offset, 1);
+
+    assert!(!results[1].ok);
+    assert!(matches!(
+        &results[1].error_kind,
+        Some(WireMetadataError::StaleBodyGeneration { .. })
+    ));
+
+    let third = &results[2];
+    assert!(third.ok, "unexpected third item error: {third:?}");
+    let MetadataRpcResult::BodyReadPlan { plan } = third.result.as_ref().unwrap() else {
+        panic!("unexpected third item result")
+    };
+    assert_eq!(plan.output_len, 2);
+    assert_eq!(plan.blocks[0].object_offset, 2);
+}
+
+#[test]
+fn rpc_open_read_plans_return_lease_metadata_and_plan() {
+    let server = test_server();
+    publish_synthetic_file(&server, "/artifact.bin", "artifact.bin", false);
+    let entry = expect_dentry(request_envelope(
+        &server,
+        MetadataRpcRequest::LookupPath {
+            path: "/artifact.bin".to_owned(),
+        },
+    ));
+    let inode = entry.attr.inode;
+    let generation = entry.body.as_ref().unwrap().generation;
+
+    let path = request_envelope(
+        &server,
+        MetadataRpcRequest::OpenPathReadPlan {
+            path: "/artifact.bin".to_owned(),
+            offset: 1,
+            len: 2,
+            expected_generation: Some(generation),
+        },
+    );
+    assert!(path.ok, "unexpected path layout-open error: {path:?}");
+    let MetadataRpcResult::OpenPathReadPlan {
+        metadata,
+        lease,
+        plan,
+    } = path.result.unwrap()
+    else {
+        panic!("unexpected path layout-open result")
+    };
+    assert_eq!(metadata.attr.inode, inode);
+    assert_eq!(lease.inode, inode);
+    assert_eq!(lease.generation, generation);
+    assert_eq!(plan.output_len, 2);
+    assert_eq!(plan.blocks[0].object_offset, 1);
 
     let stale = request_envelope(
         &server,
-        MetadataRpcRequest::ReadPathPlan {
+        MetadataRpcRequest::OpenPathReadPlan {
             path: "/artifact.bin".to_owned(),
             offset: 0,
             len: 1,
-            expected_generation: Some(published.attr.generation - 1),
+            expected_generation: Some(generation - 1),
         },
     );
     assert!(!stale.ok);

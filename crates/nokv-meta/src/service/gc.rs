@@ -1,4 +1,5 @@
 use super::*;
+use std::time::Duration;
 
 impl<M, O> NoKvFs<M, O>
 where
@@ -16,9 +17,19 @@ where
         &self,
         limit: usize,
     ) -> Result<PendingObjectCleanupOutcome, MetadError> {
+        self.cleanup_pending_objects_with_grace(limit, Duration::ZERO)
+    }
+
+    pub fn cleanup_pending_objects_with_grace(
+        &self,
+        limit: usize,
+        read_lease_grace: Duration,
+    ) -> Result<PendingObjectCleanupOutcome, MetadError> {
         // Reap expired snapshot pins first so the retention floor reflects only
         // live snapshots before deciding what is reclaimable.
         self.reclaim_expired_snapshot_pins(limit)?;
+        let now_ms = current_time_ms();
+        let grace_ms = duration_millis_u64(read_lease_grace);
         let version = self.read_version()?;
         let rows = self.metadata.scan(ScanRequest {
             family: RecordFamily::Gc,
@@ -36,6 +47,7 @@ where
         let mut outcome = PendingObjectCleanupOutcome {
             scanned: rows.len(),
             blocked_by_snapshots: 0,
+            blocked_by_read_leases: 0,
             attempted: 0,
             deleted: 0,
             missing: 0,
@@ -47,6 +59,10 @@ where
                 .map_err(|err| MetadError::Codec(err.to_string()))?;
             if retention_floor.is_some_and(|floor| floor.get() < record.enqueue_version) {
                 outcome.blocked_by_snapshots += 1;
+                continue;
+            }
+            if now_ms < record.enqueue_unix_ms.saturating_add(grace_ms) {
+                outcome.blocked_by_read_leases += 1;
                 continue;
             }
             let key = ObjectKey::new(record.object_key)?;
@@ -199,6 +215,7 @@ where
         enqueue_version: Version,
         retained_object_keys: &HashSet<String>,
     ) -> Result<Vec<Mutation>, MetadError> {
+        let enqueue_unix_ms = current_time_ms();
         let rows = self.metadata.scan(ScanRequest {
             family: RecordFamily::ChunkManifest,
             prefix: chunk_manifest_prefix(self.mount, inode, generation),
@@ -234,6 +251,7 @@ where
                         size: block.len,
                         digest_uri: block.digest_uri.clone(),
                         enqueue_version: enqueue_version.get(),
+                        enqueue_unix_ms,
                     };
                     mutations.push(Mutation {
                         family: RecordFamily::Gc,
@@ -263,6 +281,7 @@ where
         enqueue_version: Version,
         retained_object_keys: &HashSet<String>,
     ) -> Vec<Mutation> {
+        let enqueue_unix_ms = current_time_ms();
         let mut mutations = vec![delete_mutation(
             RecordFamily::ChunkManifest,
             chunk_manifest_key(self.mount, inode, generation, BODY_SUMMARY_CHUNK_INDEX),
@@ -289,6 +308,7 @@ where
                     size: block.len,
                     digest_uri: block.digest_uri.clone(),
                     enqueue_version: enqueue_version.get(),
+                    enqueue_unix_ms,
                 };
                 mutations.push(Mutation {
                     family: RecordFamily::Gc,
@@ -311,4 +331,8 @@ where
         }
         mutations
     }
+}
+
+fn duration_millis_u64(duration: Duration) -> u64 {
+    duration.as_millis().min(u128::from(u64::MAX)) as u64
 }

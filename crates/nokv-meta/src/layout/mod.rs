@@ -259,16 +259,35 @@ mod tests {
     }
 
     #[test]
-    fn allocator_state_codec_is_fixed_width() {
-        let encoded = encode_allocator_state(42, 99);
-        assert_eq!(encoded.len(), U64_WIDTH * 2);
-        assert_eq!(decode_allocator_state(&encoded).unwrap(), (42, 99));
+    fn allocator_state_codec_round_trips_with_epoch() {
+        let encoded = encode_allocator_state(42, 99, 7);
+        assert_eq!(encoded.len(), U64_WIDTH * 3);
+        assert_eq!(decode_allocator_state(&encoded).unwrap(), (42, 99, 7));
 
         let mut trailing = encoded;
         trailing.push(1);
         assert_eq!(
             decode_allocator_state(&trailing).unwrap_err(),
             CodecError::TrailingBytes
+        );
+    }
+
+    #[test]
+    fn allocator_state_codec_rejects_missing_epoch() {
+        let mut missing_epoch = Vec::new();
+        missing_epoch.extend_from_slice(&42u64.to_be_bytes());
+        missing_epoch.extend_from_slice(&99u64.to_be_bytes());
+        assert_eq!(missing_epoch.len(), U64_WIDTH * 2);
+        assert_eq!(
+            decode_allocator_state(&missing_epoch).unwrap_err(),
+            CodecError::Truncated
+        );
+
+        let mut truncated = missing_epoch;
+        truncated.extend_from_slice(&[0u8; 4]);
+        assert_eq!(
+            decode_allocator_state(&truncated).unwrap_err(),
+            CodecError::Truncated
         );
     }
 

@@ -866,6 +866,53 @@ where
         self.read_file_at_version(inode, &body, 0, body.size as usize, version)
     }
 
+    /// Open `inode` for reading: the formal `open()` boundary for the read path.
+    ///
+    /// Returns a [`ReadLease`] naming the file's current `(generation,
+    /// read_version)` **without writing any metadata** — read-mode open creates
+    /// zero state. The caller then issues range reads via [`read_file_plan`]
+    /// carrying `lease.generation`; each read validates that generation against
+    /// the live attr, so a concurrent rewrite surfaces as `StaleBodyGeneration`
+    /// instead of a silent stale read. The generation freezes the immutable block
+    /// layout the reader sees — the substrate for reshard-on-read (arbitrary range
+    /// reads from a differently-parallelized consumer over one consistent view).
+    ///
+    /// This lease holds **no** durable pin, so it cannot keep a *superseded*
+    /// generation alive against GC; it is sound only because the live generation's
+    /// blocks are never reclaimed. To read a historical generation, take a durable
+    /// snapshot pin ([`snapshot_subtree`](Self::snapshot_subtree)) instead.
+    pub fn open_read(&self, inode: InodeId) -> Result<ReadLease, MetadError> {
+        self.open_read_expecting(inode, None)
+    }
+
+    /// [`open_read`](Self::open_read) that additionally fails with
+    /// `StaleBodyGeneration` unless the file is currently at `expected_generation`
+    /// — for a caller re-opening to confirm it still holds the same artifact.
+    pub fn open_read_expecting(
+        &self,
+        inode: InodeId,
+        expected_generation: Option<u64>,
+    ) -> Result<ReadLease, MetadError> {
+        let version = self.read_version()?;
+        let Some(attr) =
+            self.get_attr_at_version_for_purpose(inode, version, ReadPurpose::UserStrong)?
+        else {
+            return Err(MetadError::NotFound);
+        };
+        if attr.file_type != FileType::File {
+            return Err(MetadError::NotFile);
+        }
+        if let Some(expected) = expected_generation {
+            if attr.generation != expected {
+                return Err(MetadError::StaleBodyGeneration {
+                    expected,
+                    current: attr.generation,
+                });
+            }
+        }
+        Ok(read_lease_for_generation(inode, attr.generation, version))
+    }
+
     pub fn read_file_plan(
         &self,
         inode: InodeId,
@@ -894,7 +941,40 @@ where
                 current: attr.generation,
             });
         }
-        if offset >= attr.size {
+        self.body_read_plan_at_version(inode, &attr, offset, len, version)
+    }
+
+    pub fn open_path_read_plan(
+        &self,
+        path: &str,
+        offset: u64,
+        len: usize,
+        expected_generation: Option<u64>,
+    ) -> Result<OpenPathReadPlan, MetadError> {
+        let version = self.read_version()?;
+        let path_plan =
+            self.path_read_plan_at_version(path, offset, len, expected_generation, version)?;
+        let lease = read_lease_for_generation(
+            path_plan.metadata.attr.inode,
+            path_plan.metadata.attr.generation,
+            version,
+        );
+        Ok(OpenPathReadPlan {
+            metadata: path_plan.metadata,
+            lease,
+            plan: path_plan.plan,
+        })
+    }
+
+    fn body_read_plan_at_version(
+        &self,
+        inode: InodeId,
+        attr: &InodeAttr,
+        offset: u64,
+        len: usize,
+        version: Version,
+    ) -> Result<BodyReadPlan, MetadError> {
+        if len == 0 || offset >= attr.size {
             return Ok(BodyReadPlan {
                 output_len: 0,
                 blocks: Vec::new(),
@@ -903,7 +983,7 @@ where
         let body = self
             .body_descriptor_at_version_for_purpose(
                 inode,
-                generation,
+                attr.generation,
                 version,
                 ReadPurpose::UserStrong,
             )?
@@ -921,14 +1001,14 @@ where
         })
     }
 
-    pub fn read_path_plan(
+    fn path_read_plan_at_version(
         &self,
         path: &str,
         offset: u64,
         len: usize,
         expected_generation: Option<u64>,
+        version: Version,
     ) -> Result<PathReadPlan, MetadError> {
-        let version = self.read_version()?;
         let entry = self
             .lookup_path_from_at_version_for_purpose(
                 InodeId::root(),
@@ -1019,7 +1099,12 @@ where
         } else {
             None
         };
-        let outcome = self.objects.read_blocks(cache, len, &plan)?;
+        let outcome = self.objects.read_blocks_with_options(
+            cache,
+            len,
+            &plan,
+            BlockReadOptions::default(),
+        )?;
         self.object_gets
             .fetch_add(outcome.object_gets as u64, Ordering::Relaxed);
         self.object_get_bytes
@@ -1041,7 +1126,12 @@ where
         blocks: &[ObjectReadBlock],
     ) -> Result<Vec<u8>, MetadError> {
         let cache = self.block_cache_enabled().then_some(&self.block_cache);
-        let outcome = self.objects.read_blocks(cache, output_len, blocks)?;
+        let outcome = self.objects.read_blocks_with_options(
+            cache,
+            output_len,
+            blocks,
+            BlockReadOptions::default(),
+        )?;
         self.object_gets
             .fetch_add(outcome.object_gets as u64, Ordering::Relaxed);
         self.object_get_bytes
@@ -1136,6 +1226,15 @@ where
             );
         }
         Ok(manifests)
+    }
+}
+
+fn read_lease_for_generation(inode: InodeId, generation: u64, version: Version) -> ReadLease {
+    ReadLease {
+        inode,
+        generation,
+        read_version: version.get(),
+        lease_expires_unix_ms: current_time_ms().saturating_add(DEFAULT_READ_LEASE_MS),
     }
 }
 

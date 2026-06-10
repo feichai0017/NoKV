@@ -2,11 +2,11 @@
 #
 # Run the NoKV AI-training smoke gate against a disposable RustFS endpoint.
 #
-# This is the fast evidence gate for the current product goal: Holt-native
-# metadata reads, object-backed checkpoint publish, DLIO-style generated data,
-# and OpenRaft metadata HA/fault recovery. Each workload gets its own
-# temporary RustFS instance through scripts/run-rustfs-e2e.sh so failures are
-# isolated and logs stay easy to inspect.
+# This is the fast evidence gate for the current product goal: local Holt
+# metadata reads, object-backed checkpoint publish, and DLIO-style generated
+# data. Each workload gets its own temporary RustFS instance through
+# scripts/run-rustfs-e2e.sh so failures are isolated and logs stay easy to
+# inspect.
 
 set -euo pipefail
 
@@ -21,9 +21,6 @@ DEFAULT_WORKLOADS=(
     metadata-concurrent-read
     checkpoint-publish
     mlperf-dlio
-    metadata-ha-smoke
-    metadata-ha-fault-smoke
-    metadata-ha-learner-read
 )
 
 usage() {
@@ -34,9 +31,7 @@ Runs the standard AI-training smoke gate. With no workload arguments, runs:
   ${DEFAULT_WORKLOADS[*]}
 
 Use the special workload name "fuse-smoke" to run the mounted POSIX/FUSE smoke.
-Use "metadata-raft-smoke" to run the 3-voter OpenRaft process smoke. Set
-NOKV_AI_SMOKE_INCLUDE_FUSE=1 or NOKV_AI_SMOKE_INCLUDE_METADATA_RAFT_SMOKE=1 to
-append them to the default gate.
+Set NOKV_AI_SMOKE_INCLUDE_FUSE=1 to append it to the default gate.
 
 Environment:
   NOKV_AI_SMOKE_PROFILE              smoke|standard|long (default: smoke)
@@ -61,9 +56,6 @@ if [[ "${#workloads[@]}" -eq 0 ]]; then
     if [[ "${NOKV_AI_SMOKE_INCLUDE_FUSE:-0}" == "1" ]]; then
         workloads+=(fuse-smoke)
     fi
-    if [[ "${NOKV_AI_SMOKE_INCLUDE_METADATA_RAFT_SMOKE:-0}" == "1" ]]; then
-        workloads+=(metadata-raft-smoke)
-    fi
 fi
 
 extra_args=()
@@ -76,10 +68,6 @@ for workload in "${workloads[@]}"; do
     echo "==> NoKV smoke workload: $workload"
     if [[ "$workload" == "fuse-smoke" ]]; then
         "$ROOT_DIR/scripts/run-fuse-smoke.sh"
-        continue
-    fi
-    if [[ "$workload" == "metadata-raft-smoke" ]]; then
-        "$ROOT_DIR/scripts/run-metadata-raft-smoke.sh"
         continue
     fi
     NOKV_E2E_PROFILE="$PROFILE" \

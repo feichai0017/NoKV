@@ -53,14 +53,14 @@ use crate::layout::{
     watch_log_prefix, xattr_key, xattr_prefix, PATH_INDEX_DELIMITER,
 };
 use nokv_object::{
-    plan_chunk_manifest_reads, ChunkStore, ChunkWriteOptions, ChunkWriteRange, ChunkedWrite,
-    MemoryBlockCache, ObjectCleanupOutcome, ObjectError, ObjectKey, ObjectReadBlock, ObjectStore,
-    StagedObjectSet, StoredChunk, DEFAULT_BLOCK_SIZE, DEFAULT_CHUNK_SIZE,
+    plan_chunk_manifest_reads, BlockReadOptions, ChunkStore, ChunkWriteOptions, ChunkWriteRange,
+    ChunkedWrite, MemoryBlockCache, ObjectCleanupOutcome, ObjectError, ObjectKey, ObjectReadBlock,
+    ObjectStore, StagedObjectSet, DEFAULT_BLOCK_SIZE, DEFAULT_CHUNK_SIZE,
 };
 use nokv_types::{
     parse_absolute_path, AdvisoryLock, BlockDescriptor, BodyDescriptor, ChunkManifest, DentryName,
     DentryProjection, DentryRecord, FileType, InodeAttr, InodeId, ModelError, MountId,
-    ObjectGcRecord, PathError, PathMetadata, RecordFamily, SliceManifest, SnapshotPin,
+    ObjectGcRecord, PathError, PathMetadata, ReadLease, RecordFamily, SliceManifest, SnapshotPin,
     SpecialNodeSpec, WatchCursor, WatchEvent, WatchEventKind, WatchRecord,
 };
 use sha2::{Digest, Sha256};
@@ -79,6 +79,7 @@ const PATH_INDEX_LOOKUP_CACHE_MAX_ENTRIES_PER_SHARD: usize =
     PATH_INDEX_LOOKUP_CACHE_MAX_ENTRIES / PATH_CACHE_SHARD_COUNT;
 const PATH_INDEX_VALIDATION_CACHE_MAX_ENTRIES_PER_SHARD: usize =
     PATH_INDEX_VALIDATION_CACHE_MAX_ENTRIES / PATH_CACHE_SHARD_COUNT;
+pub(crate) const DEFAULT_READ_LEASE_MS: u64 = 3_600_000;
 
 const ALLOCATOR_RECOVERY_FAMILIES: [RecordFamily; 13] = [
     RecordFamily::System,
@@ -102,6 +103,10 @@ struct AllocatorState {
     // unused ids after a crash, but must never reuse a visible version/inode.
     last_commit_version: u64,
     next_inode: u64,
+    // Monotonic identity of the allocation authority. `1` while a single owner
+    // holds the inode space; a control plane bumps it on ownership transfer so a
+    // stale owner can be fenced. Recovery folds it with fetch_max (never regresses).
+    epoch: u64,
 }
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
@@ -215,7 +220,7 @@ pub struct PublishArtifactStagedSession {
     pub content_type: String,
     pub manifest_id: String,
     pub size: u64,
-    pub chunks: Vec<StoredChunk>,
+    pub chunks: Vec<ChunkManifest>,
     pub staged: StagedObjectSet,
     pub mode: u32,
     pub uid: u32,
@@ -285,7 +290,6 @@ pub struct ObjectTransferStats {
     pub read_plan_cache_misses: u64,
     pub object_writeback_enqueued: u64,
     pub object_writeback_inline: u64,
-    pub object_writeback_fallback: u64,
     pub object_writeback_completed: u64,
     pub object_writeback_failed: u64,
     pub object_writeback_staged_bytes: u64,
@@ -294,6 +298,10 @@ pub struct ObjectTransferStats {
     pub object_writeback_queue_max_wait_ns: u64,
     pub object_writeback_upload_ns: u64,
     pub object_writeback_upload_max_ns: u64,
+    pub object_writeback_collect_ns: u64,
+    pub object_writeback_digest_ns: u64,
+    pub object_writeback_store_put_ns: u64,
+    pub object_writeback_cache_put_ns: u64,
     pub manifest_chunks: u64,
     pub manifest_blocks: u64,
 }
@@ -319,6 +327,7 @@ pub struct MetadataServiceStats {
 pub struct PendingObjectCleanupOutcome {
     pub scanned: usize,
     pub blocked_by_snapshots: usize,
+    pub blocked_by_read_leases: usize,
     pub attempted: usize,
     pub deleted: usize,
     pub missing: usize,
@@ -332,8 +341,15 @@ pub struct BodyReadPlan {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct PathReadPlan {
+struct PathReadPlan {
     pub metadata: PathMetadata,
+    pub plan: BodyReadPlan,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OpenPathReadPlan {
+    pub metadata: PathMetadata,
+    pub lease: ReadLease,
     pub plan: BodyReadPlan,
 }
 
@@ -437,6 +453,10 @@ pub struct NoKvFs<M, O> {
     reserved_version: AtomicU64,
     next_inode: AtomicU64,
     reserved_next_inode: AtomicU64,
+    /// Identity of this node's allocation authority (see [`AllocatorState::epoch`]).
+    /// Persisted with every reservation and recovered with fetch_max so it never
+    /// regresses; the seam a control plane bumps to fence a stale owner.
+    epoch: AtomicU64,
     block_cache: MemoryBlockCache,
     block_cache_enabled: AtomicBool,
     watch_logging_enabled: AtomicBool,
@@ -576,13 +596,14 @@ fn recover_allocator_state<M: MetadataStore>(
         max_read,
         ReadPurpose::UserStrong,
     )? {
-        let (last_commit_version, next_inode) =
+        let (last_commit_version, next_inode, epoch) =
             decode_allocator_state(&value.0).map_err(|err| MetadError::Codec(err.to_string()))?;
         Version::new(last_commit_version)?;
         InodeId::new(next_inode)?;
         return Ok(AllocatorState {
             last_commit_version,
             next_inode,
+            epoch,
         });
     }
 
@@ -627,6 +648,8 @@ fn recover_allocator_state<M: MetadataStore>(
     Ok(AllocatorState {
         last_commit_version,
         next_inode,
+        // No durable record: bootstrap the single-owner epoch.
+        epoch: 1,
     })
 }
 
@@ -910,7 +933,7 @@ fn validate_artifact_ranges(request: &PublishArtifactSession) -> Result<(), Meta
 fn merge_session_chunks(
     size: u64,
     old_chunks: Vec<ChunkManifest>,
-    dirty_chunks: Vec<StoredChunk>,
+    dirty_chunks: Vec<ChunkManifest>,
 ) -> Result<Vec<ChunkManifest>, MetadError> {
     let mut chunks = BTreeMap::<u64, ChunkManifest>::new();
     if size > 0 {
@@ -920,48 +943,22 @@ fn merge_session_chunks(
         }
     }
     for old_chunk in old_chunks {
-        for old_slice in old_chunk.slices {
-            let mut blocks = Vec::new();
-            for block in old_slice.blocks {
-                let Some(block) = clip_block_to_size(block, size)? else {
-                    continue;
-                };
-                blocks.push(block);
-            }
-            if blocks.is_empty() {
-                continue;
-            }
-            let chunk_index = old_slice.logical_offset / DEFAULT_CHUNK_SIZE;
-            let logical_offset = blocks
-                .iter()
-                .map(|block| block.logical_offset)
-                .min()
-                .unwrap_or(old_slice.logical_offset);
-            let end = blocks
-                .iter()
-                .map(|block| block.logical_offset.saturating_add(block.len))
-                .max()
-                .unwrap_or(logical_offset);
-            ensure_manifest_chunk(&mut chunks, chunk_index, size)
-                .slices
-                .push(SliceManifest {
-                    slice_id: old_slice.slice_id,
-                    logical_offset,
-                    len: end.saturating_sub(logical_offset),
-                    blocks,
-                });
-        }
+        append_chunk_manifest_slices(&mut chunks, old_chunk, size)?;
     }
     for dirty_chunk in dirty_chunks {
+        append_chunk_manifest_slices(&mut chunks, dirty_chunk, size)?;
+    }
+    Ok(chunks.into_values().collect())
+}
+
+fn append_chunk_manifest_slices(
+    chunks: &mut BTreeMap<u64, ChunkManifest>,
+    manifest: ChunkManifest,
+    size: u64,
+) -> Result<(), MetadError> {
+    for slice in manifest.slices {
         let mut blocks = Vec::new();
-        for block in dirty_chunk.blocks {
-            let block = BlockDescriptor {
-                object_key: block.object_key,
-                logical_offset: block.logical_offset,
-                object_offset: block.object_offset,
-                len: block.len,
-                digest_uri: block.digest_uri,
-            };
+        for block in slice.blocks {
             let Some(block) = clip_block_to_size(block, size)? else {
                 continue;
             };
@@ -970,27 +967,11 @@ fn merge_session_chunks(
         if blocks.is_empty() {
             continue;
         }
-        let chunk_index = dirty_chunk.chunk_index;
-        let logical_offset = blocks
-            .iter()
-            .map(|block| block.logical_offset)
-            .min()
-            .unwrap_or(dirty_chunk.logical_offset);
-        let end = blocks
-            .iter()
-            .map(|block| block.logical_offset.saturating_add(block.len))
-            .max()
-            .unwrap_or(logical_offset);
-        let chunk = ensure_manifest_chunk(&mut chunks, chunk_index, size);
-        let slice_id = next_slice_id(chunk);
-        chunk.slices.push(SliceManifest {
-            slice_id,
-            logical_offset,
-            len: end.saturating_sub(logical_offset),
-            blocks,
-        });
+        let chunk_index = slice.logical_offset / DEFAULT_CHUNK_SIZE;
+        let chunk = ensure_manifest_chunk(chunks, chunk_index, size);
+        append_contiguous_slices(chunk, blocks)?;
     }
-    Ok(chunks.into_values().collect())
+    Ok(())
 }
 
 fn ensure_manifest_chunk(
@@ -1022,6 +1003,69 @@ fn next_slice_id(chunk: &ChunkManifest) -> u64 {
         .max()
         .unwrap_or(0)
         .saturating_add(1)
+}
+
+fn append_contiguous_slices(
+    chunk: &mut ChunkManifest,
+    mut blocks: Vec<BlockDescriptor>,
+) -> Result<(), MetadError> {
+    if blocks.is_empty() {
+        return Ok(());
+    }
+    blocks.sort_by_key(|block| block.logical_offset);
+    let mut current = Vec::new();
+    let mut current_end = None;
+    for block in blocks {
+        if block.len == 0 {
+            return Err(MetadError::InvalidPreparedArtifact(
+                "block descriptor must not be empty".to_owned(),
+            ));
+        }
+        let block_end = block
+            .logical_offset
+            .checked_add(block.len)
+            .ok_or(ObjectError::InvalidRange)?;
+        match current_end {
+            Some(end) if block.logical_offset == end => {
+                current.push(block);
+                current_end = Some(block_end);
+            }
+            Some(_) => {
+                push_slice_from_contiguous_blocks(chunk, std::mem::take(&mut current))?;
+                current.push(block);
+                current_end = Some(block_end);
+            }
+            None => {
+                current.push(block);
+                current_end = Some(block_end);
+            }
+        }
+    }
+    push_slice_from_contiguous_blocks(chunk, current)?;
+    Ok(())
+}
+
+fn push_slice_from_contiguous_blocks(
+    chunk: &mut ChunkManifest,
+    blocks: Vec<BlockDescriptor>,
+) -> Result<(), MetadError> {
+    let Some(first) = blocks.first() else {
+        return Ok(());
+    };
+    let logical_offset = first.logical_offset;
+    let end = blocks
+        .iter()
+        .map(|block| block.logical_offset.saturating_add(block.len))
+        .max()
+        .unwrap_or(logical_offset);
+    let slice_id = next_slice_id(chunk);
+    chunk.slices.push(SliceManifest {
+        slice_id,
+        logical_offset,
+        len: end.saturating_sub(logical_offset),
+        blocks,
+    });
+    Ok(())
 }
 
 fn clip_block_to_size(

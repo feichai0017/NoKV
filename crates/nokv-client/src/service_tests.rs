@@ -2,12 +2,16 @@ use super::*;
 use crate::read_cache::ReadPipelineCache;
 use crate::{ArtifactMetadata, NoKvFsClient};
 use nokv_object::FileReadPipeline;
-use nokv_object::{MemoryObjectStore, ObjectKey, ObjectStore};
+use nokv_object::{
+    MemoryObjectStore, ObjectBytes, ObjectError, ObjectGetRequest, ObjectInfo, ObjectKey,
+    ObjectRange, ObjectStore,
+};
 use nokv_protocol::{decode_request, encode_envelope, WireDentryRecord, WireInodeAttr};
 use nokv_protocol::{MetadataRpcEnvelope, WireDentryWithAttr, WireXattrSetMode};
-use nokv_types::{AdvisoryLockKind, FileType};
+use nokv_types::{AdvisoryLockKind, FileType, InodeId};
 use std::io::Read;
 use std::net::TcpListener;
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -54,6 +58,52 @@ where
 fn response_body(json: &str) -> Vec<u8> {
     let envelope: MetadataRpcEnvelope = serde_json::from_str(json).unwrap();
     encode_envelope(&envelope).unwrap()
+}
+
+#[derive(Clone)]
+struct BatchTrackingObjectStore {
+    inner: MemoryObjectStore,
+    batch_sizes: Arc<Mutex<Vec<usize>>>,
+}
+
+impl BatchTrackingObjectStore {
+    fn new() -> Self {
+        Self {
+            inner: MemoryObjectStore::new(),
+            batch_sizes: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
+
+    fn batch_sizes(&self) -> Vec<usize> {
+        self.batch_sizes.lock().unwrap().clone()
+    }
+}
+
+impl ObjectStore for BatchTrackingObjectStore {
+    fn put(
+        &self,
+        key: &ObjectKey,
+        bytes: impl Into<ObjectBytes>,
+    ) -> Result<ObjectInfo, ObjectError> {
+        self.inner.put(key, bytes)
+    }
+
+    fn get(&self, key: &ObjectKey, range: Option<ObjectRange>) -> Result<Vec<u8>, ObjectError> {
+        self.inner.get(key, range)
+    }
+
+    fn get_many(&self, requests: &[ObjectGetRequest]) -> Result<Vec<Vec<u8>>, ObjectError> {
+        self.batch_sizes.lock().unwrap().push(requests.len());
+        self.inner.get_many(requests)
+    }
+
+    fn head(&self, key: &ObjectKey) -> Result<Option<ObjectInfo>, ObjectError> {
+        self.inner.head(key)
+    }
+
+    fn delete(&self, key: &ObjectKey) -> Result<bool, ObjectError> {
+        self.inner.delete(key)
+    }
 }
 
 #[test]
@@ -1091,10 +1141,13 @@ fn service_metadata_stat_path_uses_path_metadata_rpc() {
 fn service_file_client_read_path_returns_metadata_and_checks_expected_generation() {
     let store = MemoryObjectStore::new();
     store
-        .put(&ObjectKey::new("blocks/demo").unwrap(), b"hello server")
+        .put(
+            &ObjectKey::new("blocks/demo").unwrap(),
+            b"hello server".to_vec(),
+        )
         .unwrap();
     let addr = serve_one(
-        r#"{"ok":true,"result":{"type":"path_read_plan","metadata":{"attr":{"inode":42,"file_type":"file","mode":420,"uid":1000,"gid":1000,"rdev":0,"nlink":1,"size":12,"generation":7,"mtime_ms":7,"ctime_ms":7},"body":{"producer":"unit-test","digest_uri":"sha256:demo","size":12,"content_type":"application/octet-stream","manifest_id":"artifact.bin","generation":7,"chunk_size":67108864,"block_size":4194304}},"plan":{"output_len":6,"blocks":[{"object_key":"blocks/demo","object_offset":6,"len":6,"output_offset":0}]}}}"#,
+        r#"{"ok":true,"result":{"type":"open_path_read_plan","metadata":{"attr":{"inode":42,"file_type":"file","mode":420,"uid":1000,"gid":1000,"rdev":0,"nlink":1,"size":12,"generation":7,"mtime_ms":7,"ctime_ms":7},"body":{"producer":"unit-test","digest_uri":"sha256:demo","size":12,"content_type":"application/octet-stream","manifest_id":"artifact.bin","generation":7,"chunk_size":67108864,"block_size":4194304}},"lease":{"inode":42,"generation":7,"read_version":9,"lease_expires_unix_ms":12345},"plan":{"output_len":6,"blocks":[{"object_key":"blocks/demo","digest_uri":"sha256:test","object_offset":6,"object_len":12,"len":6,"output_offset":0}]}}}"#,
     );
     let client = NoKvFsClient::connect(addr, store);
     let read = client.read_path("/artifact.bin", 6, 6, Some(7)).unwrap();
@@ -1119,24 +1172,103 @@ fn service_file_client_read_path_returns_metadata_and_checks_expected_generation
 }
 
 #[test]
-fn service_file_client_stats_include_background_prefetch_gets() {
+fn service_file_client_read_path_uses_batched_object_gets() {
+    let store = BatchTrackingObjectStore::new();
+    store
+        .put(&ObjectKey::new("blocks/a").unwrap(), b"abcdefgh".to_vec())
+        .unwrap();
+    store
+        .put(&ObjectKey::new("blocks/b").unwrap(), b"uvwxyz".to_vec())
+        .unwrap();
+    let addr = serve_one(
+        r#"{"ok":true,"result":{"type":"open_path_read_plan","metadata":{"attr":{"inode":42,"file_type":"file","mode":420,"uid":1000,"gid":1000,"rdev":0,"nlink":1,"size":8,"generation":7,"mtime_ms":7,"ctime_ms":7},"body":{"producer":"unit-test","digest_uri":"sha256:demo","size":8,"content_type":"application/octet-stream","manifest_id":"artifact.bin","generation":7,"chunk_size":67108864,"block_size":4194304}},"lease":{"inode":42,"generation":7,"read_version":9,"lease_expires_unix_ms":12345},"plan":{"output_len":5,"blocks":[{"object_key":"blocks/a","digest_uri":"sha256:test","object_offset":1,"object_len":8,"len":3,"output_offset":0},{"object_key":"blocks/b","digest_uri":"sha256:test","object_offset":2,"object_len":6,"len":2,"output_offset":3}]}}}"#,
+    );
+    let mut client = NoKvFsClient::connect(addr, store.clone());
+    client.set_block_cache_enabled(false);
+
+    let read = client.read_path("/artifact.bin", 0, 5, Some(7)).unwrap();
+
+    assert_eq!(read.bytes, b"bcdwx");
+    assert_eq!(store.batch_sizes(), vec![2]);
+    let stats = client.data_fabric_stats().unwrap();
+    assert_eq!(stats.planned_blocks, 2);
+    assert_eq!(stats.object_fallbacks, 2);
+    assert_eq!(stats.local_nvme_hits, 0);
+    assert_eq!(stats.object_gets, 2);
+    assert_eq!(stats.object_get_bytes, 5);
+}
+
+#[test]
+fn service_file_client_read_path_reports_coalesced_layout_ranges() {
+    let store = BatchTrackingObjectStore::new();
+    store
+        .put(&ObjectKey::new("blocks/a").unwrap(), b"abcdefgh".to_vec())
+        .unwrap();
+    let addr = serve_one(
+        r#"{"ok":true,"result":{"type":"open_path_read_plan","metadata":{"attr":{"inode":42,"file_type":"file","mode":420,"uid":1000,"gid":1000,"rdev":0,"nlink":1,"size":6,"generation":7,"mtime_ms":7,"ctime_ms":7},"body":{"producer":"unit-test","digest_uri":"sha256:demo","size":6,"content_type":"application/octet-stream","manifest_id":"artifact.bin","generation":7,"chunk_size":67108864,"block_size":4194304}},"lease":{"inode":42,"generation":7,"read_version":9,"lease_expires_unix_ms":12345},"plan":{"output_len":6,"blocks":[{"object_key":"blocks/a","digest_uri":"sha256:test","object_offset":1,"object_len":8,"len":3,"output_offset":0},{"object_key":"blocks/a","digest_uri":"sha256:test","object_offset":4,"object_len":8,"len":3,"output_offset":3}]}}}"#,
+    );
+    let mut client = NoKvFsClient::connect(addr, store.clone());
+    client.set_block_cache_enabled(false);
+
+    let read = client.read_path("/artifact.bin", 0, 6, Some(7)).unwrap();
+
+    assert_eq!(read.bytes, b"bcdefg");
+    assert_eq!(store.batch_sizes(), vec![1]);
+    let stats = client.data_fabric_stats().unwrap();
+    assert_eq!(stats.planned_blocks, 2);
+    assert_eq!(stats.object_fallbacks, 2);
+    assert_eq!(stats.object_gets, 1);
+    assert_eq!(stats.object_get_bytes, 6);
+    assert_eq!(stats.coalesced_ranges, 1);
+    assert_eq!(stats.coalesced_range_bytes, 6);
+}
+
+#[test]
+fn metadata_client_open_read_plan_returns_lease_and_plan() {
+    let addr = serve_one_request(|request| {
+        assert!(matches!(
+            &request,
+            MetadataRpcRequest::OpenPathReadPlan {
+                path,
+                offset: 6,
+                len: 5,
+                expected_generation: Some(7)
+            } if path == "/artifact.bin"
+        ));
+        response_body(
+            r#"{"ok":true,"result":{"type":"open_path_read_plan","metadata":{"attr":{"inode":42,"file_type":"file","mode":420,"uid":1000,"gid":1000,"rdev":0,"nlink":1,"size":12,"generation":7,"mtime_ms":7,"ctime_ms":7},"body":{"producer":"unit-test","digest_uri":"sha256:demo","size":12,"content_type":"application/octet-stream","manifest_id":"artifact.bin","generation":7,"chunk_size":67108864,"block_size":4194304}},"lease":{"inode":42,"generation":7,"read_version":9,"lease_expires_unix_ms":12345},"plan":{"output_len":5,"blocks":[{"object_key":"blocks/demo","digest_uri":"sha256:test","object_offset":6,"object_len":12,"len":5,"output_offset":0}]}}}"#,
+        )
+    });
+    let client = MetadataClient::connect(addr);
+    let open = client
+        .open_path_read_plan("/artifact.bin", 6, 5, Some(7))
+        .unwrap();
+    assert_eq!(open.metadata.attr.inode.get(), 42);
+    assert_eq!(open.lease.inode.get(), 42);
+    assert_eq!(open.lease.generation, 7);
+    assert_eq!(open.plan.output_len, 5);
+    assert_eq!(open.plan.blocks[0].digest_uri, "sha256:test");
+}
+
+#[test]
+fn service_file_client_stats_deduplicate_background_prefetch_gets() {
     let store = MemoryObjectStore::new();
     store
         .put(
             &ObjectKey::new("blocks/demo").unwrap(),
-            b"abcdefghijklmnopqr",
+            b"abcdefghijklmnopqr".to_vec(),
         )
         .unwrap();
     let attr = r#""attr":{"inode":42,"file_type":"file","mode":420,"uid":1000,"gid":1000,"rdev":0,"nlink":1,"size":18,"generation":7,"mtime_ms":7,"ctime_ms":7},"body":{"producer":"unit-test","digest_uri":"sha256:demo","size":18,"content_type":"application/octet-stream","manifest_id":"artifact.bin","generation":7,"chunk_size":67108864,"block_size":4194304}"#;
     let addr = serve_many(vec![
         response_body(&format!(
-            r#"{{"ok":true,"result":{{"type":"path_read_plan","metadata":{{{attr}}},"plan":{{"output_len":6,"blocks":[{{"object_key":"blocks/demo","object_offset":0,"len":6,"output_offset":0}}]}}}}}}"#,
+            r#"{{"ok":true,"result":{{"type":"open_path_read_plan","metadata":{{{attr}}},"lease":{{"inode":42,"generation":7,"read_version":9,"lease_expires_unix_ms":12345}},"plan":{{"output_len":6,"blocks":[{{"object_key":"blocks/demo","digest_uri":"sha256:test","object_offset":0,"object_len":18,"len":6,"output_offset":0}}]}}}}}}"#,
         )),
         response_body(
-            r#"{"ok":true,"result":{"type":"body_read_plan","plan":{"output_len":6,"blocks":[{"object_key":"blocks/demo","object_offset":6,"len":6,"output_offset":0}]}}}"#,
+            r#"{"ok":true,"result":{"type":"body_read_plan","plan":{"output_len":6,"blocks":[{"object_key":"blocks/demo","digest_uri":"sha256:test","object_offset":6,"object_len":18,"len":6,"output_offset":0}]}}}"#,
         ),
         response_body(&format!(
-            r#"{{"ok":true,"result":{{"type":"path_read_plan","metadata":{{{attr}}},"plan":{{"output_len":6,"blocks":[{{"object_key":"blocks/demo","object_offset":6,"len":6,"output_offset":0}}]}}}}}}"#,
+            r#"{{"ok":true,"result":{{"type":"open_path_read_plan","metadata":{{{attr}}},"lease":{{"inode":42,"generation":7,"read_version":10,"lease_expires_unix_ms":12346}},"plan":{{"output_len":6,"blocks":[{{"object_key":"blocks/demo","digest_uri":"sha256:test","object_offset":6,"object_len":18,"len":6,"output_offset":0}}]}}}}}}"#,
         )),
     ]);
     let client = NoKvFsClient::connect(addr, store);
@@ -1163,9 +1295,9 @@ fn service_file_client_stats_include_background_prefetch_gets() {
     let stats = client.object_stats();
     assert_eq!(
         stats.object_gets, 2,
-        "one foreground object get plus one background prefetch get must be visible in stats"
+        "foreground exact read plus forward prefetch should avoid backfetching already returned bytes"
     );
-    assert_eq!(stats.object_get_bytes, 12);
+    assert_eq!(stats.object_get_bytes, 18);
     assert_eq!(stats.cache_hits, 1);
     assert_eq!(stats.cache_hit_bytes, 6);
     assert_eq!(stats.prefetch_enqueued, 1);
@@ -1173,23 +1305,28 @@ fn service_file_client_stats_include_background_prefetch_gets() {
     assert_eq!(stats.prefetch_dropped, 0);
     assert_eq!(stats.prefetch_failed, 0);
     assert_eq!(stats.prefetch_object_gets, 1);
-    assert_eq!(stats.prefetch_object_get_bytes, 6);
+    assert_eq!(stats.prefetch_object_get_bytes, 12);
+    assert_eq!(stats.prefetch_cache_hits, 0);
+    assert_eq!(stats.prefetch_cache_hit_bytes, 0);
 }
 
 #[test]
 fn service_file_client_reuses_prefetched_body_read_plan() {
     let store = MemoryObjectStore::new();
     store
-        .put(&ObjectKey::new("blocks/demo").unwrap(), b"abcdefghijkl")
+        .put(
+            &ObjectKey::new("blocks/demo").unwrap(),
+            b"abcdefghijkl".to_vec(),
+        )
         .unwrap();
     let dentry = r#"{"ok":true,"result":{"type":"dentry","entry":{"dentry":{"parent":1,"name_hex":"61727469666163742e62696e","child":42,"child_type":"file","attr_generation":7},"attr":{"inode":42,"file_type":"file","mode":420,"uid":1000,"gid":1000,"rdev":0,"nlink":1,"size":12,"generation":7,"mtime_ms":7,"ctime_ms":7},"body":{"producer":"unit-test","digest_uri":"sha256:demo","size":12,"content_type":"application/octet-stream","manifest_id":"artifact.bin","generation":7,"chunk_size":67108864,"block_size":4194304}}}}"#;
     let addr = serve_many(vec![
         response_body(dentry),
         response_body(
-            r#"{"ok":true,"result":{"type":"body_read_plan","plan":{"output_len":6,"blocks":[{"object_key":"blocks/demo","object_offset":0,"len":6,"output_offset":0}]}}}"#,
+            r#"{"ok":true,"result":{"type":"body_read_plan","plan":{"output_len":6,"blocks":[{"object_key":"blocks/demo","digest_uri":"sha256:test","object_offset":0,"object_len":12,"len":6,"output_offset":0}]}}}"#,
         ),
         response_body(
-            r#"{"ok":true,"result":{"type":"body_read_plan","plan":{"output_len":6,"blocks":[{"object_key":"blocks/demo","object_offset":6,"len":6,"output_offset":0}]}}}"#,
+            r#"{"ok":true,"result":{"type":"body_read_plan","plan":{"output_len":6,"blocks":[{"object_key":"blocks/demo","digest_uri":"sha256:test","object_offset":6,"object_len":12,"len":6,"output_offset":0}]}}}"#,
         ),
         response_body(dentry),
     ]);
@@ -1207,16 +1344,19 @@ fn service_file_client_reuses_prefetched_body_read_plan() {
 fn service_file_client_reuses_covering_prefetched_body_read_plan() {
     let store = MemoryObjectStore::new();
     store
-        .put(&ObjectKey::new("blocks/demo").unwrap(), b"abcdefghijkl")
+        .put(
+            &ObjectKey::new("blocks/demo").unwrap(),
+            b"abcdefghijkl".to_vec(),
+        )
         .unwrap();
     let dentry = r#"{"ok":true,"result":{"type":"dentry","entry":{"dentry":{"parent":1,"name_hex":"61727469666163742e62696e","child":42,"child_type":"file","attr_generation":7},"attr":{"inode":42,"file_type":"file","mode":420,"uid":1000,"gid":1000,"rdev":0,"nlink":1,"size":12,"generation":7,"mtime_ms":7,"ctime_ms":7},"body":{"producer":"unit-test","digest_uri":"sha256:demo","size":12,"content_type":"application/octet-stream","manifest_id":"artifact.bin","generation":7,"chunk_size":67108864,"block_size":4194304}}}}"#;
     let addr = serve_many(vec![
         response_body(dentry),
         response_body(
-            r#"{"ok":true,"result":{"type":"body_read_plan","plan":{"output_len":6,"blocks":[{"object_key":"blocks/demo","object_offset":0,"len":6,"output_offset":0}]}}}"#,
+            r#"{"ok":true,"result":{"type":"body_read_plan","plan":{"output_len":6,"blocks":[{"object_key":"blocks/demo","digest_uri":"sha256:test","object_offset":0,"object_len":12,"len":6,"output_offset":0}]}}}"#,
         ),
         response_body(
-            r#"{"ok":true,"result":{"type":"body_read_plan","plan":{"output_len":6,"blocks":[{"object_key":"blocks/demo","object_offset":6,"len":6,"output_offset":0}]}}}"#,
+            r#"{"ok":true,"result":{"type":"body_read_plan","plan":{"output_len":6,"blocks":[{"object_key":"blocks/demo","digest_uri":"sha256:test","object_offset":6,"object_len":12,"len":6,"output_offset":0}]}}}"#,
         ),
         response_body(dentry),
     ]);
@@ -1234,14 +1374,17 @@ fn service_file_client_reuses_covering_prefetched_body_read_plan() {
 fn service_file_client_reads_body_from_object_store() {
     let store = MemoryObjectStore::new();
     store
-        .put(&ObjectKey::new("blocks/demo").unwrap(), b"hello server")
+        .put(
+            &ObjectKey::new("blocks/demo").unwrap(),
+            b"hello server".to_vec(),
+        )
         .unwrap();
     let addr = serve_many(vec![
         response_body(
             r#"{"ok":true,"result":{"type":"dentry","entry":{"dentry":{"parent":1,"name_hex":"61727469666163742e62696e","child":42,"child_type":"file","attr_generation":7},"attr":{"inode":42,"file_type":"file","mode":420,"uid":1000,"gid":1000,"rdev":0,"nlink":1,"size":12,"generation":7,"mtime_ms":7,"ctime_ms":7},"body":{"producer":"unit-test","digest_uri":"sha256:demo","size":12,"content_type":"application/octet-stream","manifest_id":"artifact.bin","generation":7,"chunk_size":67108864,"block_size":4194304}}}}"#,
         ),
         response_body(
-            r#"{"ok":true,"result":{"type":"body_read_plan","plan":{"output_len":6,"blocks":[{"object_key":"blocks/demo","object_offset":6,"len":6,"output_offset":0}]}}}"#,
+            r#"{"ok":true,"result":{"type":"body_read_plan","plan":{"output_len":6,"blocks":[{"object_key":"blocks/demo","digest_uri":"sha256:test","object_offset":6,"object_len":12,"len":6,"output_offset":0}]}}}"#,
         ),
     ]);
     let client = NoKvFsClient::connect(addr, store);

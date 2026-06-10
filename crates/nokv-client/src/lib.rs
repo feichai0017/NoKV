@@ -24,9 +24,10 @@ pub use artifact::{
     ArtifactRepositoryOptions,
 };
 pub use file_client::NoKvFsClient;
-pub use nokv_object::ObjectReadPlan;
+pub use nokv_object::{DataFabricReadStats, ObjectReadPlan};
 pub use service::{
-    ClientPreparedArtifact, CloneOutcome, MetadataClient, MetadataClientOptions, SnapshotOutcome,
+    ClientPreparedArtifact, CloneOutcome, MetadataClient, MetadataClientOptions, PathLayoutOpen,
+    SnapshotOutcome,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]

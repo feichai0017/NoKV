@@ -5,10 +5,6 @@ pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
     format!("{digest:x}")
 }
 
-pub(crate) fn sha256_uri(bytes: &[u8]) -> String {
-    format!("sha256:{}", sha256_hex(bytes))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -18,10 +14,6 @@ mod tests {
         assert_eq!(
             sha256_hex(b"abcd"),
             "88d4266fd4e6338d13b845fcf289579d209c897823b9217da3e161936f031589"
-        );
-        assert_eq!(
-            sha256_uri(b"abcd"),
-            "sha256:88d4266fd4e6338d13b845fcf289579d209c897823b9217da3e161936f031589"
         );
     }
 }

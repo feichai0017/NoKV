@@ -12,12 +12,11 @@ use std::time::Duration;
 use nokv_client::{ArtifactMetadata, MetadataClient, MetadataClientOptions, NoKvFsClient};
 use nokv_meta::{HistoryGcOptions, ObjectGcOptions, SubtreeDeltaKind};
 use nokv_object::{
-    BlockCachePolicy, DiskBlockCacheOptions, FileReadPipelineOptions, MemoryBlockCacheOptions,
-    ObjectKey, ObjectStoreConfig, S3ObjectStore, S3ObjectStoreOptions,
+    BlockCachePolicy, ConfiguredObjectStore, DiskBlockCacheOptions, FileReadPipelineOptions,
+    HotFillMode, LocalObjectStoreOptions, MemoryBlockCacheOptions, ObjectKey, ObjectStoreConfig,
+    S3ObjectStoreOptions, TieredObjectStoreOptions,
 };
-use nokv_server::{
-    MetadataMode, ServerOptions, DEFAULT_METADATA_CHECKPOINT_ARCHIVE_PREFIX, DEFAULT_SERVER_BIND,
-};
+use nokv_server::{ServerOptions, DEFAULT_METADATA_CHECKPOINT_ARCHIVE_PREFIX, DEFAULT_SERVER_BIND};
 use nokv_types::{FileType, MountId};
 use sha2::{Digest, Sha256};
 
@@ -30,7 +29,6 @@ const DEFAULT_GC_LIMIT: usize = 1024;
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Config {
     meta: PathBuf,
-    metadata_mode: MetadataMode,
     metadata_checkpoint_archive_prefix: Option<String>,
     object: ObjectStoreConfig,
     mount: MountId,
@@ -127,8 +125,10 @@ enum Command {
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct MountCliOptions {
     read_only: bool,
+    threads: usize,
     kernel_cache: bool,
     direct_io: bool,
+    stats_bind: Option<SocketAddr>,
     entry_ttl: Duration,
     attr_ttl: Duration,
     block_cache: BlockCachePolicy,
@@ -156,8 +156,10 @@ impl Default for MountCliOptions {
         let defaults = nokv_fuse::FuseOptions::default();
         Self {
             read_only: false,
+            threads: defaults.threads,
             kernel_cache: defaults.kernel_cache,
             direct_io: defaults.direct_io,
+            stats_bind: defaults.stats_bind,
             entry_ttl: defaults.entry_ttl,
             attr_ttl: defaults.attr_ttl,
             block_cache: defaults.block_cache,
@@ -174,8 +176,10 @@ impl MountCliOptions {
             access,
             entry_ttl: self.entry_ttl,
             attr_ttl: self.attr_ttl,
+            threads: self.threads,
             kernel_cache: self.kernel_cache,
             direct_io: self.direct_io,
+            stats_bind: self.stats_bind,
             block_cache: self.block_cache.clone(),
             prefetch: self.prefetch.clone(),
             read_pipeline: self.read_pipeline,
@@ -185,7 +189,7 @@ impl MountCliOptions {
     }
 }
 
-type Client = NoKvFsClient<S3ObjectStore>;
+type Client = NoKvFsClient<ConfiguredObjectStore>;
 
 fn main() {
     if let Err(err) = run(env::args().skip(1).collect()) {
@@ -338,7 +342,7 @@ fn run(args: Vec<String>) -> Result<(), CliError> {
             metadata
                 .bootstrap_root(DEFAULT_MODE_DIR, config.uid, config.gid)
                 .map_err(from_client)?;
-            nokv_fuse::mount_client(
+            let mount = nokv_fuse::spawn_mount_client(
                 metadata,
                 objects,
                 mountpoint,
@@ -349,6 +353,7 @@ fn run(args: Vec<String>) -> Result<(), CliError> {
                 }),
             )
             .map_err(from_io)?;
+            mount.join().map_err(from_io)?;
         }
         Command::MountSnapshot {
             snapshot_id,
@@ -361,7 +366,7 @@ fn run(args: Vec<String>) -> Result<(), CliError> {
                 .snapshot_pin(snapshot_id)
                 .map_err(from_client)?
                 .ok_or_else(|| CliError::Client(format!("snapshot {snapshot_id} not found")))?;
-            nokv_fuse::mount_client(
+            let mount = nokv_fuse::spawn_mount_client(
                 metadata,
                 objects,
                 mountpoint,
@@ -375,13 +380,13 @@ fn run(args: Vec<String>) -> Result<(), CliError> {
                 },
             )
             .map_err(from_io)?;
+            mount.join().map_err(from_io)?;
         }
         Command::Serve => {
             nokv_server::run(ServerOptions {
                 bind: config.server_bind,
                 mount: config.mount,
                 meta_path: config.meta,
-                metadata_mode: config.metadata_mode,
                 metadata_checkpoint_archive_prefix: config.metadata_checkpoint_archive_prefix,
                 object: config.object,
                 uid: config.uid,
@@ -390,6 +395,7 @@ fn run(args: Vec<String>) -> Result<(), CliError> {
                     interval: config.object_gc_interval,
                     limit: config.object_gc_limit,
                     run_immediately: false,
+                    read_lease_grace: ObjectGcOptions::default().read_lease_grace,
                 },
                 history_gc: HistoryGcOptions {
                     interval: config.history_gc_interval,
@@ -412,7 +418,6 @@ fn run(args: Vec<String>) -> Result<(), CliError> {
                 bind: config.server_bind,
                 mount: config.mount,
                 meta_path: config.meta,
-                metadata_mode: config.metadata_mode,
                 metadata_checkpoint_archive_prefix: config.metadata_checkpoint_archive_prefix,
                 object: config.object,
                 uid: config.uid,
@@ -421,6 +426,7 @@ fn run(args: Vec<String>) -> Result<(), CliError> {
                     interval: config.object_gc_interval,
                     limit: config.object_gc_limit,
                     run_immediately: false,
+                    read_lease_grace: ObjectGcOptions::default().read_lease_grace,
                 },
                 history_gc: HistoryGcOptions {
                     interval: config.history_gc_interval,
@@ -551,6 +557,9 @@ fn parse(args: Vec<String>) -> Result<(Config, Command), CliError> {
         Some(DEFAULT_METADATA_CHECKPOINT_ARCHIVE_PREFIX.to_owned());
     let mut object_backend = ObjectBackendKind::RustFs;
     let mut s3 = S3ObjectStoreOptions::new("");
+    let mut hot_object_root: Option<PathBuf> = None;
+    let mut hot_object_max_bytes: Option<u64> = None;
+    let mut hot_fill_mode = HotFillMode::Inline;
     let mut mount = MountId::new(1).expect("default mount id is non-zero");
     let mut uid = DEFAULT_UID;
     let mut gid = DEFAULT_GID;
@@ -614,6 +623,28 @@ fn parse(args: Vec<String>) -> Result<(Config, Command), CliError> {
             }
             "--s3-skip-signature" => {
                 s3.skip_signature = true;
+            }
+            "--hot-object-root" => {
+                index += 1;
+                hot_object_root = Some(PathBuf::from(value(&args, index, "--hot-object-root")?));
+            }
+            "--hot-object-max-bytes" => {
+                index += 1;
+                let max_bytes = parse_u64(
+                    value(&args, index, "--hot-object-max-bytes")?,
+                    "hot_object_max_bytes",
+                )?;
+                if max_bytes == 0 {
+                    return Err(CliError::InvalidNumber {
+                        field: "hot_object_max_bytes",
+                        value: max_bytes.to_string(),
+                    });
+                }
+                hot_object_max_bytes = Some(max_bytes);
+            }
+            "--hot-fill-mode" => {
+                index += 1;
+                hot_fill_mode = parse_hot_fill_mode(value(&args, index, "--hot-fill-mode")?)?;
             }
             "--mount" => {
                 index += 1;
@@ -680,9 +711,14 @@ fn parse(args: Vec<String>) -> Result<(Config, Command), CliError> {
                 return Ok((
                     Config {
                         meta,
-                        metadata_mode: MetadataMode::Local,
                         metadata_checkpoint_archive_prefix,
-                        object: object_config(object_backend, s3),
+                        object: object_config(
+                            object_backend,
+                            s3,
+                            hot_object_root,
+                            hot_object_max_bytes,
+                            hot_fill_mode,
+                        ),
                         mount,
                         uid,
                         gid,
@@ -707,9 +743,14 @@ fn parse(args: Vec<String>) -> Result<(Config, Command), CliError> {
     Ok((
         Config {
             meta,
-            metadata_mode: MetadataMode::Local,
             metadata_checkpoint_archive_prefix,
-            object: object_config(object_backend, s3),
+            object: object_config(
+                object_backend,
+                s3,
+                hot_object_root,
+                hot_object_max_bytes,
+                hot_fill_mode,
+            ),
             mount,
             uid,
             gid,
@@ -731,19 +772,50 @@ fn parse_object_backend(raw: &str) -> Result<ObjectBackendKind, CliError> {
     }
 }
 
+fn parse_hot_fill_mode(raw: &str) -> Result<HotFillMode, CliError> {
+    match raw {
+        "inline" => Ok(HotFillMode::Inline),
+        "background" => Ok(HotFillMode::Background),
+        _ => Err(CliError::UnknownOption(format!("--hot-fill-mode {raw}"))),
+    }
+}
+
 fn parse_archive_prefix(raw: &str, option: &str) -> Result<String, CliError> {
     let prefix = raw.trim_matches('/');
     ObjectKey::new(prefix).map_err(|_| CliError::UnknownOption(format!("{option} {raw}")))?;
     Ok(prefix.to_owned())
 }
 
-fn object_config(backend: ObjectBackendKind, mut s3: S3ObjectStoreOptions) -> ObjectStoreConfig {
-    match backend {
-        ObjectBackendKind::S3 => ObjectStoreConfig::s3(s3),
+fn object_config(
+    backend: ObjectBackendKind,
+    mut s3: S3ObjectStoreOptions,
+    hot_object_root: Option<PathBuf>,
+    hot_object_max_bytes: Option<u64>,
+    hot_fill_mode: HotFillMode,
+) -> ObjectStoreConfig {
+    let cold = match backend {
+        ObjectBackendKind::S3 => s3,
         ObjectBackendKind::RustFs => {
             apply_rustfs_defaults(&mut s3);
-            ObjectStoreConfig::s3(s3)
+            s3
         }
+    };
+    match hot_object_root {
+        Some(root) => {
+            let hot = match hot_object_max_bytes {
+                Some(max_bytes) => LocalObjectStoreOptions::new(root).with_max_bytes(max_bytes),
+                None => LocalObjectStoreOptions::new(root),
+            };
+            ObjectStoreConfig::tiered_local_with_options(
+                hot,
+                cold,
+                TieredObjectStoreOptions {
+                    hot_fill_mode,
+                    ..TieredObjectStoreOptions::default()
+                },
+            )
+        }
+        None => ObjectStoreConfig::s3(cold),
     }
 }
 
@@ -971,6 +1043,26 @@ fn parse_mount_args(
                 options.direct_io = true;
                 index += 1;
             }
+            "--stats-bind" => {
+                index += 1;
+                options.stats_bind = Some(parse_socket_addr(
+                    value(args, index, "--stats-bind")?,
+                    "stats_bind",
+                )?);
+                index += 1;
+            }
+            "--fuse-threads" => {
+                index += 1;
+                let threads = parse_usize(value(args, index, "--fuse-threads")?, "fuse_threads")?;
+                if threads == 0 {
+                    return Err(CliError::InvalidNumber {
+                        field: "fuse_threads",
+                        value: "0".to_owned(),
+                    });
+                }
+                options.threads = threads;
+                index += 1;
+            }
             "--entry-ttl-ms" => {
                 index += 1;
                 options.entry_ttl = Duration::from_millis(parse_u64(
@@ -1061,7 +1153,11 @@ fn parse_mount_args(
                 index += 1;
             }
             "--no-writeback-cache" => {
-                options.writeback.enabled = false;
+                options.writeback.cache_enabled = false;
+                index += 1;
+            }
+            "--writeback-cache" => {
+                options.writeback.cache_enabled = true;
                 index += 1;
             }
             "--writeback-cache-dir" => {
@@ -1253,8 +1349,8 @@ Usage:\n\
   nokv [--server-bind ADDR] [--object-backend s3|rustfs] [--mount ID] rmdir PATH\n\
   nokv [--server-bind ADDR] [--object-backend s3|rustfs] [--mount ID] rename SOURCE DESTINATION\n\
   nokv [--server-bind ADDR] [--object-backend s3|rustfs] [--mount ID] rename-replace SOURCE DESTINATION\n\
-  nokv [--server-bind ADDR] [--object-backend s3|rustfs] [--mount ID] mount [--read-only] [--no-kernel-cache] [--direct-io] [--entry-ttl-ms MS] [--attr-ttl-ms MS] [--no-writeback-cache] MOUNTPOINT\n\
-  nokv [--server-bind ADDR] [--object-backend s3|rustfs] [--mount ID] mount-snapshot SNAPSHOT_ID [--no-kernel-cache] [--direct-io] [--entry-ttl-ms MS] [--attr-ttl-ms MS] [--no-writeback-cache] MOUNTPOINT\n\
+  nokv [--server-bind ADDR] [--object-backend s3|rustfs] [--mount ID] mount [--read-only] [--no-kernel-cache] [--direct-io] [--entry-ttl-ms MS] [--attr-ttl-ms MS] [--writeback-cache] MOUNTPOINT\n\
+  nokv [--server-bind ADDR] [--object-backend s3|rustfs] [--mount ID] mount-snapshot SNAPSHOT_ID [--no-kernel-cache] [--direct-io] [--entry-ttl-ms MS] [--attr-ttl-ms MS] [--writeback-cache] MOUNTPOINT\n\
   nokv [--meta PATH] [--object-backend s3|rustfs] [--mount ID] serve\n\
   nokv [--server-bind ADDR] [--object-backend s3|rustfs] [--mount ID] backup\n\
   nokv [--meta PATH] [--object-backend s3|rustfs] [--mount ID] restore\n\
@@ -1276,6 +1372,9 @@ Object backends:\n\
   --s3-access-key-id KEY\n\
   --s3-secret-access-key SECRET\n\
   --s3-root PREFIX\n\
+  --hot-object-root PATH           Local NVMe-shaped hot object tier; cold S3/RustFS remains durable truth\n\
+  --hot-object-max-bytes BYTES     Maximum local hot-tier bytes before LRU eviction\n\
+  --hot-fill-mode inline|background  Cold-read hot fill mode; default inline\n\
   --object-gc-interval-ms MS       Background object GC interval for live mount\n\
   --object-gc-limit LIMIT          Max queued object records per GC iteration\n\
   --history-gc-interval-ms MS      Background metadata history GC interval for live mount\n\
@@ -1287,6 +1386,8 @@ Mount cache options:\n\
   --direct-io                    Ask FUSE to bypass kernel page cache for file handles\n\
   --entry-ttl-ms MS              Kernel dentry cache TTL\n\
   --attr-ttl-ms MS               Kernel attribute cache TTL\n\
+  --stats-bind ADDR              Optional mount-local HTTP stats bind address\n\
+  --fuse-threads N              FUSE worker thread count for the mount\n\
   --no-block-cache               Disable NoKV object block cache\n\
   --block-cache off|memory|disk  Select NoKV object block cache policy\n\
   --block-cache-dir PATH         Directory for disk object block cache\n\
@@ -1297,7 +1398,8 @@ Mount cache options:\n\
   --prefetch-workers N           Sequential object prefetch worker count\n\
   --prefetch-queue-capacity N    Sequential object prefetch queue capacity\n\
   --max-readahead-bytes N        Max sequential read-ahead bytes per hint\n\
-  --no-writeback-cache           Disable disk-backed staged object upload cache\n\
+  --writeback-cache              Stage completed write blocks in the disk cache before object upload\n\
+  --no-writeback-cache           Use the default in-memory write buffer and direct object upload\n\
   --writeback-cache-dir PATH     Directory for staged object upload cache\n\
   --writeback-cache-bytes N      Max staged object upload cache bytes\n\
   --writeback-cache-items N      Max staged object upload cache entries\n\
@@ -1377,7 +1479,6 @@ mod tests {
             bind,
             mount: MountId::new(1).unwrap(),
             meta_path: dir.path().join("meta"),
-            metadata_mode: MetadataMode::Local,
             metadata_checkpoint_archive_prefix: None,
             object: fake_server_object_config(),
             uid: 1000,
@@ -1386,6 +1487,7 @@ mod tests {
                 interval: Duration::from_secs(3600),
                 limit: 128,
                 run_immediately: false,
+                read_lease_grace: ObjectGcOptions::default().read_lease_grace,
             },
             history_gc: HistoryGcOptions {
                 interval: Duration::from_secs(3600),
@@ -1409,7 +1511,6 @@ mod tests {
         assert_eq!(options.bucket, "nokv");
         assert_eq!(options.endpoint.as_deref(), Some("http://127.0.0.1:9000"));
         assert_eq!(config.mount.get(), 1);
-        assert_eq!(config.metadata_mode, MetadataMode::Local);
         assert_eq!(
             config.metadata_checkpoint_archive_prefix.as_deref(),
             Some(DEFAULT_METADATA_CHECKPOINT_ARCHIVE_PREFIX)
@@ -1580,6 +1681,45 @@ mod tests {
     }
 
     #[test]
+    fn parse_hot_object_root_keeps_cold_backend_options() {
+        let (config, command) = parse(vec![
+            s("--object-backend"),
+            s("rustfs"),
+            s("--hot-object-root"),
+            s("/mnt/nvme/nokv-hot"),
+            s("--hot-object-max-bytes"),
+            s("1048576"),
+            s("--hot-fill-mode"),
+            s("background"),
+            s("init"),
+        ])
+        .unwrap();
+        assert_eq!(command, Command::Init);
+        assert_eq!(
+            config.object.local_hot_root().map(PathBuf::from),
+            Some(PathBuf::from("/mnt/nvme/nokv-hot"))
+        );
+        assert_eq!(
+            config
+                .object
+                .local_hot_options()
+                .and_then(|options| options.max_bytes),
+            Some(1_048_576)
+        );
+        assert_eq!(
+            config.object.tiered_options(),
+            Some(TieredObjectStoreOptions {
+                hot_fill_mode: HotFillMode::Background,
+                ..TieredObjectStoreOptions::default()
+            })
+        );
+        let options = config.object.options();
+        assert_eq!(options.bucket, "nokv");
+        assert_eq!(options.region, "auto");
+        assert_eq!(options.endpoint.as_deref(), Some("http://127.0.0.1:9000"));
+    }
+
+    #[test]
     fn default_manifest_id_is_relative_and_stable() {
         assert_eq!(
             default_manifest_id("/runs/1/checkpoint").unwrap(),
@@ -1626,6 +1766,10 @@ mod tests {
             s("mount"),
             s("--no-kernel-cache"),
             s("--direct-io"),
+            s("--stats-bind"),
+            s("127.0.0.1:0"),
+            s("--fuse-threads"),
+            s("8"),
             s("--entry-ttl-ms"),
             s("0"),
             s("--attr-ttl-ms"),
@@ -1640,6 +1784,8 @@ mod tests {
                 options: MountCliOptions {
                     kernel_cache: false,
                     direct_io: true,
+                    stats_bind: Some("127.0.0.1:0".parse().unwrap()),
+                    threads: 8,
                     entry_ttl: Duration::from_millis(0),
                     attr_ttl: Duration::from_millis(250),
                     ..MountCliOptions::default()
@@ -1694,7 +1840,7 @@ mod tests {
         );
         let writeback_options = MountCliOptions {
             writeback: nokv_fuse::FuseWritebackOptions {
-                enabled: false,
+                cache_enabled: true,
                 root: PathBuf::from("/tmp/nokv-writeback"),
                 max_bytes: 4096,
                 max_items: 32,
@@ -1706,7 +1852,7 @@ mod tests {
         };
         let (_config, command) = parse(vec![
             s("mount"),
-            s("--no-writeback-cache"),
+            s("--writeback-cache"),
             s("--writeback-cache-dir"),
             s("/tmp/nokv-writeback"),
             s("--writeback-cache-bytes"),
@@ -1757,10 +1903,25 @@ mod tests {
     }
 
     #[test]
+    fn parse_mount_rejects_zero_fuse_threads() {
+        assert!(matches!(
+            parse(vec![
+                s("mount"),
+                s("--fuse-threads"),
+                s("0"),
+                s("/tmp/nokv")
+            ]),
+            Err(CliError::InvalidNumber {
+                field: "fuse_threads",
+                ..
+            })
+        ));
+    }
+
+    #[test]
     fn parse_serve_command() {
-        let (config, command) = parse(vec![s("serve")]).unwrap();
+        let command = parse(vec![s("serve")]).unwrap().1;
         assert_eq!(command, Command::Serve);
-        assert_eq!(config.metadata_mode, MetadataMode::Local);
         assert!(matches!(
             parse(vec![s("serve"), s("extra")]),
             Err(CliError::TooManyArguments)
@@ -1913,7 +2074,6 @@ mod tests {
     fn parse_metadata_checkpoint_archive_options_for_serve() {
         let (config, command) = parse(vec![s("serve")]).unwrap();
         assert_eq!(command, Command::Serve);
-        assert_eq!(config.metadata_mode, MetadataMode::Local);
         assert_eq!(
             config.metadata_checkpoint_archive_prefix.as_deref(),
             Some(DEFAULT_METADATA_CHECKPOINT_ARCHIVE_PREFIX)

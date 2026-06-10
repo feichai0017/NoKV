@@ -14,6 +14,7 @@ nokv-types.workspace = true
 opendal.workspace = true
 sha2.workspace = true
 tokio.workspace = true
+xxhash-rust.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

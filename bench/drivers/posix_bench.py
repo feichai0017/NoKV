@@ -24,6 +24,7 @@ and a ``warm`` row (served from cache after a warm-up pass).
 from __future__ import annotations
 
 import argparse
+import errno
 import fcntl
 import os
 import platform
@@ -58,22 +59,16 @@ def visible_entries(path: Path):
     return sorted(entry for entry in path.iterdir() if not entry.name.startswith("._"))
 
 
-def read_file_warm(path: Path) -> int:
-    with path.open("rb") as handle:
-        return len(handle.read())
-
-
-def read_file_cold(path: Path) -> int:
-    """Read a file while bypassing the kernel page cache, so the read reaches
-    the filesystem instead of being served by the OS. Returns bytes read."""
+def _read_file_loop(path: Path, bypass_kernel_cache: bool) -> int:
+    expected_size = path.stat().st_size
     fd = os.open(str(path), os.O_RDONLY)
     try:
-        if platform.system() == "Darwin":
+        if bypass_kernel_cache and platform.system() == "Darwin":
             try:
                 fcntl.fcntl(fd, _F_NOCACHE, 1)
             except OSError:
                 pass
-        if hasattr(os, "posix_fadvise"):
+        if bypass_kernel_cache and hasattr(os, "posix_fadvise"):
             try:
                 # Evict any already-cached pages for this file before reading.
                 os.posix_fadvise(fd, 0, 0, os.POSIX_FADV_DONTNEED)
@@ -81,13 +76,28 @@ def read_file_cold(path: Path) -> int:
                 pass
         total = 0
         while True:
-            chunk = os.read(fd, _READ_CHUNK)
+            try:
+                chunk = os.read(fd, _READ_CHUNK)
+            except OSError as err:
+                if err.errno == errno.ENXIO and total >= expected_size:
+                    break
+                raise
             if not chunk:
                 break
             total += len(chunk)
         return total
     finally:
         os.close(fd)
+
+
+def read_file_warm(path: Path) -> int:
+    return _read_file_loop(path, bypass_kernel_cache=False)
+
+
+def read_file_cold(path: Path) -> int:
+    """Read a file while bypassing the kernel page cache, so the read reaches
+    the filesystem instead of being served by the OS. Returns bytes read."""
+    return _read_file_loop(path, bypass_kernel_cache=True)
 
 
 def _cold_read_mode() -> str:
@@ -557,38 +567,51 @@ def main(argv: list[str]) -> int:
         return 2
 
     mount = args.mount.resolve()
-    root = Path(tempfile.mkdtemp(prefix=f"nokv-bench-{args.system}-", dir=str(mount)))
-    try:
-        for name in requested:
-            try:
-                for line in WORKLOADS[name](args, root):
-                    print(line, flush=True)
-            except Exception as err:  # noqa: BLE001 — one workload must not abort the run
-                # A workload can fail on a backend missing an S3 feature (e.g.
-                # multipart upload for large objects). Record it as an explicit
-                # caveat row so the rest of the matrix still completes and the
-                # failure is visible rather than silently dropped.
-                print(
-                    schema.row(
-                        boundary=schema.L2_MOUNT,
-                        system=args.system,
-                        metadata_tier=args.metadata_tier,
-                        object_backend=args.object_backend,
-                        cache_state="n/a",
-                        concurrency=args.concurrency,
-                        tool="native",
-                        profile=args.profile,
-                        workload=name,
-                        phase="n/a",
-                        operations=0,
-                        seconds=0.0,
-                        caveat=f"workload-failed:{type(err).__name__}:{str(err)[:120]}",
-                    ),
-                    flush=True,
-                )
-    finally:
-        shutil.rmtree(root, ignore_errors=True)
+    for name in requested:
+        root: Path | None = None
+        try:
+            root = Path(tempfile.mkdtemp(
+                prefix=f"nokv-bench-{args.system}-{name}-",
+                dir=str(mount),
+            ))
+            for line in WORKLOADS[name](args, root):
+                print(line, flush=True)
+        except Exception as err:  # noqa: BLE001 — one workload must not abort the run
+            # A workload can fail on a backend missing an S3 feature (e.g.
+            # multipart upload for large objects). Record it as an explicit
+            # caveat row so the rest of the matrix still completes and the
+            # failure is visible rather than silently dropped.
+            print(
+                schema.row(
+                    boundary=schema.L2_MOUNT,
+                    system=args.system,
+                    metadata_tier=args.metadata_tier,
+                    object_backend=args.object_backend,
+                    cache_state="n/a",
+                    concurrency=args.concurrency,
+                    tool="native",
+                    profile=args.profile,
+                    workload=name,
+                    phase="n/a",
+                    operations=0,
+                    seconds=0.0,
+                    caveat=f"workload-failed:{type(err).__name__}:{str(err)[:120]}",
+                ),
+                flush=True,
+            )
+            if _mount_unavailable(mount):
+                break
+        finally:
+            if root is not None:
+                shutil.rmtree(root, ignore_errors=True)
     return 0
+
+
+def _mount_unavailable(mount: Path) -> bool:
+    try:
+        return not mount.is_dir()
+    except OSError:
+        return True
 
 
 if __name__ == "__main__":

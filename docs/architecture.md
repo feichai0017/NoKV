@@ -11,10 +11,13 @@ storage, clients, FUSE, docs, and examples live at the repository root instead
 of behind a nested workspace.
 
 The implemented tree is the Rust client/server filesystem slice: FUSE and the
-SDK talk to `nokv-server`, `nokv-server` commits semantic metadata commands
-through an OpenRaft metadata group, and Holt stores the applied state machine.
-The product target, including production metadata HA, CSI, Python/fsspec, and
-node-local cache, is recorded in [Product Design](./product-design.md).
+SDK talk to `nokv-server`, which commits semantic metadata commands into an
+embedded Holt MVCC engine on a **single node**. Distributed metadata is **not
+implemented** — the planned direction (subtree sharding + owner-lease + epoch
+fencing, *not* consensus-replicated metadata) is described under
+[Distributed Direction](#distributed-direction). The broader product target —
+production metadata HA, CSI, Python/fsspec, and node-local cache — is recorded in
+[Product Design](./product-design.md).
 
 ## Layers
 
@@ -61,8 +64,13 @@ supports ordered non-atomic batches: each subrequest has its own result/error,
 but the batch removes per-operation network round trips for SDK workloads. The
 Rust SDK has a metadata client for namespace operations and an object-backed
 file client that uploads object blocks directly, asks `metad` to atomically publish
-the body manifest, fetches body read plans, and reads object ranges directly
-from the configured object store. The server stats endpoint reports
+the body manifest, opens a native layout plan through `OpenPathReadPlan`, and
+reads object ranges directly from the configured object store. `ReadBodyPlan`
+remains available for generation-scoped follow-up reads and prefetch. Read plans
+carry immutable block keys, range offsets, and `digest_uri`, so the data path can
+choose local hot-tier reads or S3-compatible object reads without adding
+placement truth to metadata.
+The server stats endpoint reports
 metadata-store write attribution counters so benchmark runs can distinguish
 current writes, history writes, watch writes, and dedupe writes. The FUSE
 frontend uses the same metadata client/server boundary as the SDK.
@@ -100,13 +108,46 @@ history:
 Path indexes are derived accelerators for artifact and checkpoint fast paths;
 they are not namespace truth.
 
-## Object Storage
+## Data Fabric And Object Storage
 
 NoKV stores file bodies outside the metadata service. File bytes are split
 into immutable object blocks and published through metadata manifests. The first
 production body backend is S3-compatible storage. RustFS, MinIO, Ceph RGW, and
 AWS S3 all use the same object-store boundary. See
 [Object Layout](./object-layout.md).
+
+The metadata manifest is the durable truth for block identity and cold storage:
+`inode`, `generation`, logical offsets, block digest, and S3-compatible object
+key. It must not record node-local NVMe paths or cache slots. Those belong to
+the data path as soft placement state.
+
+The planned hot path is layered behind the same immutable block contract:
+
+```text
+layout lease -> block descriptors -> data fabric
+  -> local NVMe hot tier
+  -> S3-compatible cold durable tier
+```
+
+That boundary keeps local placement out of metadata semantics. A hot-tier read
+can miss or fail; the S3-compatible object key remains the durable fallback.
+
+The current `nokv-object` data-fabric skeleton provides `LocalObjectStore` for a
+node-local hot tier, `TieredObjectStore` for hot-first/cold-fallback reads,
+`ObjectStore::get_many` for batched block fetches, and
+`resolve_block_placements` for soft local-vs-object placement decisions. The
+local hot tier rebuilds its residency index from disk on open, can enforce a
+configured byte cap with LRU eviction, and reports resident bytes, evictions,
+and admission rejections. Cold-read hot fills can run inline or in the
+background; background fills coalesce duplicate in-flight object keys.
+`LayoutReadExecutor` consumes the metadata layout-open plan through the existing
+read pipeline, records transport counters, and preserves the batch/coalescing
+contract. Its batch layout path combines blocks from multiple read plans before
+calling the object store, so adjacent ranges and multi-sample reads can share one
+`get_many` call. The SDK range path sits above this layer and only coalesces
+logical offsets within one immutable file generation; metadata still sees normal
+layout opens, and the object layer still sees immutable block descriptors and
+durable object keys.
 
 ## Metadata Disaster Recovery
 
@@ -163,32 +204,46 @@ an object-store `list`.
 
 ## Distributed Direction
 
-The planned distributed layer is not a generic KV database. It should replicate
-metadata commands over mount or shard scoped Raft groups, with Holt as the
-state machine storage engine and object bodies remaining in external storage.
+**Status: not implemented.** Today NoKV is a single-node metadata service — one
+embedded Holt MVCC engine owns the entire namespace. There is no replication, no
+consensus group, and no `nokv-cluster` crate. This section records the *planned*
+direction, not shipped behavior.
 
-Holt is the metadata engine inside each shard. NoKV `metad` owns filesystem
-semantics such as inode/dentry updates, watch/snapshot policy, publish rules,
-and object GC decisions.
+The planned distributed layer is deliberately **not** consensus-replicated
+metadata (that would double-log against Holt's own MVCC and erase the
+embedded-engine advantage) and **not** a mandatory external transactional KV. The
+direction is **subtree sharding + owner-lease + epoch fencing**:
 
-`nokv serve` now defaults to a single-voter OpenRaft metadata group. The
-local OpenRaft log is stored under the configured metadata directory, and each
-application log entry contains a batch of semantic `MetadataCommand`s. It is not
-a raw KV mutation, Percolator transaction, or old raftstore command. The
-OpenRaft state machine applies committed batches through the storage-neutral
-metadata store trait, so filesystem semantics stay in `nokv-meta` while log
-ordering and recovery stay in `nokv-cluster`.
+- **Shard by subtree.** Every key is already mount-prefixed and dentries are
+  parent-clustered, so a subtree maps to contiguous key ranges with no key-format
+  change. One single-owner Holt engine serves each shard. Because all N shards of
+  one checkpoint live under one subtree, the common atomic publish stays a
+  single-shard, single-engine transaction — no cross-shard commit on the hot path.
 
-There is no separate compatibility log path. `nokv serve` always uses
-the OpenRaft metadata group path, including single-node deployments. The
-`--metadata-raft-log-sync data|none` option controls the OpenRaft file-log sync
-policy: use `data` when the local log is the durability boundary, and `none`
-only for local performance experiments where losing the process-local log is
-acceptable.
+- **A small control group grants leases and holds only the shard map.** A 3–5 node
+  consensus group (the *only* consensus in the system) replicates a
+  kilobyte-scale routing table `{range → owner, epoch, lease, image_pointer}` and
+  grants / renews / revokes owner-leases. It never replicates the metadata log —
+  the metadata *truth* stays single-owner in each shard's Holt.
 
-The OpenRaft v1 target remains one metadata group per mount. Cross-mount atomic
-operations are not part of the contract. Multi-node HA uses voters through
-storage-neutral transport DTOs for vote, append entries, and snapshot
-installation. Learner read scaling remains planned production hardening work;
-the object-backed metadata archive is implemented (see Metadata Disaster Recovery
-above).
+- **Epoch fencing.** Each shard carries a monotonic ownership epoch (the
+  `allocator` record already persists one, recovered with `fetch_max`). On owner
+  change the control group bumps the epoch and a deposed owner's commits are
+  rejected at the durability boundary. Wiring this epoch into an actual commit
+  predicate is a prerequisite tracked separately — it is *stored today but not yet
+  enforced*.
+
+- **Failover reuses the DR path.** The metadata backup/restore mechanism (see
+  Metadata Disaster Recovery, above) — export a Holt checkpoint image to object
+  storage, install it on a fresh node — is also the shard-handoff primitive. A new
+  owner restores the shard image, replays the WAL tail, and takes the new epoch.
+  Zero-loss failover additionally requires per-epoch WAL-tail streaming,
+  allocation-independent request IDs for dedupe, and an atomic install-into-live
+  primitive in Holt — none of which exist yet.
+
+Cross-shard atomic operations (a rename that straddles shards) are out of the v1
+contract; the hot path never needs them.
+
+The data fabric is separate from this ownership protocol. NVMe residency is
+cache state keyed by immutable block identity; it does not decide namespace
+visibility and does not participate in `MetadataCommand` atomicity.

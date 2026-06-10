@@ -30,8 +30,8 @@ use crate::server::{Server, ServerError};
 use batch::{create_path_batch_envelopes, execute_batch, CreatePathKind};
 use wire::{
     dentry_name, err_envelope, inode_id, prepared_artifact, protocol_error, staged_object_set,
-    stored_chunk, update_attr, wire_body_read_plan, wire_dentry, wire_prepared_artifact,
-    wire_subtree_delta, xattr_set_mode,
+    update_attr, wire_body_read_plan, wire_dentry, wire_prepared_artifact, wire_subtree_delta,
+    xattr_set_mode,
 };
 
 fn handle_binary_rpc(server: &Server, body: &[u8]) -> Result<Vec<u8>, ServerError> {
@@ -609,6 +609,27 @@ fn execute(server: &Server, request: MetadataRpcRequest) -> Result<MetadataRpcRe
             let renewed = server.service().renew_snapshot(snapshot_id, lease_ms)?;
             Ok(MetadataRpcResult::RenewedSnapshot { renewed })
         }
+        MetadataRpcRequest::OpenPathReadPlan {
+            path,
+            offset,
+            len,
+            expected_generation,
+        } => {
+            let len = usize::try_from(len).map_err(|_| {
+                ServerError::Metadata(MetadError::Codec(
+                    "path read length exceeds platform limit".to_owned(),
+                ))
+            })?;
+            let open =
+                server
+                    .service()
+                    .open_path_read_plan(&path, offset, len, expected_generation)?;
+            Ok(MetadataRpcResult::OpenPathReadPlan {
+                metadata: WirePathMetadata::from_path_metadata(&open.metadata),
+                lease: nokv_protocol::WireReadLease::from_read_lease(&open.lease),
+                plan: wire_body_read_plan(&open.plan),
+            })
+        }
         MetadataRpcRequest::ReadBodyPlan {
             inode,
             generation,
@@ -626,26 +647,6 @@ fn execute(server: &Server, request: MetadataRpcRequest) -> Result<MetadataRpcRe
                     .read_file_plan(inode_id(inode)?, generation, offset, len)?;
             Ok(MetadataRpcResult::BodyReadPlan {
                 plan: wire_body_read_plan(&plan),
-            })
-        }
-        MetadataRpcRequest::ReadPathPlan {
-            path,
-            offset,
-            len,
-            expected_generation,
-        } => {
-            let len = usize::try_from(len).map_err(|_| {
-                ServerError::Metadata(MetadError::Codec(
-                    "path read length exceeds platform limit".to_owned(),
-                ))
-            })?;
-            let path_plan =
-                server
-                    .service()
-                    .read_path_plan(&path, offset, len, expected_generation)?;
-            Ok(MetadataRpcResult::PathReadPlan {
-                metadata: WirePathMetadata::from_path_metadata(&path_plan.metadata),
-                plan: wire_body_read_plan(&path_plan.plan),
             })
         }
         MetadataRpcRequest::ReadArtifactPathAtSnapshot { snapshot_id, path } => {
@@ -792,7 +793,11 @@ fn execute(server: &Server, request: MetadataRpcRequest) -> Result<MetadataRpcRe
                     size,
                     chunks: chunks
                         .into_iter()
-                        .map(stored_chunk)
+                        .map(|chunk| {
+                            chunk
+                                .into_chunk_manifest()
+                                .map_err(|err| MetadError::Codec(err.to_string()))
+                        })
                         .collect::<Result<Vec<_>, _>>()?,
                     staged: staged_object_set(staged)?,
                     mode,
@@ -835,8 +840,8 @@ fn refreshes_metadata_view(request: &MetadataRpcRequest) -> bool {
         | MetadataRpcRequest::ReadSymlinkAtSnapshot { .. }
         | MetadataRpcRequest::GetXattr { .. }
         | MetadataRpcRequest::ListXattr { .. }
+        | MetadataRpcRequest::OpenPathReadPlan { .. }
         | MetadataRpcRequest::ReadBodyPlan { .. }
-        | MetadataRpcRequest::ReadPathPlan { .. }
         | MetadataRpcRequest::ReadArtifactPathAtSnapshot { .. }
         | MetadataRpcRequest::DiffSubtrees { .. }
         | MetadataRpcRequest::SnapshotPin { .. } => true,

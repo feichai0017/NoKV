@@ -1,11 +1,12 @@
 use std::collections::HashSet;
-use std::fmt;
+use std::sync::Arc;
 
 use fuser::Errno;
-use nokv_meta::PublishArtifactRange;
-use nokv_object::{ChunkedWrite, PendingChunkedWrite, DEFAULT_BLOCK_SIZE, DEFAULT_CHUNK_SIZE};
+use nokv_object::{
+    ChunkWriteRange, ChunkedWrite, ObjectBytes, PendingChunkedWrite, DEFAULT_BLOCK_SIZE,
+    DEFAULT_CHUNK_SIZE,
+};
 use nokv_types::InodeId;
-use sha2::{Digest, Sha256};
 
 use crate::backend::FuseBackend;
 
@@ -27,7 +28,6 @@ pub(super) struct WriteHandle<P> {
     pub(super) writer: Option<nokv_object::FileWritePipeline>,
     pub(super) buffered: Vec<BufferedWriteRange>,
     pub(super) pending_uploads: Vec<PendingBufferedUpload>,
-    pub(super) sequential_digest: Option<SequentialDigest>,
     /// Logical offsets of the block-aligned regions already staged in the current
     /// write session. FUSE writeback on macFUSE flushes the dirty page set
     /// repeatedly from offset 0, re-dispatching identical bytes for regions that
@@ -43,56 +43,56 @@ pub(super) struct WriteHandle<P> {
 }
 
 #[derive(Clone, Debug)]
-pub(super) struct BufferedWriteRange {
-    pub(super) offset: u64,
-    pub(super) bytes: Vec<u8>,
+pub(crate) struct BufferedWriteRange {
+    pub(crate) offset: u64,
+    pub(crate) bytes: Vec<u8>,
 }
 
 #[derive(Clone, Debug)]
 pub(super) struct PendingBufferedUpload {
     pub(super) pending: PendingChunkedWrite,
-    pub(super) ranges: Vec<BufferedWriteRange>,
+    pub(super) ranges: Vec<PendingBufferedRange>,
 }
 
-#[derive(Clone)]
-pub(super) struct SequentialDigest {
-    hasher: Sha256,
-    pub(super) len: u64,
+#[derive(Clone, Debug)]
+pub(crate) struct PendingBufferedRange {
+    pub(crate) offset: u64,
+    pub(crate) bytes: ObjectBytes,
 }
 
-impl SequentialDigest {
-    pub(super) fn new() -> Self {
+impl PendingBufferedRange {
+    pub(crate) fn from_chunk_range(range: ChunkWriteRange) -> Self {
         Self {
-            hasher: Sha256::new(),
-            len: 0,
+            offset: range.logical_offset,
+            bytes: range.bytes,
         }
     }
 
-    pub(super) fn append(&mut self, offset: u64, data: &[u8]) -> bool {
-        if offset != self.len {
-            return false;
+    #[cfg(test)]
+    pub(crate) fn from_buffered_owned(range: BufferedWriteRange) -> Self {
+        Self {
+            offset: range.offset,
+            bytes: range.bytes.into(),
         }
-        self.hasher.update(data);
-        self.len = self
-            .len
-            .saturating_add(u64::try_from(data.len()).unwrap_or(u64::MAX));
-        true
     }
 
-    pub(super) fn digest_uri_for_size(&self, size: u64) -> Option<String> {
-        if self.len != size {
-            return None;
-        }
-        let digest = self.hasher.clone().finalize();
-        Some(format!("sha256:{digest:x}"))
+    pub(crate) fn is_empty(&self) -> bool {
+        self.bytes.is_empty()
     }
-}
 
-impl fmt::Debug for SequentialDigest {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("SequentialDigest")
-            .field("len", &self.len)
-            .finish_non_exhaustive()
+    pub(crate) fn len(&self) -> usize {
+        self.bytes.len()
+    }
+
+    pub(crate) fn as_slice(&self) -> &[u8] {
+        self.bytes.as_slice()
+    }
+
+    pub(crate) fn into_buffered(self) -> BufferedWriteRange {
+        BufferedWriteRange {
+            offset: self.offset,
+            bytes: self.bytes.into_vec(),
+        }
     }
 }
 
@@ -101,7 +101,7 @@ pub(super) struct WriteStageReservation<P> {
     pub(super) prepared: P,
     pub(super) manifest_id: String,
     pub(super) block_index_base: u64,
-    pub(super) ranges: Vec<BufferedWriteRange>,
+    pub(super) ranges: Vec<ChunkWriteRange>,
 }
 
 pub(super) fn fuse_manifest_id(parent: InodeId, inode: InodeId) -> String {
@@ -140,6 +140,7 @@ fn for_each_block_span(
     Ok(())
 }
 
+#[cfg(test)]
 pub(super) fn staged_range_block_count(offset: u64, len: usize) -> Result<u64, Errno> {
     let mut count = 0_u64;
     for_each_block_span(offset, len, |_logical_offset, _range_offset, _write_len| {
@@ -291,10 +292,19 @@ pub(super) fn take_buffered_upload_ranges(
     Ok(upload)
 }
 
+pub(super) fn has_buffered_upload_ready(ranges: &[BufferedWriteRange], force: bool) -> bool {
+    if force {
+        return ranges.iter().any(|range| !range.bytes.is_empty());
+    }
+    ranges
+        .iter()
+        .any(|range| range.bytes.len() >= FUSE_WRITEBACK_UPLOAD_THRESHOLD)
+}
+
 /// Drop block-aligned units whose logical offset has already been staged in this
-/// session, and re-coalesce the surviving (not-yet-staged) units back into
-/// contiguous ranges. `staged_offsets` records every block offset that survives so
-/// a later re-dispatch of the same region is skipped.
+/// session, and return one surviving range per staged block. `staged_offsets`
+/// records every block offset that survives so a later re-dispatch of the same
+/// region is skipped.
 ///
 /// A FUSE writeback re-dispatch always re-sends byte-identical pages, so matching
 /// on the block offset alone is sufficient to suppress the duplicate without
@@ -306,33 +316,49 @@ pub(super) fn take_buffered_upload_ranges(
 pub(super) fn select_unstaged_blocks(
     ranges: Vec<BufferedWriteRange>,
     staged_offsets: &mut HashSet<u64>,
-) -> Result<Vec<BufferedWriteRange>, Errno> {
-    let mut out: Vec<BufferedWriteRange> = Vec::new();
+) -> Result<Vec<ChunkWriteRange>, Errno> {
+    let mut out = Vec::new();
     for range in ranges {
-        for_each_block_span(
-            range.offset,
-            range.bytes.len(),
-            |block_offset, start, len| {
-                if !staged_offsets.insert(block_offset) {
-                    return Ok(());
-                }
-                let block = &range.bytes[start..start + len];
-                match out.last_mut() {
-                    Some(last)
-                        if last.offset.saturating_add(last.bytes.len() as u64) == block_offset =>
-                    {
-                        last.bytes.extend_from_slice(block);
-                    }
-                    _ => out.push(BufferedWriteRange {
-                        offset: block_offset,
-                        bytes: block.to_vec(),
-                    }),
-                }
-                Ok(())
-            },
-        )?;
+        if range.bytes.is_empty() {
+            continue;
+        }
+        let bytes = Arc::new(range.bytes);
+        let mut spans = Vec::new();
+        for_each_block_span(range.offset, bytes.len(), |block_offset, start, len| {
+            spans.push((block_offset, start, len));
+            Ok(())
+        })?;
+        if spans.len() == 1 {
+            let (block_offset, start, len) = spans[0];
+            if !staged_offsets.insert(block_offset) {
+                continue;
+            }
+            push_selected_block(&mut out, block_offset, &bytes, start, len)?;
+            continue;
+        }
+        for (block_offset, start, len) in spans {
+            if !staged_offsets.insert(block_offset) {
+                continue;
+            }
+            push_selected_block(&mut out, block_offset, &bytes, start, len)?;
+        }
     }
     Ok(out)
+}
+
+fn push_selected_block(
+    out: &mut Vec<ChunkWriteRange>,
+    block_offset: u64,
+    bytes: &Arc<Vec<u8>>,
+    start: usize,
+    len: usize,
+) -> Result<(), Errno> {
+    let bytes = ObjectBytes::shared_vec_slice(Arc::clone(bytes), start, len).map_err(errno)?;
+    out.push(ChunkWriteRange {
+        logical_offset: block_offset,
+        bytes,
+    });
+    Ok(())
 }
 
 /// Forget the staged-offset entries for every block-aligned unit covered by
@@ -354,23 +380,6 @@ pub(super) fn forget_staged_blocks(
         )?;
     }
     Ok(())
-}
-
-pub(super) fn buffered_ranges_block_count(ranges: &[BufferedWriteRange]) -> Result<u64, Errno> {
-    ranges.iter().try_fold(0_u64, |count, range| {
-        staged_range_block_count(range.offset, range.bytes.len())
-            .map(|next| count.saturating_add(next))
-    })
-}
-
-pub(super) fn buffered_publish_ranges(ranges: &[BufferedWriteRange]) -> Vec<PublishArtifactRange> {
-    ranges
-        .iter()
-        .map(|range| PublishArtifactRange {
-            offset: range.offset,
-            bytes: range.bytes.clone(),
-        })
-        .collect()
 }
 
 pub(super) fn cleanup_written_objects<B: FuseBackend>(

@@ -1,11 +1,13 @@
 use std::collections::HashMap;
 use std::ffi::OsStr;
-use std::io;
+use std::io::{self, Read, Write};
+use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
-use std::sync::atomic::AtomicU64;
-use std::sync::{Arc, RwLock};
-use std::time::SystemTime;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, RwLock};
+use std::thread::{self, JoinHandle};
+use std::time::{Duration, SystemTime};
 
 #[cfg(test)]
 use fuser::FopenFlags;
@@ -61,11 +63,14 @@ use posix::{
     access_allowed, copy_file_range_size, dentry_name, file_type_from_mknod_mode, resolve_lseek,
     system_time_ms, time_or_now_ms, validate_access_mask,
 };
+#[cfg(test)]
+pub(crate) use write_session::BufferedWriteRange;
+pub(crate) use write_session::PendingBufferedRange;
 use write_session::WriteHandle;
 #[cfg(test)]
 use write_session::{
-    push_buffered_write, select_unstaged_blocks, staged_range_block_count,
-    take_buffered_upload_ranges, BufferedWriteRange, PendingBufferedUpload,
+    has_buffered_upload_ready, push_buffered_write, select_unstaged_blocks,
+    staged_range_block_count, take_buffered_upload_ranges, PendingBufferedUpload,
     FUSE_WRITEBACK_UPLOAD_THRESHOLD,
 };
 use xattr::{
@@ -78,7 +83,7 @@ pub(crate) struct NoKvFuse<B: FuseBackend> {
     parents: RwLock<HashMap<u64, u64>>,
     names: RwLock<HashMap<u64, Vec<u8>>>,
     next_handle: AtomicU64,
-    read_handles: RwLock<HashMap<u64, ReadHandle>>,
+    read_handles: RwLock<HashMap<u64, Arc<ReadHandle>>>,
     write_handles: RwLock<HashMap<u64, WriteHandle<B::Prepared>>>,
     directory_handles: RwLock<HashMap<u64, DirectoryHandle>>,
     invalidation: Arc<InvalidationRegistry>,
@@ -88,6 +93,7 @@ pub struct FuseMount {
     session: fuser::BackgroundSession,
     stats: Arc<dyn Fn() -> io::Result<FuseObjectPipelineStats> + Send + Sync>,
     _invalidation_worker: Option<FuseInvalidationWorker>,
+    _stats_server: Option<FuseStatsServer>,
 }
 
 impl FuseMount {
@@ -100,10 +106,10 @@ impl FuseMount {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 struct ReadHandle {
     attr: InodeAttr,
-    reader: FileReadPipeline,
+    reader: Mutex<FileReadPipeline>,
 }
 
 pub fn mount_client<O>(
@@ -149,6 +155,15 @@ where
     let fuse = NoKvFuse::from_shared_backend(Arc::clone(&backend), options.clone());
     let registry = fuse.invalidation_registry();
     let session = fuser::spawn_mount2(fuse, mountpoint, &config)?;
+    let stats: FuseStatsProvider = Arc::new(move || {
+        stats_backend
+            .object_pipeline_stats()
+            .map_err(|err| io::Error::other(err.to_string()))
+    });
+    let stats_server = options
+        .stats_bind
+        .map(|bind| FuseStatsServer::spawn(bind, Arc::clone(&stats)))
+        .transpose()?;
     let invalidation_worker = if options.view == FuseView::Live {
         Some(FuseInvalidationWorker::spawn(
             backend,
@@ -161,13 +176,157 @@ where
     };
     Ok(FuseMount {
         session,
-        stats: Arc::new(move || {
-            stats_backend
-                .object_pipeline_stats()
-                .map_err(|err| io::Error::other(err.to_string()))
-        }),
+        stats,
         _invalidation_worker: invalidation_worker,
+        _stats_server: stats_server,
     })
+}
+
+struct FuseStatsServer {
+    shutdown: Arc<AtomicBool>,
+    local_addr: SocketAddr,
+    handle: Option<JoinHandle<()>>,
+}
+
+type FuseStatsProvider = Arc<dyn Fn() -> io::Result<FuseObjectPipelineStats> + Send + Sync>;
+
+impl FuseStatsServer {
+    fn spawn(bind: SocketAddr, stats: FuseStatsProvider) -> io::Result<Self> {
+        let listener = TcpListener::bind(bind)?;
+        let local_addr = listener.local_addr()?;
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let thread_shutdown = Arc::clone(&shutdown);
+        let handle = thread::Builder::new()
+            .name("nokv-fuse-stats".to_owned())
+            .spawn(move || serve_fuse_stats(listener, stats, thread_shutdown))
+            .map_err(io::Error::other)?;
+        Ok(Self {
+            shutdown,
+            local_addr,
+            handle: Some(handle),
+        })
+    }
+}
+
+impl Drop for FuseStatsServer {
+    fn drop(&mut self) {
+        self.shutdown.store(true, Ordering::Relaxed);
+        let _ = TcpStream::connect(self.local_addr);
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
+    }
+}
+
+fn serve_fuse_stats(listener: TcpListener, stats: FuseStatsProvider, shutdown: Arc<AtomicBool>) {
+    for stream in listener.incoming() {
+        if shutdown.load(Ordering::Relaxed) {
+            break;
+        }
+        let Ok(mut stream) = stream else {
+            continue;
+        };
+        let _ = handle_fuse_stats_stream(&mut stream, stats.as_ref());
+    }
+}
+
+fn handle_fuse_stats_stream(
+    stream: &mut TcpStream,
+    stats: &(dyn Fn() -> io::Result<FuseObjectPipelineStats> + Send + Sync),
+) -> io::Result<()> {
+    stream.set_read_timeout(Some(Duration::from_millis(250)))?;
+    let mut request = [0_u8; 1024];
+    let read = stream.read(&mut request)?;
+    let line = std::str::from_utf8(&request[..read])
+        .unwrap_or_default()
+        .lines()
+        .next()
+        .unwrap_or_default();
+    match line
+        .split_whitespace()
+        .take(2)
+        .collect::<Vec<_>>()
+        .as_slice()
+    {
+        ["GET", "/healthz"] => write_http_response(stream, "200 OK", "text/plain", "ok\n"),
+        ["GET", "/stats"] => {
+            let body = fuse_stats_json(&stats()?);
+            write_http_response(stream, "200 OK", "application/json", &body)
+        }
+        _ => write_http_response(stream, "404 Not Found", "text/plain", "not found\n"),
+    }
+}
+
+fn write_http_response(
+    stream: &mut TcpStream,
+    status: &str,
+    content_type: &str,
+    body: &str,
+) -> io::Result<()> {
+    write!(
+        stream,
+        "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    )
+}
+
+fn fuse_stats_json(stats: &FuseObjectPipelineStats) -> String {
+    let objects = stats.object_transfer_stats();
+    let tiered = stats.tiered_object.unwrap_or_default();
+    let local_hot = stats.local_hot.unwrap_or_default();
+    format!(
+        "{{\"ready\":true,\"source\":\"fuse\",\"block_cache_enabled\":{},\"object_puts\":{},\"object_put_bytes\":{},\"object_gets\":{},\"object_get_bytes\":{},\"coalesced_gets\":{},\"coalesced_get_bytes\":{},\"cache_hits\":{},\"cache_hit_bytes\":{},\"block_cache_hits\":{},\"block_cache_hit_bytes\":{},\"read_window_hits\":{},\"read_window_hit_bytes\":{},\"prefetch_enqueued\":{},\"prefetch_dropped\":{},\"prefetch_completed\":{},\"prefetch_failed\":{},\"prefetch_object_gets\":{},\"prefetch_object_get_bytes\":{},\"prefetch_cache_hits\":{},\"prefetch_cache_hit_bytes\":{},\"read_plan_cache_hits\":{},\"read_plan_cache_misses\":{},\"object_writeback_enqueued\":{},\"object_writeback_inline\":{},\"object_writeback_completed\":{},\"object_writeback_failed\":{},\"object_writeback_staged_bytes\":{},\"object_writeback_uploaded_bytes\":{},\"object_writeback_queue_wait_ns\":{},\"object_writeback_queue_max_wait_ns\":{},\"object_writeback_upload_ns\":{},\"object_writeback_upload_max_ns\":{},\"object_writeback_collect_ns\":{},\"object_writeback_digest_ns\":{},\"object_writeback_store_put_ns\":{},\"object_writeback_cache_put_ns\":{},\"tiered_hot_put_ns\":{},\"tiered_pending_cold_put_ns\":{},\"tiered_cold_put_enqueue_ns\":{},\"local_hot_puts\":{},\"local_hot_put_bytes\":{},\"local_hot_put_total_ns\":{},\"local_hot_put_prepare_ns\":{},\"local_hot_put_write_ns\":{},\"local_hot_put_sync_ns\":{},\"local_hot_put_rename_ns\":{},\"local_hot_put_record_ns\":{},\"manifest_chunks\":{},\"manifest_blocks\":{}}}\n",
+        stats.block_cache.is_some(),
+        objects.object_puts,
+        objects.object_put_bytes,
+        objects.object_gets,
+        objects.object_get_bytes,
+        objects.coalesced_gets,
+        objects.coalesced_get_bytes,
+        objects.cache_hits,
+        objects.cache_hit_bytes,
+        stats.foreground_block_cache_hits,
+        stats.foreground_block_cache_hit_bytes,
+        stats.foreground_read_window_hits,
+        stats.foreground_read_window_hit_bytes,
+        objects.prefetch_enqueued,
+        objects.prefetch_dropped,
+        objects.prefetch_completed,
+        objects.prefetch_failed,
+        objects.prefetch_object_gets,
+        objects.prefetch_object_get_bytes,
+        objects.prefetch_cache_hits,
+        objects.prefetch_cache_hit_bytes,
+        objects.read_plan_cache_hits,
+        objects.read_plan_cache_misses,
+        objects.object_writeback_enqueued,
+        objects.object_writeback_inline,
+        objects.object_writeback_completed,
+        objects.object_writeback_failed,
+        objects.object_writeback_staged_bytes,
+        objects.object_writeback_uploaded_bytes,
+        objects.object_writeback_queue_wait_ns,
+        objects.object_writeback_queue_max_wait_ns,
+        objects.object_writeback_upload_ns,
+        objects.object_writeback_upload_max_ns,
+        objects.object_writeback_collect_ns,
+        objects.object_writeback_digest_ns,
+        objects.object_writeback_store_put_ns,
+        objects.object_writeback_cache_put_ns,
+        tiered.hot_put_ns,
+        tiered.pending_cold_put_ns,
+        tiered.cold_put_enqueue_ns,
+        local_hot.puts,
+        local_hot.put_bytes,
+        local_hot.put_total_ns,
+        local_hot.put_prepare_ns,
+        local_hot.put_write_ns,
+        local_hot.put_sync_ns,
+        local_hot.put_rename_ns,
+        local_hot.put_record_ns,
+        objects.manifest_chunks,
+        objects.manifest_blocks,
+    )
 }
 
 impl<B> Filesystem for NoKvFuse<B>
@@ -365,7 +524,7 @@ where
         _lock_owner: Option<fuser::LockOwner>,
         reply: ReplyData,
     ) {
-        match self.read_from_handle(fh, offset, size) {
+        match self.read_from_read_handle(fh, offset, size) {
             Ok(Some(bytes)) => {
                 reply.data(&bytes);
                 return;
@@ -376,7 +535,7 @@ where
                 return;
             }
         }
-        match self.read_from_read_handle(fh, offset, size) {
+        match self.read_from_handle(fh, offset, size) {
             Ok(Some(bytes)) => {
                 reply.data(&bytes);
                 return;
@@ -1380,16 +1539,16 @@ where
 mod tests {
     use super::*;
     use crate::backend::FuseBackendResult;
-    use nokv_meta::PublishArtifactRange;
     use nokv_object::{
-        BlockCacheStats, FileWritePipeline, ObjectPrefetchStats, ObjectWritebackStats,
-        WritebackCacheStats, DEFAULT_BLOCK_SIZE, DEFAULT_CHUNK_SIZE,
+        BlockCacheStats, FileReadPipelineStats, FileWritePipeline, ObjectPrefetchStats,
+        ObjectWritebackStats, WritebackCacheStats, DEFAULT_BLOCK_SIZE, DEFAULT_CHUNK_SIZE,
     };
     use nokv_types::{WatchCursor, WatchRecord};
 
     #[test]
     fn parent_cache_defaults_to_root_and_remembers_lookup_parent() {
-        let fuse = NoKvFuse::from_backend(UnsupportedTestBackend, FuseOptions::default());
+        let fuse =
+            NoKvFuse::from_backend(UnsupportedTestBackend::default(), FuseOptions::default());
         let child = InodeId::new(99).unwrap();
         assert_eq!(fuse.parent_of(child), InodeId::root());
         fuse.remember_parent(child, InodeId::new(9).unwrap());
@@ -1398,7 +1557,8 @@ mod tests {
 
     #[test]
     fn statfs_snapshot_reports_nonzero_capacity_and_name_limit() {
-        let fuse = NoKvFuse::from_backend(UnsupportedTestBackend, FuseOptions::default());
+        let fuse =
+            NoKvFuse::from_backend(UnsupportedTestBackend::default(), FuseOptions::default());
 
         let stat = fuse.statfs_snapshot();
 
@@ -1414,12 +1574,13 @@ mod tests {
 
     #[test]
     fn open_flags_follow_fuse_cache_options() {
-        let fuse = NoKvFuse::from_backend(UnsupportedTestBackend, FuseOptions::default());
+        let fuse =
+            NoKvFuse::from_backend(UnsupportedTestBackend::default(), FuseOptions::default());
         assert_eq!(fuse.read_open_flags(), FopenFlags::FOPEN_KEEP_CACHE);
         assert_eq!(fuse.write_open_flags(), FopenFlags::empty());
 
         let fuse = NoKvFuse::from_backend(
-            UnsupportedTestBackend,
+            UnsupportedTestBackend::default(),
             FuseOptions {
                 kernel_cache: false,
                 ..FuseOptions::default()
@@ -1429,7 +1590,7 @@ mod tests {
         assert_eq!(fuse.write_open_flags(), FopenFlags::empty());
 
         let fuse = NoKvFuse::from_backend(
-            UnsupportedTestBackend,
+            UnsupportedTestBackend::default(),
             FuseOptions {
                 direct_io: true,
                 ..FuseOptions::default()
@@ -1441,7 +1602,8 @@ mod tests {
 
     #[test]
     fn object_pipeline_stats_default_for_backend_without_object_pipeline() {
-        let fuse = NoKvFuse::from_backend(UnsupportedTestBackend, FuseOptions::default());
+        let fuse =
+            NoKvFuse::from_backend(UnsupportedTestBackend::default(), FuseOptions::default());
         assert_eq!(
             fuse.object_pipeline_stats().unwrap(),
             FuseObjectPipelineStats::default()
@@ -1474,7 +1636,6 @@ mod tests {
             writeback: Some(ObjectWritebackStats {
                 enqueued: 7,
                 inline: 1,
-                fallback: 2,
                 completed: 3,
                 failed: 4,
                 staged_bytes: 70,
@@ -1483,13 +1644,48 @@ mod tests {
                 queue_max_wait_ns: 91,
                 upload_ns: 100,
                 upload_max_ns: 101,
+                collect_ns: 102,
+                digest_ns: 103,
+                store_put_ns: 104,
+                cache_put_ns: 105,
             }),
+            tiered_object: Some(nokv_object::TieredObjectStoreStats {
+                hot_put_ns: 106,
+                pending_cold_put_ns: 107,
+                cold_put_enqueue_ns: 108,
+                ..nokv_object::TieredObjectStoreStats::default()
+            }),
+            local_hot: Some(nokv_object::LocalObjectStoreStats {
+                puts: 2,
+                put_bytes: 8192,
+                put_total_ns: 109,
+                put_prepare_ns: 110,
+                put_write_ns: 111,
+                put_sync_ns: 112,
+                put_rename_ns: 113,
+                put_record_ns: 114,
+                ..nokv_object::LocalObjectStoreStats::default()
+            }),
+            foreground_object_gets: 1,
+            foreground_object_get_bytes: 10,
+            foreground_coalesced_gets: 2,
+            foreground_coalesced_get_bytes: 20,
+            foreground_cache_hits: 2,
+            foreground_cache_hit_bytes: 20,
+            foreground_block_cache_hits: 2,
+            foreground_block_cache_hit_bytes: 20,
+            foreground_read_window_hits: 0,
+            foreground_read_window_hit_bytes: 0,
             read_plan_cache_hits: 8,
             read_plan_cache_misses: 9,
         };
 
         let object = stats.object_transfer_stats();
 
+        assert_eq!(object.object_gets, 5);
+        assert_eq!(object.object_get_bytes, 50);
+        assert_eq!(object.coalesced_gets, 2);
+        assert_eq!(object.coalesced_get_bytes, 20);
         assert_eq!(object.cache_hits, 7);
         assert_eq!(object.cache_hit_bytes, 70);
         assert_eq!(object.prefetch_enqueued, 3);
@@ -1498,7 +1694,6 @@ mod tests {
         assert_eq!(object.read_plan_cache_misses, 9);
         assert_eq!(object.object_writeback_enqueued, 7);
         assert_eq!(object.object_writeback_inline, 1);
-        assert_eq!(object.object_writeback_fallback, 2);
         assert_eq!(object.object_writeback_completed, 3);
         assert_eq!(object.object_writeback_failed, 4);
         assert_eq!(object.object_writeback_staged_bytes, 70);
@@ -1507,6 +1702,45 @@ mod tests {
         assert_eq!(object.object_writeback_queue_max_wait_ns, 91);
         assert_eq!(object.object_writeback_upload_ns, 100);
         assert_eq!(object.object_writeback_upload_max_ns, 101);
+        assert_eq!(object.object_writeback_collect_ns, 102);
+        assert_eq!(object.object_writeback_digest_ns, 103);
+        assert_eq!(object.object_writeback_store_put_ns, 104);
+        assert_eq!(object.object_writeback_cache_put_ns, 105);
+    }
+
+    #[test]
+    fn fuse_stats_json_reports_mount_object_counters() {
+        let body = fuse_stats_json(&FuseObjectPipelineStats {
+            foreground_object_gets: 3,
+            foreground_object_get_bytes: 4096,
+            foreground_cache_hits: 2,
+            foreground_cache_hit_bytes: 2048,
+            foreground_read_window_hits: 2,
+            foreground_read_window_hit_bytes: 2048,
+            read_plan_cache_misses: 1,
+            tiered_object: Some(nokv_object::TieredObjectStoreStats {
+                hot_put_ns: 12,
+                ..nokv_object::TieredObjectStoreStats::default()
+            }),
+            local_hot: Some(nokv_object::LocalObjectStoreStats {
+                puts: 1,
+                put_total_ns: 34,
+                put_write_ns: 21,
+                ..nokv_object::LocalObjectStoreStats::default()
+            }),
+            ..FuseObjectPipelineStats::default()
+        });
+
+        assert!(body.contains("\"source\":\"fuse\""));
+        assert!(body.contains("\"object_gets\":3"));
+        assert!(body.contains("\"object_get_bytes\":4096"));
+        assert!(body.contains("\"cache_hits\":2"));
+        assert!(body.contains("\"read_window_hits\":2"));
+        assert!(body.contains("\"read_plan_cache_misses\":1"));
+        assert!(body.contains("\"tiered_hot_put_ns\":12"));
+        assert!(body.contains("\"local_hot_puts\":1"));
+        assert!(body.contains("\"local_hot_put_total_ns\":34"));
+        assert!(body.contains("\"local_hot_put_write_ns\":21"));
     }
 
     #[test]
@@ -1557,6 +1791,8 @@ mod tests {
             0,
             &vec![1; FUSE_WRITEBACK_UPLOAD_THRESHOLD / 2],
         );
+        assert!(!has_buffered_upload_ready(&buffered, false));
+        assert!(has_buffered_upload_ready(&buffered, true));
         assert!(take_buffered_upload_ranges(&mut buffered, false)
             .unwrap()
             .is_empty());
@@ -1566,6 +1802,7 @@ mod tests {
             (FUSE_WRITEBACK_UPLOAD_THRESHOLD / 2) as u64,
             &vec![2; FUSE_WRITEBACK_UPLOAD_THRESHOLD / 2],
         );
+        assert!(has_buffered_upload_ready(&buffered, false));
         let upload = take_buffered_upload_ranges(&mut buffered, false).unwrap();
 
         assert!(buffered.is_empty());
@@ -1585,6 +1822,7 @@ mod tests {
             &vec![7; FUSE_WRITEBACK_UPLOAD_THRESHOLD + 17],
         );
 
+        assert!(has_buffered_upload_ready(&buffered, false));
         let upload = take_buffered_upload_ranges(&mut buffered, false).unwrap();
         assert_eq!(upload.len(), 1);
         assert_eq!(upload[0].bytes.len(), FUSE_WRITEBACK_UPLOAD_THRESHOLD);
@@ -1592,6 +1830,8 @@ mod tests {
         assert_eq!(buffered[0].offset, FUSE_WRITEBACK_UPLOAD_THRESHOLD as u64);
         assert_eq!(buffered[0].bytes.len(), 17);
 
+        assert!(!has_buffered_upload_ready(&buffered, false));
+        assert!(has_buffered_upload_ready(&buffered, true));
         let tail = take_buffered_upload_ranges(&mut buffered, true).unwrap();
         assert_eq!(tail.len(), 1);
         assert_eq!(tail[0].offset, FUSE_WRITEBACK_UPLOAD_THRESHOLD as u64);
@@ -1631,10 +1871,12 @@ mod tests {
 
     #[test]
     fn select_unstaged_skips_already_staged_offsets() {
-        let block = FUSE_WRITEBACK_UPLOAD_THRESHOLD;
+        let block = DEFAULT_BLOCK_SIZE;
         let mut staged = std::collections::HashSet::new();
 
-        // First stage of two distinct blocks: both are new, nothing is skipped.
+        // First stage of two distinct blocks: both are new, and they stay as
+        // separate block-sized ranges instead of being stitched into a larger
+        // buffer that the object layer would split again.
         let first = vec![BufferedWriteRange {
             offset: 0,
             bytes: {
@@ -1644,9 +1886,11 @@ mod tests {
             },
         }];
         let out = select_unstaged_blocks(first, &mut staged).unwrap();
-        assert_eq!(out.len(), 1);
-        assert_eq!(out[0].offset, 0);
-        assert_eq!(out[0].bytes.len(), 2 * block);
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0].logical_offset, 0);
+        assert_eq!(out[0].bytes.len(), block);
+        assert_eq!(out[1].logical_offset, block as u64);
+        assert_eq!(out[1].bytes.len(), block);
         assert_eq!(staged.len(), 2);
 
         // A FUSE re-dispatch re-sends both already-staged offsets plus one new
@@ -1668,14 +1912,31 @@ mod tests {
         ];
         let out = select_unstaged_blocks(replay, &mut staged).unwrap();
         assert_eq!(out.len(), 1, "only the not-yet-staged offset survives");
-        assert_eq!(out[0].offset, 2 * block as u64);
-        assert_eq!(out[0].bytes, vec![9_u8; block]);
+        assert_eq!(out[0].logical_offset, 2 * block as u64);
+        assert_eq!(out[0].bytes.as_slice(), vec![9_u8; block].as_slice());
         assert_eq!(staged.len(), 3);
     }
 
     #[test]
+    fn select_unstaged_moves_single_block_without_copying() {
+        let mut staged = std::collections::HashSet::new();
+        let bytes = vec![11_u8; DEFAULT_BLOCK_SIZE];
+        let ptr = bytes.as_ptr();
+
+        let out =
+            select_unstaged_blocks(vec![BufferedWriteRange { offset: 0, bytes }], &mut staged)
+                .unwrap();
+
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].logical_offset, 0);
+        assert_eq!(out[0].bytes.len(), DEFAULT_BLOCK_SIZE);
+        assert_eq!(out[0].bytes.as_ptr(), ptr);
+    }
+
+    #[test]
     fn failed_pending_writeback_restores_dirty_range_for_retry() {
-        let fuse = NoKvFuse::from_backend(UnsupportedTestBackend, FuseOptions::default());
+        let backend = UnsupportedTestBackend::default();
+        let fuse = NoKvFuse::from_backend(backend.clone(), FuseOptions::default());
         let inode = InodeId::new(7).unwrap();
         let fh = fuse
             .allocate_write_handle(
@@ -1718,10 +1979,12 @@ mod tests {
                 pending: PendingChunkedWrite::ready(Err(ObjectError::Backend(
                     "temporary object outage".to_owned(),
                 ))),
-                ranges: vec![BufferedWriteRange {
-                    offset: 0,
-                    bytes: b"checkpoint".to_vec(),
-                }],
+                ranges: vec![PendingBufferedRange::from_buffered_owned(
+                    BufferedWriteRange {
+                        offset: 0,
+                        bytes: b"checkpoint".to_vec(),
+                    },
+                )],
             });
         }
 
@@ -1739,6 +2002,13 @@ mod tests {
         drop(handles);
 
         fuse.publish_handle(fh).unwrap();
+        let published_digests = backend.published_digests();
+        assert_eq!(published_digests.len(), 1);
+        assert!(
+            published_digests[0].starts_with("manifest-sha256:"),
+            "{published_digests:?}"
+        );
+
         let handles = fuse.write_handles.read().unwrap();
         let handle = handles.get(&fh.0).unwrap();
         assert!(handle.buffered.is_empty());
@@ -1750,7 +2020,8 @@ mod tests {
 
     #[test]
     fn attr_reflects_in_flight_write_handle_size() {
-        let fuse = NoKvFuse::from_backend(UnsupportedTestBackend, FuseOptions::default());
+        let fuse =
+            NoKvFuse::from_backend(UnsupportedTestBackend::default(), FuseOptions::default());
         let inode = InodeId::new(7).unwrap();
         let committed = InodeAttr {
             inode,
@@ -1792,7 +2063,8 @@ mod tests {
 
     #[test]
     fn read_from_write_handle_overlays_pending_upload_without_waiting() {
-        let fuse = NoKvFuse::from_backend(UnsupportedTestBackend, FuseOptions::default());
+        let fuse =
+            NoKvFuse::from_backend(UnsupportedTestBackend::default(), FuseOptions::default());
         let inode = InodeId::new(7).unwrap();
         let fh = fuse
             .allocate_write_handle(
@@ -1823,10 +2095,12 @@ mod tests {
                 pending: PendingChunkedWrite::ready(Err(ObjectError::Backend(
                     "upload should not be awaited by read".to_owned(),
                 ))),
-                ranges: vec![BufferedWriteRange {
-                    offset: 0,
-                    bytes: b"checkpoint".to_vec(),
-                }],
+                ranges: vec![PendingBufferedRange::from_buffered_owned(
+                    BufferedWriteRange {
+                        offset: 0,
+                        bytes: b"checkpoint".to_vec(),
+                    },
+                )],
             });
         }
 
@@ -1840,23 +2114,9 @@ mod tests {
 
     #[test]
     fn read_handle_uses_pipeline_and_is_released() {
-        let fuse = NoKvFuse::from_backend(UnsupportedTestBackend, FuseOptions::default());
-        let inode = InodeId::new(7).unwrap();
-        let fh = fuse
-            .allocate_read_handle(InodeAttr {
-                inode,
-                file_type: FileType::File,
-                mode: 0o644,
-                uid: 1000,
-                gid: 1000,
-                rdev: 0,
-                nlink: 1,
-                size: 16,
-                generation: 1,
-                mtime_ms: 1,
-                ctime_ms: 1,
-            })
-            .unwrap();
+        let fuse =
+            NoKvFuse::from_backend(UnsupportedTestBackend::default(), FuseOptions::default());
+        let fh = fuse.allocate_read_handle(test_file_attr(7)).unwrap();
 
         let first = fuse.read_from_read_handle(fh, 0, 4).unwrap().unwrap();
         let second = fuse.read_from_read_handle(fh, 4, 4).unwrap().unwrap();
@@ -1866,6 +2126,54 @@ mod tests {
         assert!(fuse.release_read_handle(fh).unwrap());
         assert!(!fuse.release_read_handle(fh).unwrap());
         assert!(fuse.read_from_read_handle(fh, 0, 4).unwrap().is_none());
+    }
+
+    #[test]
+    fn read_handle_pipeline_state_is_per_handle() {
+        let backend = UnsupportedTestBackend::default();
+        let fuse = NoKvFuse::from_backend(backend.clone(), FuseOptions::default());
+        let first_fh = fuse.allocate_read_handle(test_file_attr(7)).unwrap();
+        let second_fh = fuse.allocate_read_handle(test_file_attr(8)).unwrap();
+
+        assert_eq!(
+            fuse.read_from_read_handle(first_fh, 0, 4).unwrap().unwrap(),
+            b"abcd"
+        );
+        assert_eq!(
+            fuse.read_from_read_handle(first_fh, 4, 4).unwrap().unwrap(),
+            b"efgh"
+        );
+        assert_eq!(
+            fuse.read_from_read_handle(second_fh, 4, 4)
+                .unwrap()
+                .unwrap(),
+            b"efgh"
+        );
+
+        let stats = backend.read_stats();
+        assert_eq!(stats.len(), 3);
+        assert_eq!(stats[1].0, 7);
+        assert_eq!(stats[1].1.reads, 2);
+        assert_eq!(stats[1].1.sequential_reads, 2);
+        assert_eq!(stats[2].0, 8);
+        assert_eq!(stats[2].1.reads, 1);
+        assert_eq!(stats[2].1.sequential_reads, 0);
+    }
+
+    fn test_file_attr(raw_inode: u64) -> InodeAttr {
+        InodeAttr {
+            inode: InodeId::new(raw_inode).unwrap(),
+            file_type: FileType::File,
+            mode: 0o644,
+            uid: 1000,
+            gid: 1000,
+            rdev: 0,
+            nlink: 1,
+            size: 16,
+            generation: 1,
+            mtime_ms: 1,
+            ctime_ms: 1,
+        }
     }
 
     #[test]
@@ -1917,7 +2225,21 @@ mod tests {
         assert!(!debug.contains("noapplexattr"));
     }
 
-    struct UnsupportedTestBackend;
+    #[derive(Clone, Default)]
+    struct UnsupportedTestBackend {
+        published_digests: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+        read_stats: std::sync::Arc<std::sync::Mutex<Vec<(u64, FileReadPipelineStats)>>>,
+    }
+
+    impl UnsupportedTestBackend {
+        fn published_digests(&self) -> Vec<String> {
+            self.published_digests.lock().unwrap().clone()
+        }
+
+        fn read_stats(&self) -> Vec<(u64, FileReadPipelineStats)> {
+            self.read_stats.lock().unwrap().clone()
+        }
+    }
 
     impl FuseBackend for UnsupportedTestBackend {
         type Prepared = ();
@@ -2028,31 +2350,42 @@ mod tests {
             unsupported()
         }
 
-        fn read_file_with_pipeline(
+        fn read_file_with_known_attr_pipeline(
             &self,
-            _inode: InodeId,
+            attr: &InodeAttr,
             offset: u64,
             len: usize,
             pipeline: &mut FileReadPipeline,
         ) -> FuseBackendResult<Vec<u8>> {
+            let inode = attr.inode;
             let store = nokv_object::MemoryObjectStore::new();
             let key = nokv_object::ObjectKey::new("blocks/test/read").unwrap();
-            store.put(&key, b"abcdefghijklmnop").unwrap();
+            store.put(&key, b"abcdefghijklmnop".to_vec()).unwrap();
+            let blocks = [ObjectReadBlock {
+                object_key: key.as_str().to_owned(),
+                digest_uri: "sha256:test".to_owned(),
+                object_offset: offset,
+                object_len: 16,
+                len,
+                output_offset: 0,
+            }];
             let outcome = pipeline
-                .read_blocks::<_, nokv_object::MemoryBlockCache>(
+                .read_blocks_with_options::<_, nokv_object::MemoryBlockCache>(
                     &store,
                     None,
-                    16,
-                    offset,
-                    len,
-                    &[ObjectReadBlock {
-                        object_key: key.as_str().to_owned(),
-                        object_offset: offset,
-                        len,
-                        output_offset: 0,
-                    }],
+                    nokv_object::FileReadRequest {
+                        file_size: 16,
+                        offset,
+                        output_len: len,
+                        blocks: &blocks,
+                    },
+                    nokv_object::BlockReadOptions::default(),
                 )
                 .unwrap();
+            self.read_stats
+                .lock()
+                .unwrap()
+                .push((inode.get(), pipeline.stats()));
             Ok(outcome.blocks.bytes)
         }
 
@@ -2227,20 +2560,20 @@ mod tests {
             .map_err(FuseBackendError::Object)
         }
 
-        fn stage_prepared_artifact_ranges(
+        fn stage_prepared_artifact_shared_ranges_async(
             &self,
             _prepared: &Self::Prepared,
             manifest_id: &str,
-            ranges: &[PublishArtifactRange],
+            ranges: &[PendingBufferedRange],
             block_index_base: u64,
-        ) -> FuseBackendResult<nokv_object::ChunkedWrite> {
+        ) -> FuseBackendResult<PendingChunkedWrite> {
             let mut blocks = Vec::new();
             let mut size = 0_u64;
             for (index, range) in ranges.iter().enumerate() {
-                if range.bytes.is_empty() {
+                if range.is_empty() {
                     continue;
                 }
-                let len = range.bytes.len() as u64;
+                let len = range.len() as u64;
                 size = size.max(range.offset.saturating_add(len));
                 blocks.push(nokv_object::StoredBlock {
                     object_key: format!(
@@ -2253,7 +2586,7 @@ mod tests {
                     digest_uri: format!("sha256:test-{index}"),
                 });
             }
-            Ok(nokv_object::ChunkedWrite {
+            Ok(PendingChunkedWrite::ready(Ok(nokv_object::ChunkedWrite {
                 manifest_id: manifest_id.to_owned(),
                 size,
                 chunk_size: DEFAULT_CHUNK_SIZE,
@@ -2265,8 +2598,8 @@ mod tests {
                     blocks,
                 }],
                 object_puts: ranges.len(),
-                object_put_bytes: ranges.iter().map(|range| range.bytes.len() as u64).sum(),
-            })
+                object_put_bytes: ranges.iter().map(|range| range.len() as u64).sum(),
+            })))
         }
 
         fn cleanup_staged_objects(
@@ -2289,6 +2622,10 @@ mod tests {
             _prepared: Self::Prepared,
             request: PublishArtifactStagedSession,
         ) -> FuseBackendResult<RenameReplaceResult> {
+            self.published_digests
+                .lock()
+                .unwrap()
+                .push(request.digest_uri.clone());
             let inode = InodeId::new(7).unwrap();
             let attr = InodeAttr {
                 inode,

@@ -8,7 +8,8 @@ use std::fmt;
 
 use nokv_types::{
     AdvisoryLock, AdvisoryLockKind, BlockDescriptor, BodyDescriptor, ChunkManifest, DentryName,
-    DentryRecord, FileType, InodeAttr, InodeId, PathMetadata, SliceManifest, SnapshotPin,
+    DentryRecord, FileType, InodeAttr, InodeId, PathMetadata, ReadLease, SliceManifest,
+    SnapshotPin,
 };
 use serde::{Deserialize, Serialize};
 
@@ -269,17 +270,17 @@ pub enum MetadataRpcRequest {
         snapshot_id: u64,
         lease_ms: u64,
     },
+    OpenPathReadPlan {
+        path: String,
+        offset: u64,
+        len: u64,
+        expected_generation: Option<u64>,
+    },
     ReadBodyPlan {
         inode: u64,
         generation: u64,
         offset: u64,
         len: u64,
-    },
-    ReadPathPlan {
-        path: String,
-        offset: u64,
-        len: u64,
-        expected_generation: Option<u64>,
     },
     ReadArtifactPathAtSnapshot {
         snapshot_id: u64,
@@ -411,6 +412,11 @@ pub enum MetadataRpcResult {
     RenewedSnapshot {
         renewed: bool,
     },
+    OpenPathReadPlan {
+        metadata: WirePathMetadata,
+        lease: WireReadLease,
+        plan: WireBodyReadPlan,
+    },
     CloneSubtree {
         root: u64,
         snapshot_id: u64,
@@ -419,10 +425,6 @@ pub enum MetadataRpcResult {
         deltas: Vec<WireSubtreeDelta>,
     },
     BodyReadPlan {
-        plan: WireBodyReadPlan,
-    },
-    PathReadPlan {
-        metadata: WirePathMetadata,
         plan: WireBodyReadPlan,
     },
     FileBytes {
@@ -598,7 +600,9 @@ pub struct WireBodyReadPlan {
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct WireObjectReadBlock {
     pub object_key: String,
+    pub digest_uri: String,
     pub object_offset: u64,
+    pub object_len: u64,
     pub len: u64,
     pub output_offset: u64,
 }
@@ -609,6 +613,14 @@ pub struct WireSnapshotPin {
     pub root: u64,
     pub read_version: u64,
     pub created_version: u64,
+    pub lease_expires_unix_ms: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct WireReadLease {
+    pub inode: u64,
+    pub generation: u64,
+    pub read_version: u64,
     pub lease_expires_unix_ms: u64,
 }
 
@@ -870,6 +882,26 @@ impl WireSnapshotPin {
     }
 }
 
+impl WireReadLease {
+    pub fn from_read_lease(lease: &ReadLease) -> Self {
+        Self {
+            inode: lease.inode.get(),
+            generation: lease.generation,
+            read_version: lease.read_version,
+            lease_expires_unix_ms: lease.lease_expires_unix_ms,
+        }
+    }
+
+    pub fn into_read_lease(self) -> Result<ReadLease, MetadataProtocolError> {
+        Ok(ReadLease {
+            inode: inode_id(self.inode)?,
+            generation: self.generation,
+            read_version: self.read_version,
+            lease_expires_unix_ms: self.lease_expires_unix_ms,
+        })
+    }
+}
+
 pub fn encode_request(request: &MetadataRpcRequest) -> Result<Vec<u8>, MetadataProtocolError> {
     serialize(request)
 }
@@ -1008,6 +1040,70 @@ mod tests {
         let encoded = encode_request(&request).unwrap();
         assert!(encoded.len() < 64);
         assert_eq!(decode_request(&encoded).unwrap(), request);
+    }
+
+    #[test]
+    fn binary_codec_round_trips_open_path_read_plan() {
+        let request = MetadataRpcRequest::OpenPathReadPlan {
+            path: "/artifact.bin".to_owned(),
+            offset: 1,
+            len: 5,
+            expected_generation: Some(7),
+        };
+        let encoded = encode_request(&request).unwrap();
+        assert_eq!(decode_request(&encoded).unwrap(), request);
+
+        let envelope = MetadataRpcEnvelope {
+            ok: true,
+            result: Some(MetadataRpcResult::OpenPathReadPlan {
+                metadata: WirePathMetadata {
+                    attr: WireInodeAttr {
+                        inode: 42,
+                        file_type: "file".to_owned(),
+                        mode: 0o644,
+                        uid: 1000,
+                        gid: 1000,
+                        rdev: 0,
+                        nlink: 1,
+                        size: 6,
+                        generation: 7,
+                        mtime_ms: 8,
+                        ctime_ms: 8,
+                    },
+                    body: Some(WireBodyDescriptor {
+                        producer: "unit-test".to_owned(),
+                        digest_uri: "sha256:demo".to_owned(),
+                        size: 6,
+                        content_type: "application/octet-stream".to_owned(),
+                        manifest_id: "artifact.bin".to_owned(),
+                        generation: 7,
+                        chunk_size: 64 * 1024 * 1024,
+                        block_size: 4 * 1024 * 1024,
+                    }),
+                },
+                lease: WireReadLease {
+                    inode: 42,
+                    generation: 7,
+                    read_version: 9,
+                    lease_expires_unix_ms: 12_345,
+                },
+                plan: WireBodyReadPlan {
+                    output_len: 3,
+                    blocks: vec![WireObjectReadBlock {
+                        object_key: "blocks/demo".to_owned(),
+                        digest_uri: "sha256:test".to_owned(),
+                        object_offset: 2,
+                        object_len: 6,
+                        len: 3,
+                        output_offset: 0,
+                    }],
+                },
+            }),
+            error: None,
+            error_kind: None,
+        };
+        let encoded = encode_envelope(&envelope).unwrap();
+        assert_eq!(decode_envelope(&encoded).unwrap(), envelope);
     }
 
     #[test]

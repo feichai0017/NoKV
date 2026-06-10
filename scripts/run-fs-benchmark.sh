@@ -2,7 +2,7 @@
 #
 # NoKV-FS benchmark framework — the single entry point.
 #
-# Runs the L2 mount comparison as a labeled matrix: NoKV metadata tiers ×
+# Runs the L2 mount comparison as a labeled matrix: NoKV local metadata tier ×
 # concurrency sweep × {native juicefs-bench-shaped driver, real fio/mdtest},
 # plus JuiceFS over the same RustFS endpoint. Every row is boundary/tier/cache
 # labeled (canonical schema, see bench/drivers/schema.py), so the headline is
@@ -13,7 +13,7 @@
 #
 # Modes:
 #   (default)   quick   one NoKV tier (direct/WAL) + JuiceFS, concurrency 1
-#   --matrix            both NoKV tiers (direct/WAL, raft/none) + JuiceFS, full sweep
+#   --matrix            NoKV local tier + JuiceFS, full sweep
 #
 # Tools are gated: absent fio/mdtest/mpirun surface as explicit tool-missing
 # rows. Required infra tools (rustfs/redis/juicefs/aws/python) must be present.
@@ -38,7 +38,7 @@ usage() {
     cat <<EOF
 Usage: scripts/run-fs-benchmark.sh [--matrix|--quick] [options]
 
-  --matrix                 full grid (both NoKV tiers, concurrency sweep)
+  --matrix                 full grid (NoKV local tier, concurrency sweep)
   --quick                  one tier (direct/WAL), concurrency 1 (default)
   --result-csv PATH        also write the raw labeled CSV here
   --aggregate-csv PATH     also write median/p95 aggregate CSV here
@@ -53,7 +53,7 @@ Usage: scripts/run-fs-benchmark.sh [--matrix|--quick] [options]
                            primitive workloads swept across concurrency
                            (default: bigfile,smallfile,metadata; use none to skip)
   --concurrency "1 4 16"   override the concurrency sweep
-  --tiers "local raft"     override NoKV tiers (modes; raft uses sync=none)
+  --tiers "local"          override NoKV tiers (current CLI supports local)
 
 Configuration is via NOKV_BENCH_* env vars; see scripts/lib/fs-bench-common.sh.
 Profile: NOKV_BENCH_PROFILE=smoke|standard|long (default smoke).
@@ -106,7 +106,7 @@ NOKV_TOOLS="fio,mdtest"
 JUICEFS_TOOLS="fio,mdtest,juicefs-bench"
 if [[ "$MODE" == "matrix" ]]; then
     CONCURRENCY_SWEEP="${CONCURRENCY_OVERRIDE:-1 4 16}"
-    NOKV_TIERS="${TIERS_OVERRIDE:-local raft}"
+    NOKV_TIERS="${TIERS_OVERRIDE:-local}"
 else
     CONCURRENCY_SWEEP="${CONCURRENCY_OVERRIDE:-1}"
     NOKV_TIERS="${TIERS_OVERRIDE:-local}"
@@ -134,6 +134,11 @@ ENV_JSON_RUN="$WORKDIR/env.json"
 
 DECOMPOSE_RUN_CSV="$WORKDIR/decompose.csv"
 if [[ "$DECOMPOSE" == "1" ]]; then
+    DECOMPOSE_SNAPSHOT_DIR="$WORKDIR"
+    if [[ -n "$DECOMPOSE_CSV" ]]; then
+        DECOMPOSE_SNAPSHOT_DIR="${DECOMPOSE_CSV%.csv}.snapshots"
+        mkdir -p "$DECOMPOSE_SNAPSHOT_DIR"
+    fi
     echo "run_id,env_id,system,metadata_tier,concurrency,tool,workloads,cost_breakdown,before_snapshot,after_snapshot" >"$DECOMPOSE_RUN_CSV"
 fi
 
@@ -148,14 +153,18 @@ bench_run_phase() {
         return
     fi
 
-    local label run_label before after breakdown status
+    local label run_label before after breakdown status stats_url
     run_label="${NOKV_BENCH_RUN_ID:-run}"
     label="${run_label}-${system}-${tier}-p${concurrency}-${tool}-${workloads}"
     label="${label//[^A-Za-z0-9_.-]/_}"
-    before="$WORKDIR/${label}-before.json"
-    after="$WORKDIR/${label}-after.json"
+    before="$DECOMPOSE_SNAPSHOT_DIR/${label}-before.json"
+    after="$DECOMPOSE_SNAPSHOT_DIR/${label}-after.json"
+    stats_url="http://${SERVER_ADDRESS}/stats"
+    if [[ -n "${NOKV_MOUNT_STATS_ADDRESS:-}" ]]; then
+        stats_url="http://${NOKV_MOUNT_STATS_ADDRESS}/stats"
+    fi
     "$PYTHON_BIN" "$ROOT_DIR/bench/drivers/decompose.py" \
-        --snapshot "http://${SERVER_ADDRESS}/stats" --out "$before" >/dev/null 2>&1 || {
+        --snapshot "$stats_url" --out "$before" >/dev/null 2>&1 || {
         "$@"
         return
     }
@@ -164,7 +173,7 @@ bench_run_phase() {
     status=$?
     set -e
     "$PYTHON_BIN" "$ROOT_DIR/bench/drivers/decompose.py" \
-        --snapshot "http://${SERVER_ADDRESS}/stats" --out "$after" >/dev/null 2>&1 || true
+        --snapshot "$stats_url" --out "$after" >/dev/null 2>&1 || true
     breakdown=""
     if [[ -f "$before" && -f "$after" ]]; then
         breakdown="$("$PYTHON_BIN" "$ROOT_DIR/bench/drivers/decompose.py" --before "$before" --after "$after" 2>/dev/null || true)"
