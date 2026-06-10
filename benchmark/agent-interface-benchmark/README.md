@@ -26,10 +26,11 @@ namespace surface:
 - `nokvfs-server`: framed metadata RPC handlers for the same operations.
 
 Native grep is now implemented through `nokvfs-meta`, `nokvfs-protocol`, and
-`nokvfs-server` as a product-native file-content scan. The current ten-task
-Phase 1 registry exposes `ls`, `stat`, `catalog`, `read`, `aggregate`, and
-`find`. The body-inspection and lineage tasks exercise `read` beside the
-navigation and indexed-summary tools needed to locate artifacts.
+`nokvfs-server` as a product-native file-content scan. The current five-task
+Phase 1 registry exposes `ls`, `stat`, `catalog`, `read`, `aggregate`, `find`,
+and `grep`. Native grep matches a case-insensitive literal substring and
+returns matching lines with line numbers, so log-extraction tasks resolve
+body facts without full file reads.
 
 The benchmark arm named `nokv_native_v1` uses the `nokvfs-client` agent adapter
 with the Phase 1 tool profile above. The harness translates OpenAI tool calls
@@ -87,25 +88,24 @@ The Phase 1 harness compares two read-only arms:
 | `sqlite_raw_v1` | Raw SQLite schema/query/blob tools plus ETL-maintained agent-index materialization tables. |
 | `nokv_native_v1` | NoKV product-native agent adapter. |
 
-The deduplicated fixed Phase 1 tasks live in `tasks/phase1_readonly.yaml`. The
-rubric lives in `rubric/phase1_readonly.yaml`.
+The fixed Phase 1 tasks live in `tasks/phase1_readonly.yaml`. The rubric
+lives in `rubric/phase1_readonly.yaml`.
 
 ## Phase 1 Task Shape
 
-The active read-only workload is a deduplicated 10-task set:
+The active read-only workload is a five-task researcher-shaped set:
 
 | Task | Shape |
 | --- | --- |
-| `status_counts` | Count runs by status and return the total run count. |
-| `train_lr_batch_loss_top5` | Group completed `train.py` runs by learning rate and batch size, then rank groups by average per-run minimum `val_loss`. |
-| `eval_best_utility_tstr` | Select the completed `eval.py` run with the highest latest `utility_tstr_roc_auc` and return related metrics. |
-| `cancelled_runs_stderr` | List non-completed runs with `stderr.txt` availability and byte size. |
-| `dirty_git_missing_patches` | Find dirty-git runs whose declared patch artifact is unavailable. |
-| `index_completed_consistency` | Check whether the completed-run namespace index agrees with run metadata. |
-| `stdout_availability_by_script` | Count completed runs and available `stdout.txt` artifacts by script. |
-| `cancelled_stderr_root_cause` | Locate the largest stderr body among non-completed runs and extract the terminal root-cause token. |
-| `eval_details_worst_fidelity_field` | Inspect `evaluation_details.json` for a target eval run and identify the lowest `fidelity.field_scores` field. |
-| `best_eval_lineage_trace` | Trace the best completed eval run through its samples dependency to the model dependency. |
+| `train_top_configs_report` | Report the 5 best completed train.py runs by minimum finite val_loss with learning rate, batch size, stdout size, and git dirty state. |
+| `eval_fidelity_leaderboard` | Report the 5 completed eval.py runs with the highest latest fidelity plus related utility, detection, and privacy metrics and stderr size. |
+| `tabdiff_ddxplus_dcr_checkpoint_provenance` | For every ddxplus_dcr TabDiff sampling run, extract the loaded checkpoint file and model parameter count from the sampler stdout log. |
+| `best_detection_eval_method_audit` | Find the completed eval.py run with the highest latest detection_roc_auc and extract the detection method name from its eval log. |
+| `cancelled_train_interrupt_triage` | For every non-completed run, report stderr size and the stderr line number of the last KeyboardInterrupt occurrence. |
+
+The two structured report tasks are judged against gold SQL. The three
+log-extraction tasks are judged against harness-side file-body oracles;
+oracles are judge-side data and are never exposed to either arm.
 
 ## Valid Comparisons
 
