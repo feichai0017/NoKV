@@ -26,5 +26,6 @@ testdata/
 coverage.out
 *.pprof
 
-# Local benchmark corpus materializations
-benchmark/data/yanex-demo/
+# Local benchmark corpus materializations and run results (never commit)
+benchmark/data/
+*.jsonl
