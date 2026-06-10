@@ -48,15 +48,12 @@ For the current AI-training product smoke gate, use:
 scripts/run-ai-training-smoke.sh
 ```
 
-The default gate runs `metadata-concurrent-read`, `checkpoint-publish`,
-`mlperf-dlio`, `metadata-ha-smoke`, `metadata-ha-fault-smoke`, and
-`metadata-ha-learner-read`. This is the fast regression set for Holt-native
-metadata reads, chunked object publish, learner read freshness, and the
-OpenRaft metadata HA path. You can narrow it to a single workload while
-iterating:
+The default gate runs the local client/server path for metadata reads,
+checkpoint publish, and MLPerf/DLIO-shaped data movement. You can narrow it to
+a single workload while iterating:
 
 ```bash
-scripts/run-ai-training-smoke.sh metadata-ha-fault-smoke
+scripts/run-ai-training-smoke.sh checkpoint-publish
 ```
 
 ## The L2 benchmark framework (NoKV vs JuiceFS)
@@ -73,7 +70,7 @@ builds and mounts NoKV and JuiceFS, and runs the grid:
 # quick: one NoKV tier (direct/WAL) + JuiceFS, concurrency 1
 scripts/run-fs-benchmark.sh
 
-# full matrix: both NoKV tiers (direct/WAL, raft/none), concurrency sweep
+# full matrix: NoKV local Holt tier + JuiceFS, concurrency sweep
 NOKV_BENCH_PROFILE=standard scripts/run-fs-benchmark.sh --matrix \
   --repeats 3 \
   --result-csv "bench/results/$(hostname).raw.csv" \
@@ -98,10 +95,9 @@ It runs **two co-equal drivers** against each mount:
   explicit `tool-missing` rows, never silently dropped. Point at local binaries
   via `NOKV_BENCH_FIO_BIN` / `NOKV_BENCH_MDTEST_BIN` / `NOKV_JUICEFS_BIN`.
 
-**Tier fairness:** NoKV's `direct/WAL` tier (no consensus) is the apples-to-apples
-opponent for JuiceFS-on-Redis; the `raft/none` tier is the opponent for a
-consensus metadata backend (JuiceFS-on-TiKV). The tier is recorded on every row so
-a comparison is never consensus-vs-non-consensus by accident.
+**Tier fairness:** the current NoKV row is the single local Holt metadata server
+with S3-compatible object storage. It is the apples-to-apples local metadata
+opponent for JuiceFS-on-Redis.
 
 **Regression gate** — store a baseline and fail on drift:
 
@@ -115,8 +111,8 @@ python3 scripts/compare-baseline.py --baseline bench/baselines/host.aggregate.cs
 ```
 
 `scripts/run-fs-benchmark-baseline.sh` is the clean local baseline command. By
-default it runs `standard` profile, `--matrix`, `p=1 4 16`, NoKV `local` and
-`raft` metadata tiers, and three repeats. It writes:
+default it runs `standard` profile, `--matrix`, `p=1 4 16`, the NoKV local Holt
+tier, and three repeats. It writes:
 
 - `*.raw.csv` — every measured phase from every repeat.
 - `*.aggregate.csv` — one row per comparison key, with canonical metric columns
@@ -194,29 +190,6 @@ scripts/run-ai-training-smoke.sh fuse-smoke
 NOKV_AI_SMOKE_INCLUDE_FUSE=1 scripts/run-ai-training-smoke.sh
 ```
 
-The special workload `metadata-raft-smoke` runs the explicit 3-voter OpenRaft
-process smoke. It starts RustFS, starts three metadata voters, publishes data
-through one endpoint, then reads the artifact through follower voters:
-
-```bash
-scripts/run-ai-training-smoke.sh metadata-raft-smoke
-NOKV_AI_SMOKE_INCLUDE_METADATA_RAFT_SMOKE=1 scripts/run-ai-training-smoke.sh
-```
-
-For direct benchmark rows, use the `metadata-ha-*` workloads:
-
-```bash
-scripts/run-rustfs-e2e.sh --metadata-raft-log-sync none \
-  --workload metadata-ha-smoke
-scripts/run-rustfs-e2e.sh --metadata-raft-log-sync none \
-  --workload metadata-ha-coalescing-smoke
-```
-
-`metadata-ha-smoke` validates normal replicated writes, follower reads, and
-OpenRaft state. `metadata-ha-coalescing-smoke` fires concurrent independent
-`create_file` requests so `metadata_raft_proposal_max_batch` can verify Raft
-proposal coalescing.
-
 For a disposable local RustFS-backed FUSE semantics smoke, use:
 
 ```bash
@@ -229,23 +202,22 @@ rename, readdir, truncate, symlink/readlink, xattr roundtrip, access(2),
 hardlink, statfs, lseek, fallocate, copy_file_range, rm, and rmdir through the
 mounted filesystem. This is a correctness smoke, not a performance benchmark.
 
-For JuiceFS-style mounted-filesystem compatibility gates, mount NoKV first
-and run the external-suite driver against that mountpoint:
+For JuiceFS-style mounted-filesystem POSIX gates, mount NoKV first and run the
+external-suite driver against that mountpoint:
 
 ```bash
 NOKV_FUSE_MOUNT=/mnt/nokv \
-scripts/run-fuse-compat-gate.sh
+scripts/run-fuse-posix-gate.sh
 ```
 
-The default compatibility gate runs a small namespace/data smoke plus xattr
-roundtrip. Heavier suites are opt-in because they require external tools and
-will expose the remaining POSIX hardening gaps until NoKV reaches the full
-external-suite gate:
+The default POSIX gate runs a small namespace/data smoke plus xattr roundtrip.
+Heavier suites are opt-in because they require external tools and will expose
+remaining POSIX hardening gaps until NoKV reaches the full external-suite gate:
 
 ```bash
 NOKV_FUSE_MOUNT=/mnt/nokv \
-NOKV_FUSE_COMPAT_TESTS="basic xattr pjdfstest ltp" \
-scripts/run-fuse-compat-gate.sh
+NOKV_FUSE_POSIX_TESTS="basic xattr pjdfstest ltp" \
+scripts/run-fuse-posix-gate.sh
 ```
 
 This mirrors the way mature FUSE filesystems such as JuiceFS validate the
@@ -253,22 +225,22 @@ mounted boundary: `pjdfstest` for syscall-level POSIX behavior, LTP filesystem
 groups for kernel-facing semantics, randomized filesystem operation tests for
 state-space coverage, and separate performance runs for mdtest/fio/object-store
 paths. NoKV keeps the default CI smoke smaller, then uses these external gates
-when claiming POSIX compatibility.
+when claiming POSIX conformance.
 
 The harness prints CSV. The exact column set is owned by
 `bench/src/bin/nokv-bench.rs`; the important column families are:
 
 ```text
 workload, profile, throughput, object stats, metadata store stats,
-metadata_raft_* state, path_index stats, ReadDirPlus projection stats, caveat
+data_fabric stats, tiered_object stats, path_index stats, ReadDirPlus projection
+stats, caveat
 ```
 
 Most benchmark workloads start a real single-node `metad` process and run the
-Rust service client against its framed metadata RPC. HA workloads start local
-multi-process metadata topologies. Object bytes are still read and written
-directly by the client against the configured S3-compatible object store. This
-keeps benchmark numbers attached to the deployable service boundary instead of
-an in-process metadata shortcut.
+Rust service client against its framed metadata RPC. Object bytes are still read
+and written directly by the client against the configured S3-compatible object
+store. This keeps benchmark numbers attached to the deployable service boundary
+instead of an in-process metadata shortcut.
 
 Metadata smoke workloads use the SDK's ordered non-atomic `create_files`
 batching for file create bursts. This measures the deployable SDK/server path
@@ -280,17 +252,6 @@ subrequest still has its own success or error result.
 atomic apply boundary. They are the key columns for checking whether request
 coalescing reduced storage-engine apply calls rather than only coalescing
 requests above the metadata engine.
-
-`metadata_raft_*` columns report the OpenRaft state observed from the server
-stats endpoint: current term, leader, last log index, last applied index,
-snapshot/purge frontier, quorum freshness, and voter/learner counts. These
-fields show whether an HA smoke run actually advanced the replicated metadata
-group.
-
-`metadata_raft_proposal_batches`, `metadata_raft_proposal_commands`,
-`metadata_raft_proposal_max_batch`, and `metadata_raft_proposal_ns` report the
-OpenRaft proposal layer. Use these together with the Holt apply columns to
-distinguish Raft-entry coalescing from state-machine apply coalescing.
 
 Object-backed workloads can be scaled without editing code:
 
@@ -313,6 +274,39 @@ semantics stay clear. `--read-repeats` intentionally rereads the same sample per
 directory; use it with `--block-cache on|off` to separate object-store latency
 from cache reuse.
 
+`native-layout-read` is the L1 data-fabric baseline. It uses the SDK
+`read_path` layout-open path and emits two rows for the same seeded objects:
+`phase=cold` and `phase=warm`. By default this workload creates a local hot tier
+under the benchmark root, writes objects to the cold S3-compatible backend, then
+lets full-object layout reads populate the hot tier.
+
+`ai-dataset-batch-read` is the benchmark-side dataset path. It seeds sample
+files and reads them through repeated `read_path` calls. It emits `phase=cold`
+and `phase=warm`, and defaults to a local hot tier so the warm row can show
+local-NVMe hits without extra flags.
+
+`ai-shard-range-read` is the shard-packed dataset path. It stores many samples in
+each shard file, keeps sample offsets in the benchmark request table, and reads
+the ranges through repeated `read_path` calls. It measures current overhead
+without turning shard-range batching into an SDK API. It also emits cold/warm
+rows and defaults to the same local hot tier.
+
+The `data_fabric_*` columns show planned blocks, local hot hits, cold object
+fallbacks, coalesced ranges, and cache hits. Use `--hot-object-root PATH` to
+force a local hot tier for other object-backed workloads as well.
+`--hot-object-max-bytes N` caps the local hot tier and makes LRU eviction
+visible in `local_hot_evictions`;
+`--hot-fill-mode inline|background` selects whether cold-read hot fills happen
+before the read returns or in a coalesced background worker.
+
+For tiered object backends, the `tiered_*` columns report the object's real
+hot/cold backend activity: hot probes and hits, cold gets and bytes, hot fills,
+background fill enqueue/coalesce counts, and hot-tier maintenance errors.
+`local_hot_*` columns report the hot tier's end-of-window residency and
+capacity-pressure deltas. `object_gets` remains the object-layer `get_many` call
+count, so use `tiered_cold_gets` and `tiered_cold_get_bytes` when checking
+whether a warm `native-layout-read` row avoided the cold S3-compatible backend.
+
 ## Workloads
 
 `mdtest-easy` creates files across many directories. File bodies are
@@ -334,11 +328,6 @@ without object reads.
 Use it to measure metadata read concurrency, cache contention, and framed RPC
 worker behavior.
 
-`metadata-ha-learner-read` starts a local 3-voter OpenRaft metadata group plus
-one learner. It writes through a voter endpoint, imports the write receipt into
-a learner-only metadata client, then times repeated learner directory reads.
-This isolates read-your-writes freshness and learner-side read scaling.
-
 `checkpoint-publish` writes checkpoint bodies to the configured
 S3-compatible object backend, then atomically promotes staged files with
 `rename_replace`. This measures object put plus metadata publish, not metadata
@@ -347,6 +336,19 @@ alone.
 `training-read` seeds a dataset tree, then times directory listing plus one
 sample read per shard. The reported time excludes seed time and represents a
 warm object read path through the configured backend.
+
+`native-layout-read` seeds one checkpoint-sized object and one shuffled sample
+per shard, then reads them through the layout-open SDK path. The cold row should
+show object fallbacks; the warm row should show local hot hits when the hot tier
+is enabled.
+
+`ai-dataset-batch-read` seeds a dataset-shaped tree and reads sample batches
+through benchmark-side `read_path` loops. Use it to measure layout-open overhead,
+local hot-tier fill/hit behavior, and future dataset-prefetch changes.
+
+`ai-shard-range-read` seeds shard files and reads many sample offset ranges from
+each shard through benchmark-side `read_path` loops. Use it to measure shard
+packing overhead and local hot-tier reuse for AI training-style sample readers.
 
 `mlperf-dlio` uses deterministic generated data in an MLPerf Storage/DLIO-style
 shape: dataset seed, timed training reads, and checkpoint writes with atomic
@@ -373,24 +375,20 @@ single benchmark number:
 | Layer | JuiceFS practice | NoKV equivalent |
 | --- | --- | --- |
 | Quick mounted smoke | `juicefs bench` and targeted mount checks | `scripts/run-fuse-smoke.sh` |
-| POSIX compatibility | `pjdfstest`, LTP fs/fsx/io/fcntl groups, xattr tests | `scripts/run-fuse-compat-gate.sh` with `pjdfstest ltp xattr` |
+| POSIX gate | `pjdfstest`, LTP fs/fsx/io/fcntl groups, xattr tests | `scripts/run-fuse-posix-gate.sh` with `pjdfstest ltp xattr` |
 | Random operation stress | Hypothesis fs state machines and long random-test runs with create/read/ls/delete/rename/link/truncate/walk mixes | Planned NoKV mounted random-operation gate; current coverage is unit/contract tests plus FUSE smoke |
-| Metadata regression | mdtest scenarios across metadata engines, current-vs-previous comparison with tolerance | `mdtest-easy`, `mdtest-hard`, `metadata-ha-*`, L2 `mdtest`, and `compare-baseline.py` over aggregate CSV |
+| Metadata regression | mdtest scenarios across metadata engines, current-vs-previous comparison with tolerance | `mdtest-easy`, `mdtest-hard`, L2 `mdtest`, and `compare-baseline.py` over aggregate CSV |
 | Data path regression | fio and object-store bench paths | `checkpoint-publish`, `training-read`, `mlperf-dlio`, and future object microbench expansion |
-| Long-run stress | vdbench and scheduled workflows | Planned long profile plus multi-node OpenRaft/object-store soak |
+| Long-run stress | vdbench and scheduled workflows | Planned long profile plus object-store soak |
 
 Use this ladder when interpreting results. A NoKV metadata microbench can prove
-a Holt/OpenRaft hot path improved; it cannot by itself prove POSIX correctness,
+a Holt hot path improved; it cannot by itself prove POSIX correctness,
 object-store behavior, or training-cluster readiness.
 
 ## Current Caveats
 
-Most workloads run a single-node `metad` process with a configured
-S3-compatible object backend. `metadata-ha-smoke` and
-`metadata-ha-fault-smoke` are the write-path HA exceptions:
-they start a local OpenRaft metadata topology and report Raft state plus
-metadata apply metrics. `metadata-ha-learner-read` adds a learner and reports
-read metrics from that learner node.
+Workloads run a single-node `metad` process with a configured S3-compatible
+object backend. Multi-node metadata is out of the current benchmark surface.
 
 The harness still does not include FUSE kernel caching, Python DataLoader
 overhead, object-store multipart upload, or a multi-machine training cluster.

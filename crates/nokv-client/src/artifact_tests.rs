@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use nokv_meta::{HistoryGcOptions, ObjectGcOptions};
 use nokv_object::{MemoryObjectStore, ObjectStoreConfig, S3ObjectStoreOptions};
-use nokv_server::{MetadataMode, ServerOptions};
+use nokv_server::ServerOptions;
 use nokv_types::MountId;
 
 use crate::{ArtifactRepository, ClientError, NoKvFsClient};
@@ -26,7 +26,6 @@ fn spawn_test_server() -> SocketAddr {
         bind,
         mount: MountId::new(1).unwrap(),
         meta_path: dir.path().join("meta"),
-        metadata_mode: MetadataMode::Local,
         metadata_checkpoint_archive_prefix: None,
         object: fake_object_config(),
         uid: 1000,
@@ -35,6 +34,7 @@ fn spawn_test_server() -> SocketAddr {
             interval: Duration::from_secs(3600),
             limit: 128,
             run_immediately: false,
+            read_lease_grace: ObjectGcOptions::default().read_lease_grace,
         },
         history_gc: HistoryGcOptions {
             interval: Duration::from_secs(3600),

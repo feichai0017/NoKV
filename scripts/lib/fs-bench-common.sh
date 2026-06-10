@@ -43,6 +43,7 @@ NOKV_BUCKET="${NOKV_BENCH_NOKV_BUCKET:-nokv-fs-bench}"
 JUICEFS_BUCKET="${NOKV_BENCH_JUICEFS_BUCKET:-juicefs-fs-bench}"
 REDIS_PORT="${NOKV_BENCH_REDIS_PORT:-16440}"
 SERVER_ADDRESS="${NOKV_BENCH_SERVER_ADDRESS:-127.0.0.1:7841}"
+NOKV_MOUNT_STATS_ADDRESS="${NOKV_BENCH_MOUNT_STATS_ADDRESS:-127.0.0.1:7842}"
 META_URL="redis://127.0.0.1:${REDIS_PORT}/1"
 
 WORKDIR="${NOKV_BENCH_WORKDIR:-}"
@@ -55,6 +56,9 @@ Darwin) DEFAULT_JUICEFS_MOUNT_OPTIONS="noappledouble,noapplexattr" ;;
 esac
 JUICEFS_MOUNT_OPTIONS="${NOKV_BENCH_JUICEFS_MOUNT_OPTIONS:-$DEFAULT_JUICEFS_MOUNT_OPTIONS}"
 NOKV_MOUNT_OPTIONS="${NOKV_BENCH_NOKV_MOUNT_OPTIONS:-}"
+NOKV_FUSE_THREADS="${NOKV_BENCH_NOKV_FUSE_THREADS:-}"
+NOKV_HOT_OBJECT_ROOT="${NOKV_BENCH_HOT_OBJECT_ROOT:-auto}"
+NOKV_HOT_OBJECT_MAX_BYTES="${NOKV_BENCH_HOT_OBJECT_MAX_BYTES:-}"
 
 # Runtime state (set by the lifecycle functions).
 RUSTFS_PID="" REDIS_PID="" SERVER_PID="" NOKV_MOUNT_PID="" JUICEFS_MOUNT_PID=""
@@ -80,6 +84,14 @@ bench_require_tools() {
     bench_require_cmd "$JUICEFS_BIN" "brew install juicefs"
     bench_require_cmd "$PYTHON_BIN" "brew install python"
     bench_require_cmd curl "brew install curl"
+}
+
+bench_nokv_object_backend_label() {
+    if [[ -n "$NOKV_HOT_OBJECT_ROOT" && "$NOKV_HOT_OBJECT_ROOT" != "none" ]]; then
+        echo "rustfs+local-hot"
+    else
+        echo "rustfs"
+    fi
 }
 
 bench_is_mounted() {
@@ -181,10 +193,14 @@ bench_start_backends() {
 # --------------------------------------------------------------------------- #
 # NoKV metadata server + mount, keyed by tier.
 # --------------------------------------------------------------------------- #
-# bench_tier_label <metadata_mode> <sync> -> canonical metadata_tier string
+# bench_tier_label <tier> <sync> -> canonical metadata_tier string
 bench_tier_label() {
-    local mode="$1" sync="$2"
-    if [[ "$mode" == "raft" ]]; then echo "nokv-raft-$sync"; else echo "nokv-direct-wal-async"; fi
+    local tier="$1" sync="$2"
+    if [[ "$tier" != "local" ]]; then
+        echo "error: current nokv CLI exposes only the local metadata server tier" >&2
+        return 2
+    fi
+    echo "nokv-direct-wal-async"
 }
 
 bench_wait_metadata_server() {
@@ -212,19 +228,22 @@ bench_wait_mount() {
     return 1
 }
 
-# bench_start_nokv_server <metadata_mode local|raft> <sync data|none>
+# bench_start_nokv_server <tier local> <sync data|none>
 bench_start_nokv_server() {
-    local mode="$1" sync="${2:-none}"
-    NOKV_META_DIR="$WORKDIR/nokv-meta-${mode}"
+    local tier="$1" sync="${2:-none}"
+    if [[ "$tier" != "local" ]]; then
+        echo "error: current nokv CLI exposes only the local metadata server tier" >&2
+        return 2
+    fi
+    NOKV_META_DIR="$WORKDIR/nokv-meta-${tier}"
     mkdir -p "$NOKV_META_DIR"
-    echo "Starting NoKV metadata server mode=$mode sync=$sync" >&2
+    echo "Starting NoKV metadata server tier=$tier sync=$sync" >&2
     local args=(
         --server-bind "$SERVER_ADDRESS" --meta "$NOKV_META_DIR"
         --object-backend rustfs --s3-endpoint "$RUSTFS_ENDPOINT" --s3-bucket "$NOKV_BUCKET"
         --s3-access-key-id "$RUSTFS_ACCESS_KEY" --s3-secret-access-key "$RUSTFS_SECRET_KEY"
-        --metadata-mode "$mode" --uid "$(id -u)" --gid "$(id -g)"
+        --uid "$(id -u)" --gid "$(id -g)"
     )
-    [[ "$mode" == "raft" ]] && args+=(--metadata-raft-log-sync "$sync")
     "$NOKV_FS_BIN" "${args[@]}" serve >"$SERVER_LOG" 2>&1 &
     SERVER_PID=$!
     bench_wait_metadata_server
@@ -246,16 +265,32 @@ bench_mount_nokv() {
     mkdir -p "$NOKV_MOUNT"
     local opts=()
     [[ -n "$NOKV_MOUNT_OPTIONS" ]] && read -r -a opts <<<"$NOKV_MOUNT_OPTIONS"
+    if [[ -n "$NOKV_FUSE_THREADS" && "$NOKV_FUSE_THREADS" != "none" ]]; then
+        opts+=(--fuse-threads "$NOKV_FUSE_THREADS")
+    fi
     if [[ "$cache_state" == "cold" ]]; then
         opts+=(--no-block-cache --direct-io)
+    fi
+    if [[ -n "$NOKV_MOUNT_STATS_ADDRESS" ]]; then
+        opts+=(--stats-bind "$NOKV_MOUNT_STATS_ADDRESS")
+    fi
+    local object_args=()
+    if [[ -n "$NOKV_HOT_OBJECT_ROOT" && "$NOKV_HOT_OBJECT_ROOT" != "none" ]]; then
+        object_args+=(--hot-object-root "$NOKV_HOT_OBJECT_ROOT")
+        if [[ -n "$NOKV_HOT_OBJECT_MAX_BYTES" ]]; then
+            object_args+=(--hot-object-max-bytes "$NOKV_HOT_OBJECT_MAX_BYTES")
+        fi
     fi
     echo "Mounting NoKV at $NOKV_MOUNT cache=$cache_state" >&2
     "$NOKV_FS_BIN" --server-bind "$SERVER_ADDRESS" --object-backend rustfs \
         --s3-endpoint "$RUSTFS_ENDPOINT" --s3-bucket "$NOKV_BUCKET" \
         --s3-access-key-id "$RUSTFS_ACCESS_KEY" --s3-secret-access-key "$RUSTFS_SECRET_KEY" \
-        --uid "$(id -u)" --gid "$(id -g)" mount "${opts[@]}" "$NOKV_MOUNT" >"$NOKV_MOUNT_LOG" 2>&1 &
+        --uid "$(id -u)" --gid "$(id -g)" "${object_args[@]}" mount "${opts[@]}" "$NOKV_MOUNT" >"$NOKV_MOUNT_LOG" 2>&1 &
     NOKV_MOUNT_PID=$!
     bench_wait_mount "$NOKV_MOUNT" NoKV "$NOKV_MOUNT_PID"
+    if [[ -n "$NOKV_MOUNT_STATS_ADDRESS" ]]; then
+        bench_wait_tcp "${NOKV_MOUNT_STATS_ADDRESS%:*}" "${NOKV_MOUNT_STATS_ADDRESS##*:}" "NoKV mount stats"
+    fi
 }
 
 bench_unmount_nokv() {
@@ -303,8 +338,10 @@ bench_unmount_juicefs() {
 bench_run_native() {
     local system="$1" mount="$2" tier="$3" concurrency="$4" emit_header="$5"
     local workloads="${6:-metadata_create_list,checkpoint,training_read}"
+    local object_backend="rustfs"
+    [[ "$system" == "nokv" ]] && object_backend="$(bench_nokv_object_backend_label)"
     "$PYTHON_BIN" "$ROOT_DIR/bench/drivers/posix_bench.py" \
-        --system "$system" --mount "$mount" --metadata-tier "$tier" --object-backend rustfs \
+        --system "$system" --mount "$mount" --metadata-tier "$tier" --object-backend "$object_backend" \
         --profile "$PROFILE" --concurrency "$concurrency" --workloads "$workloads" \
         --dataset-dirs "${DATASET_DIRS:-8}" --files-per-dir "${FILES_PER_DIR:-64}" \
         --sample-bytes "${SAMPLE_BYTES:-512}" --checkpoint-bytes "${CHECKPOINT_BYTES:-4096}" \
@@ -315,8 +352,10 @@ bench_run_native() {
 # bench_run_real_tools <system> <mount> <tier> <concurrency> <tools> <emit_header>
 bench_run_real_tools() {
     local system="$1" mount="$2" tier="$3" concurrency="$4" tools="$5" emit_header="$6"
+    local object_backend="rustfs"
+    [[ "$system" == "nokv" ]] && object_backend="$(bench_nokv_object_backend_label)"
     "$PYTHON_BIN" "$ROOT_DIR/bench/drivers/real_tools.py" \
-        --system "$system" --mount "$mount" --metadata-tier "$tier" --object-backend rustfs \
+        --system "$system" --mount "$mount" --metadata-tier "$tier" --object-backend "$object_backend" \
         --profile "$PROFILE" --concurrency "$concurrency" --tools "$tools" --emit-header "$emit_header"
 }
 
@@ -340,6 +379,12 @@ bench_make_workdir() {
         mkdir -p "$WORKDIR"
     fi
     mkdir -p "$WORKDIR/rustfs-data" "$WORKDIR/redis"
+    if [[ "$NOKV_HOT_OBJECT_ROOT" == "auto" ]]; then
+        NOKV_HOT_OBJECT_ROOT="$WORKDIR/nokv-hot"
+    fi
+    if [[ -n "$NOKV_HOT_OBJECT_ROOT" && "$NOKV_HOT_OBJECT_ROOT" != "none" ]]; then
+        mkdir -p "$NOKV_HOT_OBJECT_ROOT"
+    fi
     RUSTFS_LOG="$WORKDIR/rustfs.log" REDIS_LOG="$WORKDIR/redis.log"
     SERVER_LOG="$WORKDIR/nokv-server.log" NOKV_MOUNT_LOG="$WORKDIR/nokv-mount.log"
     JUICEFS_LOG="$WORKDIR/juicefs.log"

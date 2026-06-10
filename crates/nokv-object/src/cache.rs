@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, VecDeque};
 use std::fs;
-use std::io;
-use std::path::PathBuf;
+use std::io::{self, Write};
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -259,38 +259,58 @@ impl WritebackCache {
     }
 
     pub fn stage(&self, key: String, bytes: &[u8]) -> Result<WritebackTicket, ObjectError> {
-        let mut inner = self.inner.lock().map_err(ObjectError::from_poisoned_lock)?;
         let len = bytes.len() as u64;
-        if inner.options.max_items == 0 || inner.options.max_bytes == 0 {
-            return Err(ObjectError::Backend(
-                "writeback cache is disabled".to_owned(),
-            ));
-        }
-        if len > inner.options.max_bytes
-            || inner.entries.len() >= inner.options.max_items
-            || inner.bytes.saturating_add(len) > inner.options.max_bytes
+        // Reserve capacity under the mutex, then perform the large payload write
+        // without holding it so concurrent writeback staging can make progress.
+        let (id, file_name, tmp_path, path) = {
+            let mut inner = self.inner.lock().map_err(ObjectError::from_poisoned_lock)?;
+            if inner.options.max_items == 0 || inner.options.max_bytes == 0 {
+                return Err(ObjectError::Backend(
+                    "writeback cache is disabled".to_owned(),
+                ));
+            }
+            if len > inner.options.max_bytes
+                || inner.entries.len() >= inner.options.max_items
+                || inner.bytes.saturating_add(len) > inner.options.max_bytes
+            {
+                return Err(ObjectError::Backend(
+                    "writeback cache capacity exceeded".to_owned(),
+                ));
+            }
+            let id = inner.next_id;
+            inner.next_id = inner.next_id.saturating_add(1);
+            let file_name = format!("{}-{id:016x}.writeback", sha256_hex(key.as_bytes()));
+            let tmp_path = inner.file_path(&format!("{file_name}.tmp"));
+            let path = inner.file_path(&file_name);
+            inner.entries.insert(
+                id,
+                WritebackEntry {
+                    key: key.clone(),
+                    file_name: file_name.clone(),
+                    bytes: len,
+                },
+            );
+            inner.bytes = inner.bytes.saturating_add(len);
+            (id, file_name, tmp_path, path)
+        };
+        if let Err(err) = write_cache_file(&tmp_path, &key, bytes)
+            .and_then(|()| fs::rename(&tmp_path, &path).map_err(ObjectError::from_backend))
         {
-            return Err(ObjectError::Backend(
-                "writeback cache capacity exceeded".to_owned(),
-            ));
+            let _ = fs::remove_file(&tmp_path);
+            let _ = fs::remove_file(&path);
+            if let Ok(mut inner) = self.inner.lock() {
+                if inner
+                    .entries
+                    .remove(&id)
+                    .filter(|entry| entry.key == key && entry.file_name == file_name)
+                    .is_some()
+                {
+                    inner.bytes = inner.bytes.saturating_sub(len);
+                }
+            }
+            return Err(err);
         }
-        let id = inner.next_id;
-        inner.next_id = inner.next_id.saturating_add(1);
-        let file_name = format!("{}-{id:016x}.writeback", sha256_hex(key.as_bytes()));
-        let tmp_path = inner.file_path(&format!("{file_name}.tmp"));
-        let path = inner.file_path(&file_name);
-        let encoded = encode_cache_file(&key, bytes)?;
-        fs::write(&tmp_path, encoded).map_err(ObjectError::from_backend)?;
-        fs::rename(&tmp_path, &path).map_err(ObjectError::from_backend)?;
-        inner.entries.insert(
-            id,
-            WritebackEntry {
-                key: key.clone(),
-                file_name: file_name.clone(),
-                bytes: len,
-            },
-        );
-        inner.bytes = inner.bytes.saturating_add(len);
+        let mut inner = self.inner.lock().map_err(ObjectError::from_poisoned_lock)?;
         inner.stats.staged = inner.stats.staged.saturating_add(1);
         inner.stats.staged_bytes = inner.stats.staged_bytes.saturating_add(len);
         Ok(WritebackTicket {
@@ -302,21 +322,23 @@ impl WritebackCache {
     }
 
     pub fn read(&self, ticket: &WritebackTicket) -> Result<Vec<u8>, ObjectError> {
-        let inner = self.inner.lock().map_err(ObjectError::from_poisoned_lock)?;
-        let Some(entry) = inner.entries.get(&ticket.id) else {
-            return Err(ObjectError::Backend(
-                "writeback ticket is not active".to_owned(),
-            ));
+        let (key, path) = {
+            let inner = self.inner.lock().map_err(ObjectError::from_poisoned_lock)?;
+            let Some(entry) = inner.entries.get(&ticket.id) else {
+                return Err(ObjectError::Backend(
+                    "writeback ticket is not active".to_owned(),
+                ));
+            };
+            if entry.key != ticket.key
+                || entry.file_name != ticket.file_name
+                || entry.bytes != ticket.len
+            {
+                return Err(ObjectError::Backend("writeback ticket mismatch".to_owned()));
+            }
+            (entry.key.clone(), inner.file_path(&entry.file_name))
         };
-        if entry.key != ticket.key
-            || entry.file_name != ticket.file_name
-            || entry.bytes != ticket.len
-        {
-            return Err(ObjectError::Backend("writeback ticket mismatch".to_owned()));
-        }
-        let encoded =
-            fs::read(inner.file_path(&entry.file_name)).map_err(ObjectError::from_backend)?;
-        decode_cache_file(&entry.key, &encoded)
+        let encoded = fs::read(path).map_err(ObjectError::from_backend)?;
+        decode_cache_file(&key, &encoded)
             .ok_or_else(|| ObjectError::Backend("writeback cache record is corrupt".to_owned()))
     }
 
@@ -766,6 +788,16 @@ fn encode_cache_file(key: &str, bytes: &[u8]) -> Result<Vec<u8>, ObjectError> {
     encoded.extend_from_slice(key.as_bytes());
     encoded.extend_from_slice(bytes);
     Ok(encoded)
+}
+
+fn write_cache_file(path: &Path, key: &str, bytes: &[u8]) -> Result<(), ObjectError> {
+    let key_len = u64::try_from(key.len()).map_err(|_| ObjectError::InvalidRange)?;
+    let mut file = fs::File::create(path).map_err(ObjectError::from_backend)?;
+    file.write_all(&key_len.to_be_bytes())
+        .map_err(ObjectError::from_backend)?;
+    file.write_all(key.as_bytes())
+        .map_err(ObjectError::from_backend)?;
+    file.write_all(bytes).map_err(ObjectError::from_backend)
 }
 
 fn decode_cache_file(expected_key: &str, encoded: &[u8]) -> Option<Vec<u8>> {

@@ -16,13 +16,17 @@ use std::sync::Mutex;
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use nokv_client::{ArtifactMetadata, NoKvFsClient};
+use nokv_client::{ArtifactMetadata, DataFabricReadStats, NoKvFsClient};
 use nokv_meta::{
     DentryWithAttr, HistoryGcOptions, MetadataServiceStats, MetadataStoreStats, ObjectGcOptions,
     ObjectTransferStats, RenameReplaceResult,
 };
-use nokv_object::{ObjectStoreConfig, S3ObjectStore, S3ObjectStoreOptions};
-use nokv_server::{MetadataMode, Server, ServerOptions};
+use nokv_object::{
+    ConfiguredObjectStore, HotFillMode, LocalObjectStoreOptions, LocalObjectStoreStats,
+    ObjectStoreConfig, S3ObjectStoreOptions, TieredObjectStoreOptions, TieredObjectStoreStats,
+    TieredPutPolicy,
+};
+use nokv_server::{Server, ServerOptions};
 use nokv_types::{MountId, PathMetadata};
 
 const DEFAULT_MODE_DIR: u32 = 0o755;
@@ -48,6 +52,9 @@ enum Workload {
     MetadataConcurrentRead,
     CheckpointPublish,
     TrainingRead,
+    NativeLayoutRead,
+    AiDatasetBatchRead,
+    AiShardRangeRead,
     MlperfDlio,
     DemoDataset,
 }
@@ -60,6 +67,9 @@ struct Config {
     object_backend: ObjectBackendKind,
     s3: S3ObjectStoreOptions,
     object_concurrency: usize,
+    hot_object_root: Option<PathBuf>,
+    hot_object_max_bytes: Option<u64>,
+    hot_fill_mode: HotFillMode,
     read_repeats: usize,
     block_cache: bool,
     checkpoint_bytes: Option<usize>,
@@ -115,7 +125,6 @@ struct ResultRow {
     read_plan_cache_misses: u64,
     object_writeback_enqueued: u64,
     object_writeback_inline: u64,
-    object_writeback_fallback: u64,
     object_writeback_completed: u64,
     object_writeback_failed: u64,
     object_writeback_staged_bytes: u64,
@@ -124,8 +133,55 @@ struct ResultRow {
     object_writeback_queue_max_wait_ns: u64,
     object_writeback_upload_ns: u64,
     object_writeback_upload_max_ns: u64,
+    object_writeback_collect_ns: u64,
+    object_writeback_digest_ns: u64,
+    object_writeback_store_put_ns: u64,
+    object_writeback_cache_put_ns: u64,
     manifest_chunks: u64,
     manifest_blocks: u64,
+    data_fabric_planned_blocks: u64,
+    data_fabric_local_nvme_hits: u64,
+    data_fabric_object_fallbacks: u64,
+    data_fabric_object_gets: u64,
+    data_fabric_object_get_bytes: u64,
+    data_fabric_coalesced_ranges: u64,
+    data_fabric_coalesced_range_bytes: u64,
+    data_fabric_cache_hits: u64,
+    data_fabric_cache_hit_bytes: u64,
+    tiered_hot_gets: u64,
+    tiered_hot_hits: u64,
+    tiered_hot_misses: u64,
+    tiered_hot_errors: u64,
+    tiered_cold_gets: u64,
+    tiered_cold_get_bytes: u64,
+    tiered_cold_puts: u64,
+    tiered_cold_put_errors: u64,
+    tiered_hot_puts: u64,
+    tiered_hot_put_errors: u64,
+    tiered_hot_fills: u64,
+    tiered_hot_fill_enqueued: u64,
+    tiered_hot_fill_coalesced: u64,
+    tiered_hot_fill_errors: u64,
+    tiered_cold_deletes: u64,
+    tiered_hot_deletes: u64,
+    tiered_hot_delete_errors: u64,
+    tiered_hot_put_ns: u64,
+    tiered_pending_cold_put_ns: u64,
+    tiered_cold_put_enqueue_ns: u64,
+    local_hot_resident_objects: u64,
+    local_hot_resident_bytes: u64,
+    local_hot_max_bytes: u64,
+    local_hot_evictions: u64,
+    local_hot_eviction_bytes: u64,
+    local_hot_admission_rejections: u64,
+    local_hot_puts: u64,
+    local_hot_put_bytes: u64,
+    local_hot_put_total_ns: u64,
+    local_hot_put_prepare_ns: u64,
+    local_hot_put_write_ns: u64,
+    local_hot_put_sync_ns: u64,
+    local_hot_put_rename_ns: u64,
+    local_hot_put_record_ns: u64,
     metadata_commits: u64,
     metadata_dedupe_hits: u64,
     metadata_predicates: u64,
@@ -169,6 +225,7 @@ struct ResultRow {
     object_concurrency: usize,
     read_repeats: usize,
     block_cache: bool,
+    phase: &'static str,
     checksum: u64,
     shape: String,
     caveat: String,
@@ -194,8 +251,32 @@ struct RowInput {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct BenchStats {
     object: ObjectTransferStats,
+    data_fabric: DataFabricReadStats,
+    tiered_object: TieredObjectStoreStats,
+    local_hot: LocalObjectStoreStats,
     metadata_store: MetadataStoreStats,
     metadata_service: MetadataServiceStats,
+}
+
+#[derive(Clone, Debug)]
+struct NativeReadRequest {
+    path: String,
+    offset: u64,
+    len: usize,
+    generation: u64,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct NativeReadRange {
+    offset: u64,
+    len: usize,
+}
+
+#[derive(Clone, Debug)]
+struct ShardRangeReadRequest {
+    path: String,
+    generation: u64,
+    ranges: Vec<NativeReadRange>,
 }
 
 #[derive(Debug)]
@@ -264,11 +345,45 @@ trait BenchClient: Sync {
     fn list(&self, path: &str) -> Result<Vec<DentryWithAttr>, BenchError>;
     fn list_indexed(&self, path: &str) -> Result<Vec<DentryWithAttr>, BenchError>;
     fn cat(&self, path: &str) -> Result<Vec<u8>, BenchError>;
+    fn read_path(
+        &self,
+        path: &str,
+        offset: u64,
+        len: usize,
+        expected_generation: Option<u64>,
+    ) -> Result<Vec<u8>, BenchError>;
+    fn read_paths(&self, requests: &[NativeReadRequest]) -> Result<Vec<Vec<u8>>, BenchError> {
+        requests
+            .iter()
+            .map(|request| {
+                self.read_path(
+                    &request.path,
+                    request.offset,
+                    request.len,
+                    Some(request.generation),
+                )
+            })
+            .collect()
+    }
+    fn read_ranges(
+        &self,
+        path: &str,
+        ranges: &[NativeReadRange],
+        expected_generation: Option<u64>,
+        max_gap_bytes: u64,
+    ) -> Result<Vec<Vec<u8>>, BenchError> {
+        let _ = max_gap_bytes;
+        ranges
+            .iter()
+            .map(|range| self.read_path(path, range.offset, range.len, expected_generation))
+            .collect()
+    }
     fn stats(&self) -> Result<BenchStats, BenchError>;
 }
 
 struct ServiceBenchClient {
-    client: NoKvFsClient<S3ObjectStore>,
+    client: NoKvFsClient<ConfiguredObjectStore>,
+    objects: ConfiguredObjectStore,
     stats_addr: SocketAddr,
 }
 
@@ -381,9 +496,32 @@ impl BenchClient for ServiceBenchClient {
         NoKvFsClient::cat(&self.client, path).map_err(from_client)
     }
 
+    fn read_path(
+        &self,
+        path: &str,
+        offset: u64,
+        len: usize,
+        expected_generation: Option<u64>,
+    ) -> Result<Vec<u8>, BenchError> {
+        NoKvFsClient::read_path(&self.client, path, offset, len, expected_generation)
+            .map(|read| read.bytes)
+            .map_err(from_client)
+    }
+
     fn stats(&self) -> Result<BenchStats, BenchError> {
         let mut stats = fetch_server_stats(self.stats_addr)?;
         stats.object = NoKvFsClient::object_stats(&self.client);
+        stats.data_fabric = NoKvFsClient::data_fabric_stats(&self.client).map_err(from_client)?;
+        stats.tiered_object = self
+            .objects
+            .tiered_stats()
+            .map_err(from_client)?
+            .unwrap_or_default();
+        stats.local_hot = self
+            .objects
+            .local_hot_stats()
+            .map_err(from_client)?
+            .unwrap_or_default();
         Ok(stats)
     }
 }
@@ -393,8 +531,9 @@ fn main() {
         eprintln!("error: {err}");
         eprintln!(
             "\nUsage: nokv-bench [--profile smoke|standard|long] \
-             [--workload all|metadata-smoke|mdtest-easy|mdtest-hard|metadata-negative-lookup|artifact-index-lookup|metadata-concurrent-read|checkpoint-publish|training-read|mlperf-dlio|demo-dataset] \
+             [--workload all|metadata-smoke|mdtest-easy|mdtest-hard|metadata-negative-lookup|artifact-index-lookup|metadata-concurrent-read|checkpoint-publish|training-read|native-layout-read|ai-dataset-batch-read|ai-shard-range-read|mlperf-dlio|demo-dataset] \
              [--root PATH] [--object-backend s3|rustfs] \
+             [--hot-object-root PATH] [--hot-object-max-bytes N] [--hot-fill-mode inline|background] \
              [--object-concurrency N] [--checkpoint-bytes N] [--sample-bytes N] \
              [--read-repeats N] [--block-cache on|off] [--keep]"
         );
@@ -408,10 +547,11 @@ fn run(args: Vec<String>) -> Result<(), BenchError> {
     fs::create_dir_all(&config.root).map_err(from_io)?;
 
     println!("{}", csv_header());
-    let labels = boundary_labels(&config);
     for workload in expand_workloads(config.workload) {
-        let row = run_one(&config, &shape, workload)?;
-        println!("{}", csv_row(&row, &labels));
+        let labels = boundary_labels(&config, workload_name(workload));
+        for row in run_one(&config, &shape, workload)? {
+            println!("{}", csv_row(&row, &labels));
+        }
     }
 
     if !config.keep {
@@ -424,29 +564,39 @@ fn run_one(
     config: &Config,
     shape: &WorkloadShape,
     workload: Workload,
-) -> Result<ResultRow, BenchError> {
+) -> Result<Vec<ResultRow>, BenchError> {
     let label = workload_name(workload);
     let client = client_for(config, label)?;
     client.bootstrap_root(DEFAULT_MODE_DIR, DEFAULT_UID, DEFAULT_GID)?;
-    match workload {
-        Workload::MdtestEasy => bench_mdtest_easy(client.as_ref(), config, shape),
-        Workload::MdtestHard => bench_mdtest_hard(client.as_ref(), config, shape),
+    let row = match workload {
+        Workload::MdtestEasy => bench_mdtest_easy(client.as_ref(), config, shape)?,
+        Workload::MdtestHard => bench_mdtest_hard(client.as_ref(), config, shape)?,
         Workload::MetadataNegativeLookup => {
-            bench_metadata_negative_lookup(client.as_ref(), config, shape)
+            bench_metadata_negative_lookup(client.as_ref(), config, shape)?
         }
         Workload::ArtifactIndexLookup => {
-            bench_artifact_index_lookup(client.as_ref(), config, shape)
+            bench_artifact_index_lookup(client.as_ref(), config, shape)?
         }
         Workload::MetadataConcurrentRead => {
-            bench_metadata_concurrent_read(client.as_ref(), config, shape)
+            bench_metadata_concurrent_read(client.as_ref(), config, shape)?
         }
-        Workload::CheckpointPublish => bench_checkpoint_publish(client.as_ref(), config, shape),
-        Workload::TrainingRead => bench_training_read(client.as_ref(), config, shape),
-        Workload::MlperfDlio => bench_mlperf_dlio(client.as_ref(), config, shape),
-        Workload::DemoDataset => bench_demo_dataset(client.as_ref(), config, shape),
+        Workload::CheckpointPublish => bench_checkpoint_publish(client.as_ref(), config, shape)?,
+        Workload::TrainingRead => bench_training_read(client.as_ref(), config, shape)?,
+        Workload::NativeLayoutRead => {
+            return bench_native_layout_read(client.as_ref(), config, shape)
+        }
+        Workload::AiDatasetBatchRead => {
+            return bench_ai_dataset_batch_read(client.as_ref(), config, shape)
+        }
+        Workload::AiShardRangeRead => {
+            return bench_ai_shard_range_read(client.as_ref(), config, shape)
+        }
+        Workload::MlperfDlio => bench_mlperf_dlio(client.as_ref(), config, shape)?,
+        Workload::DemoDataset => bench_demo_dataset(client.as_ref(), config, shape)?,
         Workload::MetadataSmoke => unreachable!("metadata-smoke expands before execution"),
         Workload::All => unreachable!("all expands before execution"),
-    }
+    };
+    Ok(vec![row])
 }
 
 fn bench_mdtest_easy(
@@ -886,6 +1036,336 @@ fn bench_training_read(
     }))
 }
 
+fn bench_native_layout_read(
+    client: &dyn BenchClient,
+    config: &Config,
+    shape: &WorkloadShape,
+) -> Result<Vec<ResultRow>, BenchError> {
+    client.mkdir(
+        "/native-layout-read",
+        DEFAULT_MODE_DIR,
+        DEFAULT_UID,
+        DEFAULT_GID,
+    )?;
+    client.mkdir(
+        "/native-layout-read/samples",
+        DEFAULT_MODE_DIR,
+        DEFAULT_UID,
+        DEFAULT_GID,
+    )?;
+
+    let checkpoint_path = "/native-layout-read/checkpoint.bin";
+    let checkpoint = client.put_artifact(
+        checkpoint_path,
+        checkpoint_payload(0, shape.checkpoint_bytes),
+        artifact_metadata(
+            "native-layout-read-checkpoint",
+            "native-layout-read/checkpoint",
+        ),
+    )?;
+    let mut requests = vec![NativeReadRequest {
+        path: checkpoint_path.to_owned(),
+        offset: 0,
+        len: shape.checkpoint_bytes,
+        generation: body_generation(&checkpoint),
+    }];
+
+    let samples_per_shard = shape.dataset_files_per_dir.clamp(1, 16);
+    for shard in 0..shape.dataset_dirs {
+        let shard_path = format!("/native-layout-read/samples/shard-{shard:04}");
+        client.mkdir(&shard_path, DEFAULT_MODE_DIR, DEFAULT_UID, DEFAULT_GID)?;
+        for file in 0..samples_per_shard {
+            let path = format!("{shard_path}/sample-{file:05}.bin");
+            let manifest_id =
+                format!("native-layout-read/samples/shard-{shard:04}/sample-{file:05}");
+            let entry = client.put_artifact(
+                &path,
+                dataset_payload(shard, file, shape.dataset_file_bytes),
+                artifact_metadata("native-layout-read-sample", &manifest_id),
+            )?;
+            if file == (shard * 7 + config.read_repeats) % samples_per_shard {
+                requests.push(NativeReadRequest {
+                    path,
+                    offset: 0,
+                    len: shape.dataset_file_bytes,
+                    generation: body_generation(&entry),
+                });
+            }
+        }
+    }
+    let sample_requests = requests.len().saturating_sub(1);
+    if sample_requests > 1 {
+        let rotate = config.read_repeats % sample_requests;
+        requests[1..].rotate_left(rotate);
+    }
+
+    let cold = bench_native_layout_read_phase(client, config, shape, "cold", &requests)?;
+    let warm = bench_native_layout_read_phase(client, config, shape, "warm", &requests)?;
+    Ok(vec![cold, warm])
+}
+
+fn bench_native_layout_read_phase(
+    client: &dyn BenchClient,
+    config: &Config,
+    shape: &WorkloadShape,
+    phase: &'static str,
+    requests: &[NativeReadRequest],
+) -> Result<ResultRow, BenchError> {
+    let before = client.stats()?;
+    let start = Instant::now();
+    let checksum = run_parallel(requests.len(), config.object_concurrency, |index| {
+        let request = &requests[index];
+        let bytes = client.read_path(
+            &request.path,
+            request.offset,
+            request.len,
+            Some(request.generation),
+        )?;
+        Ok(bytes.iter().map(|byte| *byte as u64).sum::<u64>())
+    })?;
+    black_box(checksum);
+    let mut row = row(RowInput {
+        workload: "native-layout-read",
+        profile: config.profile,
+        operations: requests.len(),
+        seconds: start.elapsed().as_secs_f64(),
+        bytes: requests.iter().map(|request| request.len as u64).sum(),
+        samples: requests.len(),
+        stats: stats_delta(before, client.stats()?),
+        object_concurrency: config.object_concurrency,
+        read_repeats: config.read_repeats,
+        block_cache: config.block_cache,
+        checksum,
+        shape: format!(
+            "phase={} large_sequential=1 checkpoint_bytes={} shuffled_samples={} sample_bytes={} full_file_layout_reads=true",
+            phase,
+            shape.checkpoint_bytes,
+            requests.len().saturating_sub(1),
+            shape.dataset_file_bytes
+        ),
+        caveat: object_caveat(
+            config,
+            "native layout-open read_path over data-fabric executor; cold phase should populate full-object hot tier, warm phase should expose local hot hits"
+        ),
+    });
+    row.phase = phase;
+    Ok(row)
+}
+
+fn bench_ai_dataset_batch_read(
+    client: &dyn BenchClient,
+    config: &Config,
+    shape: &WorkloadShape,
+) -> Result<Vec<ResultRow>, BenchError> {
+    client.mkdir(
+        "/ai-dataset-batch-read",
+        DEFAULT_MODE_DIR,
+        DEFAULT_UID,
+        DEFAULT_GID,
+    )?;
+    client.mkdir(
+        "/ai-dataset-batch-read/samples",
+        DEFAULT_MODE_DIR,
+        DEFAULT_UID,
+        DEFAULT_GID,
+    )?;
+
+    let samples_per_shard = shape.dataset_files_per_dir.clamp(1, 32);
+    let mut requests = Vec::with_capacity(shape.dataset_dirs * samples_per_shard);
+    for shard in 0..shape.dataset_dirs {
+        let shard_path = format!("/ai-dataset-batch-read/samples/shard-{shard:04}");
+        client.mkdir(&shard_path, DEFAULT_MODE_DIR, DEFAULT_UID, DEFAULT_GID)?;
+        for file in 0..samples_per_shard {
+            let path = format!("{shard_path}/sample-{file:05}.bin");
+            let manifest_id =
+                format!("ai-dataset-batch-read/samples/shard-{shard:04}/sample-{file:05}");
+            let entry = client.put_artifact(
+                &path,
+                dataset_payload(shard, file, shape.dataset_file_bytes),
+                artifact_metadata("ai-dataset-batch-read-sample", &manifest_id),
+            )?;
+            requests.push(NativeReadRequest {
+                path,
+                offset: 0,
+                len: shape.dataset_file_bytes,
+                generation: body_generation(&entry),
+            });
+        }
+    }
+    if requests.len() > 1 {
+        let rotate = config.read_repeats % requests.len();
+        requests.rotate_left(rotate);
+    }
+
+    let cold = bench_ai_dataset_batch_read_phase(client, config, shape, "cold", &requests)?;
+    let warm = bench_ai_dataset_batch_read_phase(client, config, shape, "warm", &requests)?;
+    Ok(vec![cold, warm])
+}
+
+fn bench_ai_dataset_batch_read_phase(
+    client: &dyn BenchClient,
+    config: &Config,
+    shape: &WorkloadShape,
+    phase: &'static str,
+    requests: &[NativeReadRequest],
+) -> Result<ResultRow, BenchError> {
+    let batch_size = config.object_concurrency.max(1);
+    let before = client.stats()?;
+    let start = Instant::now();
+    let mut checksum = 0_u64;
+    for chunk in requests.chunks(batch_size) {
+        let reads = client.read_paths(chunk)?;
+        checksum = checksum.saturating_add(
+            reads
+                .iter()
+                .map(|bytes| bytes.iter().map(|byte| *byte as u64).sum::<u64>())
+                .sum::<u64>(),
+        );
+    }
+    black_box(checksum);
+    let mut row = row(RowInput {
+        workload: "ai-dataset-batch-read",
+        profile: config.profile,
+        operations: requests.len(),
+        seconds: start.elapsed().as_secs_f64(),
+        bytes: requests.iter().map(|request| request.len as u64).sum(),
+        samples: requests.len(),
+        stats: stats_delta(before, client.stats()?),
+        object_concurrency: config.object_concurrency,
+        read_repeats: config.read_repeats,
+        block_cache: config.block_cache,
+        checksum,
+        shape: format!(
+            "phase={} batch_size={} dataset_dirs={} samples_per_dir={} sample_bytes={} layout_plan_batch=true",
+            phase,
+            batch_size,
+            shape.dataset_dirs,
+            shape.dataset_files_per_dir.clamp(1, 32),
+            shape.dataset_file_bytes
+        ),
+        caveat: object_caveat(
+            config,
+            "AI dataset batch read through benchmark-side read_path loops; cold phase should expose object fallbacks, warm phase should expose local hot hits",
+        ),
+    });
+    row.phase = phase;
+    Ok(row)
+}
+
+fn bench_ai_shard_range_read(
+    client: &dyn BenchClient,
+    config: &Config,
+    shape: &WorkloadShape,
+) -> Result<Vec<ResultRow>, BenchError> {
+    client.mkdir(
+        "/ai-shard-range-read",
+        DEFAULT_MODE_DIR,
+        DEFAULT_UID,
+        DEFAULT_GID,
+    )?;
+    client.mkdir(
+        "/ai-shard-range-read/shards",
+        DEFAULT_MODE_DIR,
+        DEFAULT_UID,
+        DEFAULT_GID,
+    )?;
+
+    let samples_per_shard = shape.dataset_files_per_dir.clamp(1, 256);
+    let mut requests = Vec::with_capacity(shape.dataset_dirs);
+    for shard in 0..shape.dataset_dirs {
+        let path = format!("/ai-shard-range-read/shards/shard-{shard:04}.bin");
+        let manifest_id = format!("ai-shard-range-read/shards/shard-{shard:04}");
+        let shard_bytes = samples_per_shard
+            .checked_mul(shape.dataset_file_bytes)
+            .ok_or_else(|| BenchError::Client("shard payload size overflows usize".to_owned()))?;
+        let mut payload = Vec::with_capacity(shard_bytes);
+        let mut ranges = Vec::with_capacity(samples_per_shard);
+        for sample in 0..samples_per_shard {
+            let offset = u64::try_from(payload.len())
+                .map_err(|_| BenchError::Client("shard offset exceeds u64".to_owned()))?;
+            payload.extend(dataset_payload(shard, sample, shape.dataset_file_bytes));
+            ranges.push(NativeReadRange {
+                offset,
+                len: shape.dataset_file_bytes,
+            });
+        }
+        let entry = client.put_artifact(
+            &path,
+            payload,
+            artifact_metadata("ai-shard-range-read-shard", &manifest_id),
+        )?;
+        requests.push(ShardRangeReadRequest {
+            path,
+            generation: body_generation(&entry),
+            ranges,
+        });
+    }
+    if requests.len() > 1 {
+        let rotate = config.read_repeats % requests.len();
+        requests.rotate_left(rotate);
+    }
+
+    let cold = bench_ai_shard_range_read_phase(client, config, shape, "cold", &requests)?;
+    let warm = bench_ai_shard_range_read_phase(client, config, shape, "warm", &requests)?;
+    Ok(vec![cold, warm])
+}
+
+fn bench_ai_shard_range_read_phase(
+    client: &dyn BenchClient,
+    config: &Config,
+    shape: &WorkloadShape,
+    phase: &'static str,
+    requests: &[ShardRangeReadRequest],
+) -> Result<ResultRow, BenchError> {
+    let before = client.stats()?;
+    let start = Instant::now();
+    let checksum = run_parallel(requests.len(), config.object_concurrency, |index| {
+        let request = &requests[index];
+        let reads =
+            client.read_ranges(&request.path, &request.ranges, Some(request.generation), 0)?;
+        Ok(reads
+            .iter()
+            .map(|bytes| bytes.iter().map(|byte| *byte as u64).sum::<u64>())
+            .sum::<u64>())
+    })?;
+    black_box(checksum);
+    let samples = requests
+        .iter()
+        .map(|request| request.ranges.len())
+        .sum::<usize>();
+    let bytes = requests
+        .iter()
+        .flat_map(|request| request.ranges.iter())
+        .map(|range| range.len as u64)
+        .sum::<u64>();
+    let mut row = row(RowInput {
+        workload: "ai-shard-range-read",
+        profile: config.profile,
+        operations: samples,
+        seconds: start.elapsed().as_secs_f64(),
+        bytes,
+        samples,
+        stats: stats_delta(before, client.stats()?),
+        object_concurrency: config.object_concurrency,
+        read_repeats: config.read_repeats,
+        block_cache: config.block_cache,
+        checksum,
+        shape: format!(
+            "phase={} shard_count={} samples_per_shard={} sample_bytes={} max_gap_bytes=0 range_coalescing=true layout_plan_per_shard=true",
+            phase,
+            requests.len(),
+            shape.dataset_files_per_dir.clamp(1, 256),
+            shape.dataset_file_bytes
+        ),
+        caveat: object_caveat(
+            config,
+            "AI shard range read through benchmark-side read_path loops; warm phase should expose local hot hits",
+        ),
+    });
+    row.phase = phase;
+    Ok(row)
+}
+
 fn bench_mlperf_dlio(
     client: &dyn BenchClient,
     config: &Config,
@@ -1092,7 +1572,6 @@ fn row(input: RowInput) -> ResultRow {
         read_plan_cache_misses: input.stats.object.read_plan_cache_misses,
         object_writeback_enqueued: input.stats.object.object_writeback_enqueued,
         object_writeback_inline: input.stats.object.object_writeback_inline,
-        object_writeback_fallback: input.stats.object.object_writeback_fallback,
         object_writeback_completed: input.stats.object.object_writeback_completed,
         object_writeback_failed: input.stats.object.object_writeback_failed,
         object_writeback_staged_bytes: input.stats.object.object_writeback_staged_bytes,
@@ -1101,8 +1580,55 @@ fn row(input: RowInput) -> ResultRow {
         object_writeback_queue_max_wait_ns: input.stats.object.object_writeback_queue_max_wait_ns,
         object_writeback_upload_ns: input.stats.object.object_writeback_upload_ns,
         object_writeback_upload_max_ns: input.stats.object.object_writeback_upload_max_ns,
+        object_writeback_collect_ns: input.stats.object.object_writeback_collect_ns,
+        object_writeback_digest_ns: input.stats.object.object_writeback_digest_ns,
+        object_writeback_store_put_ns: input.stats.object.object_writeback_store_put_ns,
+        object_writeback_cache_put_ns: input.stats.object.object_writeback_cache_put_ns,
         manifest_chunks: input.stats.object.manifest_chunks,
         manifest_blocks: input.stats.object.manifest_blocks,
+        data_fabric_planned_blocks: input.stats.data_fabric.planned_blocks,
+        data_fabric_local_nvme_hits: input.stats.data_fabric.local_nvme_hits,
+        data_fabric_object_fallbacks: input.stats.data_fabric.object_fallbacks,
+        data_fabric_object_gets: input.stats.data_fabric.object_gets,
+        data_fabric_object_get_bytes: input.stats.data_fabric.object_get_bytes,
+        data_fabric_coalesced_ranges: input.stats.data_fabric.coalesced_ranges,
+        data_fabric_coalesced_range_bytes: input.stats.data_fabric.coalesced_range_bytes,
+        data_fabric_cache_hits: input.stats.data_fabric.cache_hits,
+        data_fabric_cache_hit_bytes: input.stats.data_fabric.cache_hit_bytes,
+        tiered_hot_gets: input.stats.tiered_object.hot_gets,
+        tiered_hot_hits: input.stats.tiered_object.hot_hits,
+        tiered_hot_misses: input.stats.tiered_object.hot_misses,
+        tiered_hot_errors: input.stats.tiered_object.hot_errors,
+        tiered_cold_gets: input.stats.tiered_object.cold_gets,
+        tiered_cold_get_bytes: input.stats.tiered_object.cold_get_bytes,
+        tiered_cold_puts: input.stats.tiered_object.cold_puts,
+        tiered_cold_put_errors: input.stats.tiered_object.cold_put_errors,
+        tiered_hot_puts: input.stats.tiered_object.hot_puts,
+        tiered_hot_put_errors: input.stats.tiered_object.hot_put_errors,
+        tiered_hot_fills: input.stats.tiered_object.hot_fills,
+        tiered_hot_fill_enqueued: input.stats.tiered_object.hot_fill_enqueued,
+        tiered_hot_fill_coalesced: input.stats.tiered_object.hot_fill_coalesced,
+        tiered_hot_fill_errors: input.stats.tiered_object.hot_fill_errors,
+        tiered_cold_deletes: input.stats.tiered_object.cold_deletes,
+        tiered_hot_deletes: input.stats.tiered_object.hot_deletes,
+        tiered_hot_delete_errors: input.stats.tiered_object.hot_delete_errors,
+        tiered_hot_put_ns: input.stats.tiered_object.hot_put_ns,
+        tiered_pending_cold_put_ns: input.stats.tiered_object.pending_cold_put_ns,
+        tiered_cold_put_enqueue_ns: input.stats.tiered_object.cold_put_enqueue_ns,
+        local_hot_resident_objects: input.stats.local_hot.resident_objects,
+        local_hot_resident_bytes: input.stats.local_hot.resident_bytes,
+        local_hot_max_bytes: input.stats.local_hot.max_bytes.unwrap_or(0),
+        local_hot_evictions: input.stats.local_hot.evictions,
+        local_hot_eviction_bytes: input.stats.local_hot.eviction_bytes,
+        local_hot_admission_rejections: input.stats.local_hot.admission_rejections,
+        local_hot_puts: input.stats.local_hot.puts,
+        local_hot_put_bytes: input.stats.local_hot.put_bytes,
+        local_hot_put_total_ns: input.stats.local_hot.put_total_ns,
+        local_hot_put_prepare_ns: input.stats.local_hot.put_prepare_ns,
+        local_hot_put_write_ns: input.stats.local_hot.put_write_ns,
+        local_hot_put_sync_ns: input.stats.local_hot.put_sync_ns,
+        local_hot_put_rename_ns: input.stats.local_hot.put_rename_ns,
+        local_hot_put_record_ns: input.stats.local_hot.put_record_ns,
         metadata_commits: input.stats.metadata_store.commit_total,
         metadata_dedupe_hits: input.stats.metadata_store.dedupe_hit_total,
         metadata_predicates: input.stats.metadata_store.predicate_total,
@@ -1149,6 +1675,7 @@ fn row(input: RowInput) -> ResultRow {
         object_concurrency: input.object_concurrency,
         read_repeats: input.read_repeats,
         block_cache: input.block_cache,
+        phase: "n/a",
         checksum: input.checksum,
         shape: input.shape,
         caveat: input.caveat,
@@ -1175,12 +1702,16 @@ struct BoundaryLabels {
     tool: &'static str,
 }
 
-fn boundary_labels(config: &Config) -> BoundaryLabels {
+fn boundary_labels(config: &Config, workload: &str) -> BoundaryLabels {
     BoundaryLabels {
         boundary: "L1",
         system: "nokv",
         metadata_tier: "nokv-l1-service".to_owned(),
-        object_backend: object_backend_name(config.object_backend).to_owned(),
+        object_backend: if hot_object_root_for(config, workload).is_some() {
+            format!("{}+local-hot", object_backend_name(config.object_backend))
+        } else {
+            object_backend_name(config.object_backend).to_owned()
+        },
         cache_state: "n/a",
         concurrency: config.object_concurrency,
         tool: "native",
@@ -1188,7 +1719,7 @@ fn boundary_labels(config: &Config) -> BoundaryLabels {
 }
 
 fn csv_header() -> &'static str {
-    "boundary,system,metadata_tier,object_backend,cache_state,concurrency,tool,profile,workload,phase,operations,seconds,ops_per_second,throughput_MiB_s,p50_us,p99_us,cost_breakdown,samples_per_second,object_puts,object_put_bytes,object_gets,object_get_bytes,coalesced_gets,coalesced_get_bytes,cache_hits,cache_hit_bytes,cache_hit_rate,prefetch_enqueued,prefetch_dropped,prefetch_completed,prefetch_failed,prefetch_object_gets,prefetch_object_get_bytes,prefetch_cache_hits,prefetch_cache_hit_bytes,read_plan_cache_hits,read_plan_cache_misses,object_writeback_enqueued,object_writeback_inline,object_writeback_fallback,object_writeback_completed,object_writeback_failed,object_writeback_staged_bytes,object_writeback_uploaded_bytes,object_writeback_queue_wait_ns,object_writeback_queue_max_wait_ns,object_writeback_upload_ns,object_writeback_upload_max_ns,manifest_chunks,manifest_blocks,metadata_commits,metadata_dedupe_hits,metadata_predicates,metadata_prefix_empty_predicates,metadata_gets,metadata_get_user_strong,metadata_get_write_plan_local,metadata_get_snapshot,metadata_scans,metadata_scan_user_strong,metadata_scan_write_plan_local,metadata_scan_snapshot,metadata_scan_visited,metadata_scan_returned,metadata_history_lookups,metadata_current_puts,metadata_current_deletes,metadata_history_writes,metadata_watch_writes,metadata_dedupe_writes,metadata_commit_prepare_ns,metadata_atomic_applies,metadata_atomic_apply_commands,metadata_atomic_apply_max_batch,metadata_atomic_apply_ns,path_index_lookups,path_index_hits,path_index_misses,path_index_stale,path_index_scan_stale,path_index_fallback,path_index_hit_rate,create_files_batches,create_files_entries,create_dirs_batches,create_dirs_entries,read_dir_plus_calls,read_dir_plus_entries,read_dir_plus_projection_hits,read_dir_plus_projection_hit_rate,object_concurrency,read_repeats,block_cache,checksum,shape,caveat"
+    "boundary,system,metadata_tier,object_backend,cache_state,concurrency,tool,profile,workload,phase,operations,seconds,ops_per_second,throughput_MiB_s,p50_us,p99_us,cost_breakdown,samples_per_second,object_puts,object_put_bytes,object_gets,object_get_bytes,coalesced_gets,coalesced_get_bytes,cache_hits,cache_hit_bytes,cache_hit_rate,prefetch_enqueued,prefetch_dropped,prefetch_completed,prefetch_failed,prefetch_object_gets,prefetch_object_get_bytes,prefetch_cache_hits,prefetch_cache_hit_bytes,read_plan_cache_hits,read_plan_cache_misses,object_writeback_enqueued,object_writeback_inline,object_writeback_completed,object_writeback_failed,object_writeback_staged_bytes,object_writeback_uploaded_bytes,object_writeback_queue_wait_ns,object_writeback_queue_max_wait_ns,object_writeback_upload_ns,object_writeback_upload_max_ns,object_writeback_collect_ns,object_writeback_digest_ns,object_writeback_store_put_ns,object_writeback_cache_put_ns,manifest_chunks,manifest_blocks,data_fabric_planned_blocks,data_fabric_local_nvme_hits,data_fabric_object_fallbacks,data_fabric_object_gets,data_fabric_object_get_bytes,data_fabric_coalesced_ranges,data_fabric_coalesced_range_bytes,data_fabric_cache_hits,data_fabric_cache_hit_bytes,tiered_hot_gets,tiered_hot_hits,tiered_hot_misses,tiered_hot_errors,tiered_cold_gets,tiered_cold_get_bytes,tiered_cold_puts,tiered_cold_put_errors,tiered_hot_puts,tiered_hot_put_errors,tiered_hot_fills,tiered_hot_fill_enqueued,tiered_hot_fill_coalesced,tiered_hot_fill_errors,tiered_cold_deletes,tiered_hot_deletes,tiered_hot_delete_errors,tiered_hot_put_ns,tiered_pending_cold_put_ns,tiered_cold_put_enqueue_ns,local_hot_resident_objects,local_hot_resident_bytes,local_hot_max_bytes,local_hot_evictions,local_hot_eviction_bytes,local_hot_admission_rejections,local_hot_puts,local_hot_put_bytes,local_hot_put_total_ns,local_hot_put_prepare_ns,local_hot_put_write_ns,local_hot_put_sync_ns,local_hot_put_rename_ns,local_hot_put_record_ns,metadata_commits,metadata_dedupe_hits,metadata_predicates,metadata_prefix_empty_predicates,metadata_gets,metadata_get_user_strong,metadata_get_write_plan_local,metadata_get_snapshot,metadata_scans,metadata_scan_user_strong,metadata_scan_write_plan_local,metadata_scan_snapshot,metadata_scan_visited,metadata_scan_returned,metadata_history_lookups,metadata_current_puts,metadata_current_deletes,metadata_history_writes,metadata_watch_writes,metadata_dedupe_writes,metadata_commit_prepare_ns,metadata_atomic_applies,metadata_atomic_apply_commands,metadata_atomic_apply_max_batch,metadata_atomic_apply_ns,path_index_lookups,path_index_hits,path_index_misses,path_index_stale,path_index_scan_stale,path_index_fallback,path_index_hit_rate,create_files_batches,create_files_entries,create_dirs_batches,create_dirs_entries,read_dir_plus_calls,read_dir_plus_entries,read_dir_plus_projection_hits,read_dir_plus_projection_hit_rate,object_concurrency,read_repeats,block_cache,checksum,shape,caveat"
 }
 
 fn csv_row(row: &ResultRow, labels: &BoundaryLabels) -> String {
@@ -1204,7 +1735,7 @@ fn csv_row(row: &ResultRow, labels: &BoundaryLabels) -> String {
         row.workload.to_owned(),
         // L1 service-path rows have no per-op phase or per-op latency; emit the
         // canonical columns so cross-boundary consumers read them by name.
-        "n/a".to_owned(),
+        row.phase.to_owned(),
         row.operations.to_string(),
         format!("{:.6}", row.seconds),
         format!("{:.2}", row.ops_per_second),
@@ -1234,7 +1765,6 @@ fn csv_row(row: &ResultRow, labels: &BoundaryLabels) -> String {
         row.read_plan_cache_misses.to_string(),
         row.object_writeback_enqueued.to_string(),
         row.object_writeback_inline.to_string(),
-        row.object_writeback_fallback.to_string(),
         row.object_writeback_completed.to_string(),
         row.object_writeback_failed.to_string(),
         row.object_writeback_staged_bytes.to_string(),
@@ -1243,8 +1773,55 @@ fn csv_row(row: &ResultRow, labels: &BoundaryLabels) -> String {
         row.object_writeback_queue_max_wait_ns.to_string(),
         row.object_writeback_upload_ns.to_string(),
         row.object_writeback_upload_max_ns.to_string(),
+        row.object_writeback_collect_ns.to_string(),
+        row.object_writeback_digest_ns.to_string(),
+        row.object_writeback_store_put_ns.to_string(),
+        row.object_writeback_cache_put_ns.to_string(),
         row.manifest_chunks.to_string(),
         row.manifest_blocks.to_string(),
+        row.data_fabric_planned_blocks.to_string(),
+        row.data_fabric_local_nvme_hits.to_string(),
+        row.data_fabric_object_fallbacks.to_string(),
+        row.data_fabric_object_gets.to_string(),
+        row.data_fabric_object_get_bytes.to_string(),
+        row.data_fabric_coalesced_ranges.to_string(),
+        row.data_fabric_coalesced_range_bytes.to_string(),
+        row.data_fabric_cache_hits.to_string(),
+        row.data_fabric_cache_hit_bytes.to_string(),
+        row.tiered_hot_gets.to_string(),
+        row.tiered_hot_hits.to_string(),
+        row.tiered_hot_misses.to_string(),
+        row.tiered_hot_errors.to_string(),
+        row.tiered_cold_gets.to_string(),
+        row.tiered_cold_get_bytes.to_string(),
+        row.tiered_cold_puts.to_string(),
+        row.tiered_cold_put_errors.to_string(),
+        row.tiered_hot_puts.to_string(),
+        row.tiered_hot_put_errors.to_string(),
+        row.tiered_hot_fills.to_string(),
+        row.tiered_hot_fill_enqueued.to_string(),
+        row.tiered_hot_fill_coalesced.to_string(),
+        row.tiered_hot_fill_errors.to_string(),
+        row.tiered_cold_deletes.to_string(),
+        row.tiered_hot_deletes.to_string(),
+        row.tiered_hot_delete_errors.to_string(),
+        row.tiered_hot_put_ns.to_string(),
+        row.tiered_pending_cold_put_ns.to_string(),
+        row.tiered_cold_put_enqueue_ns.to_string(),
+        row.local_hot_resident_objects.to_string(),
+        row.local_hot_resident_bytes.to_string(),
+        row.local_hot_max_bytes.to_string(),
+        row.local_hot_evictions.to_string(),
+        row.local_hot_eviction_bytes.to_string(),
+        row.local_hot_admission_rejections.to_string(),
+        row.local_hot_puts.to_string(),
+        row.local_hot_put_bytes.to_string(),
+        row.local_hot_put_total_ns.to_string(),
+        row.local_hot_put_prepare_ns.to_string(),
+        row.local_hot_put_write_ns.to_string(),
+        row.local_hot_put_sync_ns.to_string(),
+        row.local_hot_put_rename_ns.to_string(),
+        row.local_hot_put_record_ns.to_string(),
         row.metadata_commits.to_string(),
         row.metadata_dedupe_hits.to_string(),
         row.metadata_predicates.to_string(),
@@ -1295,6 +1872,68 @@ fn csv_row(row: &ResultRow, labels: &BoundaryLabels) -> String {
     .join(",")
 }
 
+fn tiered_object_stats_delta(
+    before: TieredObjectStoreStats,
+    after: TieredObjectStoreStats,
+) -> TieredObjectStoreStats {
+    TieredObjectStoreStats {
+        hot_gets: after.hot_gets.saturating_sub(before.hot_gets),
+        hot_hits: after.hot_hits.saturating_sub(before.hot_hits),
+        hot_misses: after.hot_misses.saturating_sub(before.hot_misses),
+        hot_errors: after.hot_errors.saturating_sub(before.hot_errors),
+        cold_gets: after.cold_gets.saturating_sub(before.cold_gets),
+        cold_get_bytes: after.cold_get_bytes.saturating_sub(before.cold_get_bytes),
+        cold_puts: after.cold_puts.saturating_sub(before.cold_puts),
+        cold_put_errors: after.cold_put_errors.saturating_sub(before.cold_put_errors),
+        hot_puts: after.hot_puts.saturating_sub(before.hot_puts),
+        hot_put_errors: after.hot_put_errors.saturating_sub(before.hot_put_errors),
+        hot_fills: after.hot_fills.saturating_sub(before.hot_fills),
+        hot_fill_enqueued: after
+            .hot_fill_enqueued
+            .saturating_sub(before.hot_fill_enqueued),
+        hot_fill_coalesced: after
+            .hot_fill_coalesced
+            .saturating_sub(before.hot_fill_coalesced),
+        hot_fill_errors: after.hot_fill_errors.saturating_sub(before.hot_fill_errors),
+        cold_deletes: after.cold_deletes.saturating_sub(before.cold_deletes),
+        hot_deletes: after.hot_deletes.saturating_sub(before.hot_deletes),
+        hot_delete_errors: after
+            .hot_delete_errors
+            .saturating_sub(before.hot_delete_errors),
+        hot_put_ns: after.hot_put_ns.saturating_sub(before.hot_put_ns),
+        pending_cold_put_ns: after
+            .pending_cold_put_ns
+            .saturating_sub(before.pending_cold_put_ns),
+        cold_put_enqueue_ns: after
+            .cold_put_enqueue_ns
+            .saturating_sub(before.cold_put_enqueue_ns),
+    }
+}
+
+fn local_hot_stats_delta(
+    before: LocalObjectStoreStats,
+    after: LocalObjectStoreStats,
+) -> LocalObjectStoreStats {
+    LocalObjectStoreStats {
+        resident_objects: after.resident_objects,
+        resident_bytes: after.resident_bytes,
+        max_bytes: after.max_bytes,
+        evictions: after.evictions.saturating_sub(before.evictions),
+        eviction_bytes: after.eviction_bytes.saturating_sub(before.eviction_bytes),
+        admission_rejections: after
+            .admission_rejections
+            .saturating_sub(before.admission_rejections),
+        puts: after.puts.saturating_sub(before.puts),
+        put_bytes: after.put_bytes.saturating_sub(before.put_bytes),
+        put_total_ns: after.put_total_ns.saturating_sub(before.put_total_ns),
+        put_prepare_ns: after.put_prepare_ns.saturating_sub(before.put_prepare_ns),
+        put_write_ns: after.put_write_ns.saturating_sub(before.put_write_ns),
+        put_sync_ns: after.put_sync_ns.saturating_sub(before.put_sync_ns),
+        put_rename_ns: after.put_rename_ns.saturating_sub(before.put_rename_ns),
+        put_record_ns: after.put_record_ns.saturating_sub(before.put_record_ns),
+    }
+}
+
 fn stats_delta(before: BenchStats, after: BenchStats) -> BenchStats {
     let atomic_apply_delta = after
         .metadata_store
@@ -1309,12 +1948,6 @@ fn stats_delta(before: BenchStats, after: BenchStats) -> BenchStats {
                 .object
                 .object_writeback_inline
                 .saturating_sub(before.object.object_writeback_inline),
-        )
-        .saturating_add(
-            after
-                .object
-                .object_writeback_fallback
-                .saturating_sub(before.object.object_writeback_fallback),
         );
     BenchStats {
         object: ObjectTransferStats {
@@ -1398,10 +2031,6 @@ fn stats_delta(before: BenchStats, after: BenchStats) -> BenchStats {
                 .object
                 .object_writeback_inline
                 .saturating_sub(before.object.object_writeback_inline),
-            object_writeback_fallback: after
-                .object
-                .object_writeback_fallback
-                .saturating_sub(before.object.object_writeback_fallback),
             object_writeback_completed: after
                 .object
                 .object_writeback_completed
@@ -1436,6 +2065,22 @@ fn stats_delta(before: BenchStats, after: BenchStats) -> BenchStats {
             } else {
                 after.object.object_writeback_upload_max_ns
             },
+            object_writeback_collect_ns: after
+                .object
+                .object_writeback_collect_ns
+                .saturating_sub(before.object.object_writeback_collect_ns),
+            object_writeback_digest_ns: after
+                .object
+                .object_writeback_digest_ns
+                .saturating_sub(before.object.object_writeback_digest_ns),
+            object_writeback_store_put_ns: after
+                .object
+                .object_writeback_store_put_ns
+                .saturating_sub(before.object.object_writeback_store_put_ns),
+            object_writeback_cache_put_ns: after
+                .object
+                .object_writeback_cache_put_ns
+                .saturating_sub(before.object.object_writeback_cache_put_ns),
             manifest_chunks: after
                 .object
                 .manifest_chunks
@@ -1445,6 +2090,46 @@ fn stats_delta(before: BenchStats, after: BenchStats) -> BenchStats {
                 .manifest_blocks
                 .saturating_sub(before.object.manifest_blocks),
         },
+        data_fabric: DataFabricReadStats {
+            planned_blocks: after
+                .data_fabric
+                .planned_blocks
+                .saturating_sub(before.data_fabric.planned_blocks),
+            local_nvme_hits: after
+                .data_fabric
+                .local_nvme_hits
+                .saturating_sub(before.data_fabric.local_nvme_hits),
+            object_fallbacks: after
+                .data_fabric
+                .object_fallbacks
+                .saturating_sub(before.data_fabric.object_fallbacks),
+            object_gets: after
+                .data_fabric
+                .object_gets
+                .saturating_sub(before.data_fabric.object_gets),
+            object_get_bytes: after
+                .data_fabric
+                .object_get_bytes
+                .saturating_sub(before.data_fabric.object_get_bytes),
+            coalesced_ranges: after
+                .data_fabric
+                .coalesced_ranges
+                .saturating_sub(before.data_fabric.coalesced_ranges),
+            coalesced_range_bytes: after
+                .data_fabric
+                .coalesced_range_bytes
+                .saturating_sub(before.data_fabric.coalesced_range_bytes),
+            cache_hits: after
+                .data_fabric
+                .cache_hits
+                .saturating_sub(before.data_fabric.cache_hits),
+            cache_hit_bytes: after
+                .data_fabric
+                .cache_hit_bytes
+                .saturating_sub(before.data_fabric.cache_hit_bytes),
+        },
+        tiered_object: tiered_object_stats_delta(before.tiered_object, after.tiered_object),
+        local_hot: local_hot_stats_delta(before.local_hot, after.local_hot),
         metadata_store: MetadataStoreStats {
             get_total: after
                 .metadata_store
@@ -1642,7 +2327,7 @@ fn object_caveat(config: &Config, path: &str) -> String {
 }
 
 fn local_metadata_caveat() -> &'static str {
-    "metadata_mode=local direct Holt"
+    "single Holt metadata server"
 }
 
 fn client_for(config: &Config, workload: &str) -> Result<Box<dyn BenchClient>, BenchError> {
@@ -1653,13 +2338,13 @@ fn service_client_for(config: &Config, workload: &str) -> Result<Box<dyn BenchCl
     let meta = config.root.join(workload).join("meta");
     let object = object_config_for(config, workload);
     let objects = object.clone().open().map_err(from_client)?;
+    let client_objects = objects.clone();
     let listener = TcpListener::bind("127.0.0.1:0").map_err(from_io)?;
     let bind = listener.local_addr().map_err(from_io)?;
     let server = Server::open(ServerOptions {
         bind,
         mount: MountId::new(1).expect("mount id is non-zero"),
         meta_path: meta,
-        metadata_mode: MetadataMode::Local,
         metadata_checkpoint_archive_prefix: None,
         object,
         uid: DEFAULT_UID,
@@ -1668,6 +2353,7 @@ fn service_client_for(config: &Config, workload: &str) -> Result<Box<dyn BenchCl
             interval: Duration::from_secs(3600),
             limit: 1024,
             run_immediately: false,
+            read_lease_grace: ObjectGcOptions::default().read_lease_grace,
         },
         history_gc: HistoryGcOptions {
             interval: Duration::from_secs(3600),
@@ -1683,6 +2369,7 @@ fn service_client_for(config: &Config, workload: &str) -> Result<Box<dyn BenchCl
     client.set_block_cache_enabled(config.block_cache);
     Ok(Box::new(ServiceBenchClient {
         client,
+        objects: client_objects,
         stats_addr: bind,
     }))
 }
@@ -1720,7 +2407,6 @@ fn fetch_server_stats(address: SocketAddr) -> Result<BenchStats, BenchError> {
             read_plan_cache_misses: json_u64(body, "read_plan_cache_misses")?,
             object_writeback_enqueued: json_u64_or_zero(body, "object_writeback_enqueued"),
             object_writeback_inline: json_u64_or_zero(body, "object_writeback_inline"),
-            object_writeback_fallback: json_u64_or_zero(body, "object_writeback_fallback"),
             object_writeback_completed: json_u64_or_zero(body, "object_writeback_completed"),
             object_writeback_failed: json_u64_or_zero(body, "object_writeback_failed"),
             object_writeback_staged_bytes: json_u64_or_zero(body, "object_writeback_staged_bytes"),
@@ -1741,9 +2427,16 @@ fn fetch_server_stats(address: SocketAddr) -> Result<BenchStats, BenchError> {
                 body,
                 "object_writeback_upload_max_ns",
             ),
+            object_writeback_collect_ns: json_u64_or_zero(body, "object_writeback_collect_ns"),
+            object_writeback_digest_ns: json_u64_or_zero(body, "object_writeback_digest_ns"),
+            object_writeback_store_put_ns: json_u64_or_zero(body, "object_writeback_store_put_ns"),
+            object_writeback_cache_put_ns: json_u64_or_zero(body, "object_writeback_cache_put_ns"),
             manifest_chunks: json_u64(body, "manifest_chunks")?,
             manifest_blocks: json_u64(body, "manifest_blocks")?,
         },
+        data_fabric: DataFabricReadStats::default(),
+        tiered_object: TieredObjectStoreStats::default(),
+        local_hot: LocalObjectStoreStats::default(),
         metadata_store: MetadataStoreStats {
             get_total: json_u64(body, "get_total")?,
             get_user_strong_total: json_u64(body, "get_user_strong_total")?,
@@ -1830,6 +2523,14 @@ fn artifact_metadata(producer: &str, manifest_id: &str) -> ArtifactMetadata {
     }
 }
 
+fn body_generation(entry: &DentryWithAttr) -> u64 {
+    entry
+        .body
+        .as_ref()
+        .map(|body| body.generation)
+        .unwrap_or(entry.attr.generation)
+}
+
 fn stable_id_hash(value: &str) -> String {
     let mut hash = 0xcbf2_9ce4_8422_2325_u64;
     for byte in value.as_bytes() {
@@ -1897,6 +2598,9 @@ fn parse(args: Vec<String>) -> Result<Config, BenchError> {
     let mut object_backend = ObjectBackendKind::RustFs;
     let mut s3 = S3ObjectStoreOptions::new("");
     let mut object_concurrency = 1_usize;
+    let mut hot_object_root = None;
+    let mut hot_object_max_bytes = None;
+    let mut hot_fill_mode = HotFillMode::Inline;
     let mut read_repeats = 1_usize;
     let mut block_cache = true;
     let mut checkpoint_bytes = None;
@@ -1963,6 +2667,21 @@ fn parse(args: Vec<String>) -> Result<Config, BenchError> {
                     "--object-concurrency",
                 )?;
             }
+            "--hot-object-root" => {
+                index += 1;
+                hot_object_root = Some(PathBuf::from(value(&args, index, "--hot-object-root")?));
+            }
+            "--hot-object-max-bytes" => {
+                index += 1;
+                hot_object_max_bytes = Some(parse_positive_u64(
+                    value(&args, index, "--hot-object-max-bytes")?,
+                    "--hot-object-max-bytes",
+                )?);
+            }
+            "--hot-fill-mode" => {
+                index += 1;
+                hot_fill_mode = parse_hot_fill_mode(value(&args, index, "--hot-fill-mode")?)?;
+            }
             "--checkpoint-bytes" => {
                 index += 1;
                 checkpoint_bytes = Some(parse_positive_usize(
@@ -2004,6 +2723,9 @@ fn parse(args: Vec<String>) -> Result<Config, BenchError> {
         object_backend,
         s3,
         object_concurrency,
+        hot_object_root,
+        hot_object_max_bytes,
+        hot_fill_mode,
         read_repeats,
         block_cache,
         checkpoint_bytes,
@@ -2020,7 +2742,47 @@ fn object_config_for(config: &Config, workload: &str) -> ObjectStoreConfig {
     if options.root == "/" {
         options.root = format!("/nokv-bench/{workload}");
     }
-    ObjectStoreConfig::s3(options)
+    if let Some(hot_root) = hot_object_root_for(config, workload) {
+        let hot = match config.hot_object_max_bytes {
+            Some(max_bytes) => LocalObjectStoreOptions::new(hot_root).with_max_bytes(max_bytes),
+            None => LocalObjectStoreOptions::new(hot_root),
+        };
+        ObjectStoreConfig::tiered_local_with_options(
+            hot,
+            options,
+            TieredObjectStoreOptions {
+                put_policy: tiered_put_policy_for_workload(workload),
+                populate_hot_on_get: true,
+                hot_fill_mode: config.hot_fill_mode,
+                pending_cold_put_root: None,
+            },
+        )
+    } else {
+        ObjectStoreConfig::s3(options)
+    }
+}
+
+fn tiered_put_policy_for_workload(workload: &str) -> TieredPutPolicy {
+    match workload {
+        "native-layout-read" | "ai-dataset-batch-read" | "ai-shard-range-read" => {
+            TieredPutPolicy::ColdOnly
+        }
+        _ => TieredPutPolicy::HotThenBackgroundCold,
+    }
+}
+
+fn hot_object_root_for(config: &Config, workload: &str) -> Option<PathBuf> {
+    config
+        .hot_object_root
+        .as_ref()
+        .map(|root| root.join(workload))
+        .or_else(|| {
+            matches!(
+                workload,
+                "native-layout-read" | "ai-dataset-batch-read" | "ai-shard-range-read"
+            )
+            .then(|| config.root.join(workload).join("hot-objects"))
+        })
 }
 
 fn parse_object_backend(raw: &str) -> Result<ObjectBackendKind, BenchError> {
@@ -2036,6 +2798,21 @@ fn parse_positive_usize(raw: &str, option: &'static str) -> Result<usize, BenchE
         .ok()
         .filter(|value| *value > 0)
         .ok_or_else(|| BenchError::UnknownOption(format!("{option} {raw}")))
+}
+
+fn parse_positive_u64(raw: &str, option: &'static str) -> Result<u64, BenchError> {
+    raw.parse::<u64>()
+        .ok()
+        .filter(|value| *value > 0)
+        .ok_or_else(|| BenchError::UnknownOption(format!("{option} {raw}")))
+}
+
+fn parse_hot_fill_mode(raw: &str) -> Result<HotFillMode, BenchError> {
+    match raw {
+        "inline" => Ok(HotFillMode::Inline),
+        "background" => Ok(HotFillMode::Background),
+        _ => Err(BenchError::UnknownOption(format!("--hot-fill-mode {raw}"))),
+    }
 }
 
 fn parse_block_cache(raw: &str) -> Result<bool, BenchError> {
@@ -2080,6 +2857,9 @@ fn parse_workload(raw: &str) -> Result<Workload, BenchError> {
         "metadata-concurrent-read" => Ok(Workload::MetadataConcurrentRead),
         "checkpoint-publish" => Ok(Workload::CheckpointPublish),
         "training-read" => Ok(Workload::TrainingRead),
+        "native-layout-read" => Ok(Workload::NativeLayoutRead),
+        "ai-dataset-batch-read" => Ok(Workload::AiDatasetBatchRead),
+        "ai-shard-range-read" => Ok(Workload::AiShardRangeRead),
         "mlperf-dlio" => Ok(Workload::MlperfDlio),
         "demo-dataset" => Ok(Workload::DemoDataset),
         _ => Err(BenchError::InvalidWorkload(raw.to_owned())),
@@ -2096,6 +2876,9 @@ fn expand_workloads(workload: Workload) -> Vec<Workload> {
             Workload::MetadataConcurrentRead,
             Workload::CheckpointPublish,
             Workload::TrainingRead,
+            Workload::NativeLayoutRead,
+            Workload::AiDatasetBatchRead,
+            Workload::AiShardRangeRead,
             Workload::MlperfDlio,
             Workload::DemoDataset,
         ],
@@ -2162,6 +2945,9 @@ fn workload_name(workload: Workload) -> &'static str {
         Workload::MetadataConcurrentRead => "metadata-concurrent-read",
         Workload::CheckpointPublish => "checkpoint-publish",
         Workload::TrainingRead => "training-read",
+        Workload::NativeLayoutRead => "native-layout-read",
+        Workload::AiDatasetBatchRead => "ai-dataset-batch-read",
+        Workload::AiShardRangeRead => "ai-shard-range-read",
         Workload::MlperfDlio => "mlperf-dlio",
         Workload::DemoDataset => "demo-dataset",
     }
@@ -2353,6 +3139,25 @@ mod tests {
     }
 
     #[test]
+    fn parse_native_layout_read_workload_and_hot_root() {
+        let config = parse(vec![
+            s("--workload"),
+            s("native-layout-read"),
+            s("--hot-object-root"),
+            s("/tmp/nokv-hot"),
+            s("--hot-object-max-bytes"),
+            s("1048576"),
+            s("--hot-fill-mode"),
+            s("background"),
+        ])
+        .unwrap();
+        assert_eq!(config.workload, Workload::NativeLayoutRead);
+        assert_eq!(config.hot_object_root, Some(PathBuf::from("/tmp/nokv-hot")));
+        assert_eq!(config.hot_object_max_bytes, Some(1_048_576));
+        assert_eq!(config.hot_fill_mode, HotFillMode::Background);
+    }
+
+    #[test]
     fn shape_applies_object_size_overrides() {
         let config = parse(vec![
             s("--profile"),
@@ -2370,7 +3175,7 @@ mod tests {
 
     #[test]
     fn stats_json_parser_reads_metadata_fields() {
-        let body = r#"{"object_puts":41,"object_put_bytes":42,"object_gets":43,"object_get_bytes":44,"coalesced_gets":45,"coalesced_get_bytes":46,"cache_hits":47,"cache_hit_bytes":48,"prefetch_enqueued":49,"prefetch_dropped":50,"prefetch_completed":51,"prefetch_failed":52,"prefetch_object_gets":53,"prefetch_object_get_bytes":54,"prefetch_cache_hits":55,"prefetch_cache_hit_bytes":56,"read_plan_cache_hits":57,"read_plan_cache_misses":58,"object_writeback_enqueued":59,"object_writeback_inline":60,"object_writeback_fallback":61,"object_writeback_completed":62,"object_writeback_failed":63,"object_writeback_staged_bytes":64,"object_writeback_uploaded_bytes":65,"object_writeback_queue_wait_ns":66,"object_writeback_queue_max_wait_ns":67,"object_writeback_upload_ns":68,"object_writeback_upload_max_ns":69,"manifest_chunks":70,"manifest_blocks":71,"metadata_store":{"get_total":2,"get_user_strong_total":32,"get_write_plan_local_total":33,"get_snapshot_total":34,"scan_total":3,"scan_user_strong_total":35,"scan_write_plan_local_total":36,"scan_snapshot_total":37,"scan_key_visited_total":4,"scan_key_returned_total":5,"history_lookup_total":40,"active_snapshot_pin_total":0,"commit_total":6,"dedupe_hit_total":7,"predicate_total":8,"prefix_empty_predicate_total":9,"current_put_total":10,"current_delete_total":11,"history_write_total":12,"watch_write_total":13,"dedupe_write_total":14,"commit_prepare_ns_total":15,"atomic_apply_total":16,"atomic_apply_command_total":17,"atomic_apply_max_batch":18,"atomic_apply_ns_total":19},"metadata_service":{"path_index_lookup_total":30,"path_index_hit_total":31,"path_index_miss_total":32,"path_index_stale_total":33,"path_index_scan_stale_total":34,"path_index_fallback_total":35,"create_files_batch_total":36,"create_files_entry_total":37,"create_dirs_batch_total":38,"create_dirs_entry_total":39,"read_dir_plus_total":40,"read_dir_plus_entry_total":41,"read_dir_plus_projection_hit_total":42}}"#;
+        let body = r#"{"object_puts":41,"object_put_bytes":42,"object_gets":43,"object_get_bytes":44,"coalesced_gets":45,"coalesced_get_bytes":46,"cache_hits":47,"cache_hit_bytes":48,"prefetch_enqueued":49,"prefetch_dropped":50,"prefetch_completed":51,"prefetch_failed":52,"prefetch_object_gets":53,"prefetch_object_get_bytes":54,"prefetch_cache_hits":55,"prefetch_cache_hit_bytes":56,"read_plan_cache_hits":57,"read_plan_cache_misses":58,"object_writeback_enqueued":59,"object_writeback_inline":60,"object_writeback_completed":62,"object_writeback_failed":63,"object_writeback_staged_bytes":64,"object_writeback_uploaded_bytes":65,"object_writeback_queue_wait_ns":66,"object_writeback_queue_max_wait_ns":67,"object_writeback_upload_ns":68,"object_writeback_upload_max_ns":69,"object_writeback_collect_ns":70,"object_writeback_digest_ns":71,"object_writeback_store_put_ns":72,"object_writeback_cache_put_ns":73,"manifest_chunks":74,"manifest_blocks":75,"tiered_hot_put_ns":76,"tiered_pending_cold_put_ns":77,"tiered_cold_put_enqueue_ns":78,"local_hot_puts":79,"local_hot_put_bytes":80,"local_hot_put_total_ns":81,"local_hot_put_prepare_ns":82,"local_hot_put_write_ns":83,"local_hot_put_sync_ns":84,"local_hot_put_rename_ns":85,"local_hot_put_record_ns":86,"metadata_store":{"get_total":2,"get_user_strong_total":32,"get_write_plan_local_total":33,"get_snapshot_total":34,"scan_total":3,"scan_user_strong_total":35,"scan_write_plan_local_total":36,"scan_snapshot_total":37,"scan_key_visited_total":4,"scan_key_returned_total":5,"history_lookup_total":40,"active_snapshot_pin_total":0,"commit_total":6,"dedupe_hit_total":7,"predicate_total":8,"prefix_empty_predicate_total":9,"current_put_total":10,"current_delete_total":11,"history_write_total":12,"watch_write_total":13,"dedupe_write_total":14,"commit_prepare_ns_total":15,"atomic_apply_total":16,"atomic_apply_command_total":17,"atomic_apply_max_batch":18,"atomic_apply_ns_total":19},"metadata_service":{"path_index_lookup_total":30,"path_index_hit_total":31,"path_index_miss_total":32,"path_index_stale_total":33,"path_index_scan_stale_total":34,"path_index_fallback_total":35,"create_files_batch_total":36,"create_files_entry_total":37,"create_dirs_batch_total":38,"create_dirs_entry_total":39,"read_dir_plus_total":40,"read_dir_plus_entry_total":41,"read_dir_plus_projection_hit_total":42}}"#;
 
         assert_eq!(json_u64(body, "object_put_bytes").unwrap(), 42);
         assert_eq!(json_u64(body, "object_get_bytes").unwrap(), 44);
@@ -2384,7 +3189,6 @@ mod tests {
         assert_eq!(json_u64(body, "read_plan_cache_misses").unwrap(), 58);
         assert_eq!(json_u64_or_zero(body, "object_writeback_enqueued"), 59);
         assert_eq!(json_u64_or_zero(body, "object_writeback_inline"), 60);
-        assert_eq!(json_u64_or_zero(body, "object_writeback_fallback"), 61);
         assert_eq!(json_u64_or_zero(body, "object_writeback_completed"), 62);
         assert_eq!(json_u64_or_zero(body, "object_writeback_failed"), 63);
         assert_eq!(json_u64_or_zero(body, "object_writeback_staged_bytes"), 64);
@@ -2399,6 +3203,21 @@ mod tests {
         );
         assert_eq!(json_u64_or_zero(body, "object_writeback_upload_ns"), 68);
         assert_eq!(json_u64_or_zero(body, "object_writeback_upload_max_ns"), 69);
+        assert_eq!(json_u64_or_zero(body, "object_writeback_collect_ns"), 70);
+        assert_eq!(json_u64_or_zero(body, "object_writeback_digest_ns"), 71);
+        assert_eq!(json_u64_or_zero(body, "object_writeback_store_put_ns"), 72);
+        assert_eq!(json_u64_or_zero(body, "object_writeback_cache_put_ns"), 73);
+        assert_eq!(json_u64_or_zero(body, "tiered_hot_put_ns"), 76);
+        assert_eq!(json_u64_or_zero(body, "tiered_pending_cold_put_ns"), 77);
+        assert_eq!(json_u64_or_zero(body, "tiered_cold_put_enqueue_ns"), 78);
+        assert_eq!(json_u64_or_zero(body, "local_hot_puts"), 79);
+        assert_eq!(json_u64_or_zero(body, "local_hot_put_bytes"), 80);
+        assert_eq!(json_u64_or_zero(body, "local_hot_put_total_ns"), 81);
+        assert_eq!(json_u64_or_zero(body, "local_hot_put_prepare_ns"), 82);
+        assert_eq!(json_u64_or_zero(body, "local_hot_put_write_ns"), 83);
+        assert_eq!(json_u64_or_zero(body, "local_hot_put_sync_ns"), 84);
+        assert_eq!(json_u64_or_zero(body, "local_hot_put_rename_ns"), 85);
+        assert_eq!(json_u64_or_zero(body, "local_hot_put_record_ns"), 86);
         assert_eq!(json_u64_or_zero(body, "missing_writeback_total"), 0);
         assert_eq!(json_u64(body, "commit_total").unwrap(), 6);
         assert_eq!(json_u64(body, "get_write_plan_local_total").unwrap(), 33);
@@ -2433,7 +3252,6 @@ mod tests {
                 object: ObjectTransferStats {
                     object_writeback_enqueued: 3,
                     object_writeback_inline: 1,
-                    object_writeback_fallback: 1,
                     object_writeback_completed: 2,
                     object_writeback_failed: 1,
                     object_writeback_staged_bytes: 4096,
@@ -2442,6 +3260,10 @@ mod tests {
                     object_writeback_queue_max_wait_ns: 7,
                     object_writeback_upload_ns: 20,
                     object_writeback_upload_max_ns: 12,
+                    object_writeback_collect_ns: 5,
+                    object_writeback_digest_ns: 6,
+                    object_writeback_store_put_ns: 7,
+                    object_writeback_cache_put_ns: 8,
                     ..ObjectTransferStats::default()
                 },
                 metadata_store: MetadataStoreStats {
@@ -2465,6 +3287,47 @@ mod tests {
                     read_dir_plus_entry_total: 8,
                     read_dir_plus_projection_hit_total: 6,
                     ..MetadataServiceStats::default()
+                },
+                data_fabric: DataFabricReadStats {
+                    planned_blocks: 9,
+                    local_nvme_hits: 7,
+                    object_fallbacks: 2,
+                    object_gets: 2,
+                    object_get_bytes: 8192,
+                    coalesced_ranges: 1,
+                    coalesced_range_bytes: 4096,
+                    cache_hits: 3,
+                    cache_hit_bytes: 12288,
+                },
+                tiered_object: TieredObjectStoreStats {
+                    hot_gets: 9,
+                    hot_hits: 7,
+                    hot_misses: 2,
+                    cold_gets: 2,
+                    cold_get_bytes: 8192,
+                    hot_put_ns: 13,
+                    pending_cold_put_ns: 14,
+                    cold_put_enqueue_ns: 15,
+                    hot_fills: 2,
+                    hot_fill_enqueued: 2,
+                    hot_fill_coalesced: 1,
+                    ..TieredObjectStoreStats::default()
+                },
+                local_hot: LocalObjectStoreStats {
+                    resident_objects: 4,
+                    resident_bytes: 16384,
+                    max_bytes: Some(32768),
+                    evictions: 1,
+                    eviction_bytes: 4096,
+                    admission_rejections: 1,
+                    puts: 2,
+                    put_bytes: 8192,
+                    put_total_ns: 21,
+                    put_prepare_ns: 22,
+                    put_write_ns: 23,
+                    put_sync_ns: 24,
+                    put_rename_ns: 25,
+                    put_record_ns: 26,
                 },
             },
             object_concurrency: 1,
@@ -2490,6 +3353,35 @@ mod tests {
         assert_eq!(row.object_writeback_enqueued, 3);
         assert_eq!(row.object_writeback_staged_bytes, 4096);
         assert_eq!(row.object_writeback_upload_max_ns, 12);
+        assert_eq!(row.object_writeback_collect_ns, 5);
+        assert_eq!(row.object_writeback_digest_ns, 6);
+        assert_eq!(row.object_writeback_store_put_ns, 7);
+        assert_eq!(row.object_writeback_cache_put_ns, 8);
+        assert_eq!(row.data_fabric_planned_blocks, 9);
+        assert_eq!(row.data_fabric_local_nvme_hits, 7);
+        assert_eq!(row.data_fabric_object_fallbacks, 2);
+        assert_eq!(row.data_fabric_coalesced_ranges, 1);
+        assert_eq!(row.data_fabric_cache_hit_bytes, 12288);
+        assert_eq!(row.tiered_hot_gets, 9);
+        assert_eq!(row.tiered_hot_hits, 7);
+        assert_eq!(row.tiered_hot_misses, 2);
+        assert_eq!(row.tiered_cold_gets, 2);
+        assert_eq!(row.tiered_cold_get_bytes, 8192);
+        assert_eq!(row.tiered_hot_fills, 2);
+        assert_eq!(row.tiered_hot_fill_enqueued, 2);
+        assert_eq!(row.tiered_hot_fill_coalesced, 1);
+        assert_eq!(row.tiered_hot_put_ns, 13);
+        assert_eq!(row.tiered_pending_cold_put_ns, 14);
+        assert_eq!(row.tiered_cold_put_enqueue_ns, 15);
+        assert_eq!(row.local_hot_resident_objects, 4);
+        assert_eq!(row.local_hot_resident_bytes, 16384);
+        assert_eq!(row.local_hot_max_bytes, 32768);
+        assert_eq!(row.local_hot_evictions, 1);
+        assert_eq!(row.local_hot_admission_rejections, 1);
+        assert_eq!(row.local_hot_puts, 2);
+        assert_eq!(row.local_hot_put_bytes, 8192);
+        assert_eq!(row.local_hot_put_total_ns, 21);
+        assert_eq!(row.local_hot_put_write_ns, 23);
 
         let header = csv_header();
         let labels = BoundaryLabels {
@@ -2510,6 +3402,18 @@ mod tests {
         assert!(header.contains("path_index_scan_stale"));
         assert!(header.contains("read_dir_plus_projection_hit_rate"));
         assert!(header.contains("object_writeback_queue_max_wait_ns"));
+        assert!(header.contains("object_writeback_store_put_ns"));
+        assert!(header.contains("data_fabric_local_nvme_hits"));
+        assert!(header.contains("tiered_hot_hits"));
+        assert!(header.contains("tiered_cold_gets"));
+        assert!(header.contains("tiered_hot_fills"));
+        assert!(header.contains("tiered_hot_fill_coalesced"));
+        assert!(header.contains("tiered_hot_put_ns"));
+        assert!(header.contains("tiered_pending_cold_put_ns"));
+        assert!(header.contains("local_hot_resident_bytes"));
+        assert!(header.contains("local_hot_admission_rejections"));
+        assert!(header.contains("local_hot_put_total_ns"));
+        assert!(header.contains("local_hot_put_write_ns"));
         assert_eq!(header.split(',').count(), record.split(',').count());
     }
 
@@ -2545,6 +3449,10 @@ mod tests {
                 object_writeback_queue_max_wait_ns: 25,
                 object_writeback_upload_ns: 80,
                 object_writeback_upload_max_ns: 50,
+                object_writeback_collect_ns: 10,
+                object_writeback_digest_ns: 20,
+                object_writeback_store_put_ns: 30,
+                object_writeback_cache_put_ns: 40,
                 ..ObjectTransferStats::default()
             },
             ..BenchStats::default()
@@ -2559,6 +3467,10 @@ mod tests {
                 object_writeback_queue_max_wait_ns: 60,
                 object_writeback_upload_ns: 240,
                 object_writeback_upload_max_ns: 90,
+                object_writeback_collect_ns: 30,
+                object_writeback_digest_ns: 70,
+                object_writeback_store_put_ns: 90,
+                object_writeback_cache_put_ns: 120,
                 ..ObjectTransferStats::default()
             },
             ..BenchStats::default()
@@ -2574,10 +3486,167 @@ mod tests {
         assert_eq!(delta.object.object_writeback_queue_max_wait_ns, 60);
         assert_eq!(delta.object.object_writeback_upload_ns, 160);
         assert_eq!(delta.object.object_writeback_upload_max_ns, 90);
+        assert_eq!(delta.object.object_writeback_collect_ns, 20);
+        assert_eq!(delta.object.object_writeback_digest_ns, 50);
+        assert_eq!(delta.object.object_writeback_store_put_ns, 60);
+        assert_eq!(delta.object.object_writeback_cache_put_ns, 80);
 
         let idle_delta = stats_delta(after, after);
         assert_eq!(idle_delta.object.object_writeback_queue_max_wait_ns, 0);
         assert_eq!(idle_delta.object.object_writeback_upload_max_ns, 0);
+    }
+
+    #[test]
+    fn stats_delta_reports_data_fabric_window() {
+        let before = BenchStats {
+            data_fabric: DataFabricReadStats {
+                planned_blocks: 10,
+                local_nvme_hits: 3,
+                object_fallbacks: 7,
+                object_gets: 7,
+                object_get_bytes: 1024,
+                coalesced_ranges: 2,
+                cache_hits: 1,
+                ..DataFabricReadStats::default()
+            },
+            ..BenchStats::default()
+        };
+        let after = BenchStats {
+            data_fabric: DataFabricReadStats {
+                planned_blocks: 18,
+                local_nvme_hits: 9,
+                object_fallbacks: 9,
+                object_gets: 9,
+                object_get_bytes: 4096,
+                coalesced_ranges: 3,
+                cache_hits: 5,
+                ..DataFabricReadStats::default()
+            },
+            ..BenchStats::default()
+        };
+
+        let delta = stats_delta(before, after);
+
+        assert_eq!(delta.data_fabric.planned_blocks, 8);
+        assert_eq!(delta.data_fabric.local_nvme_hits, 6);
+        assert_eq!(delta.data_fabric.object_fallbacks, 2);
+        assert_eq!(delta.data_fabric.object_get_bytes, 3072);
+        assert_eq!(delta.data_fabric.coalesced_ranges, 1);
+        assert_eq!(delta.data_fabric.cache_hits, 4);
+    }
+
+    #[test]
+    fn stats_delta_reports_tiered_object_window() {
+        let before = BenchStats {
+            tiered_object: TieredObjectStoreStats {
+                hot_gets: 10,
+                hot_hits: 3,
+                hot_misses: 7,
+                cold_gets: 7,
+                cold_get_bytes: 1024,
+                hot_fills: 6,
+                hot_fill_enqueued: 4,
+                hot_fill_coalesced: 1,
+                hot_fill_errors: 1,
+                hot_put_ns: 10,
+                pending_cold_put_ns: 20,
+                cold_put_enqueue_ns: 30,
+                ..TieredObjectStoreStats::default()
+            },
+            ..BenchStats::default()
+        };
+        let after = BenchStats {
+            tiered_object: TieredObjectStoreStats {
+                hot_gets: 18,
+                hot_hits: 9,
+                hot_misses: 9,
+                cold_gets: 9,
+                cold_get_bytes: 4096,
+                hot_fills: 8,
+                hot_fill_enqueued: 7,
+                hot_fill_coalesced: 3,
+                hot_fill_errors: 2,
+                hot_put_ns: 15,
+                pending_cold_put_ns: 27,
+                cold_put_enqueue_ns: 41,
+                ..TieredObjectStoreStats::default()
+            },
+            ..BenchStats::default()
+        };
+
+        let delta = stats_delta(before, after);
+
+        assert_eq!(delta.tiered_object.hot_gets, 8);
+        assert_eq!(delta.tiered_object.hot_hits, 6);
+        assert_eq!(delta.tiered_object.hot_misses, 2);
+        assert_eq!(delta.tiered_object.cold_gets, 2);
+        assert_eq!(delta.tiered_object.cold_get_bytes, 3072);
+        assert_eq!(delta.tiered_object.hot_fills, 2);
+        assert_eq!(delta.tiered_object.hot_fill_enqueued, 3);
+        assert_eq!(delta.tiered_object.hot_fill_coalesced, 2);
+        assert_eq!(delta.tiered_object.hot_fill_errors, 1);
+        assert_eq!(delta.tiered_object.hot_put_ns, 5);
+        assert_eq!(delta.tiered_object.pending_cold_put_ns, 7);
+        assert_eq!(delta.tiered_object.cold_put_enqueue_ns, 11);
+    }
+
+    #[test]
+    fn stats_delta_reports_local_hot_window() {
+        let before = BenchStats {
+            local_hot: LocalObjectStoreStats {
+                resident_objects: 2,
+                resident_bytes: 1024,
+                max_bytes: Some(4096),
+                evictions: 3,
+                eviction_bytes: 512,
+                admission_rejections: 1,
+                puts: 4,
+                put_bytes: 1024,
+                put_total_ns: 100,
+                put_prepare_ns: 10,
+                put_write_ns: 20,
+                put_sync_ns: 30,
+                put_rename_ns: 40,
+                put_record_ns: 50,
+            },
+            ..BenchStats::default()
+        };
+        let after = BenchStats {
+            local_hot: LocalObjectStoreStats {
+                resident_objects: 4,
+                resident_bytes: 2048,
+                max_bytes: Some(4096),
+                evictions: 5,
+                eviction_bytes: 1536,
+                admission_rejections: 2,
+                puts: 9,
+                put_bytes: 4096,
+                put_total_ns: 190,
+                put_prepare_ns: 25,
+                put_write_ns: 55,
+                put_sync_ns: 30,
+                put_rename_ns: 70,
+                put_record_ns: 95,
+            },
+            ..BenchStats::default()
+        };
+
+        let delta = stats_delta(before, after);
+
+        assert_eq!(delta.local_hot.resident_objects, 4);
+        assert_eq!(delta.local_hot.resident_bytes, 2048);
+        assert_eq!(delta.local_hot.max_bytes, Some(4096));
+        assert_eq!(delta.local_hot.evictions, 2);
+        assert_eq!(delta.local_hot.eviction_bytes, 1024);
+        assert_eq!(delta.local_hot.admission_rejections, 1);
+        assert_eq!(delta.local_hot.puts, 5);
+        assert_eq!(delta.local_hot.put_bytes, 3072);
+        assert_eq!(delta.local_hot.put_total_ns, 90);
+        assert_eq!(delta.local_hot.put_prepare_ns, 15);
+        assert_eq!(delta.local_hot.put_write_ns, 35);
+        assert_eq!(delta.local_hot.put_sync_ns, 0);
+        assert_eq!(delta.local_hot.put_rename_ns, 30);
+        assert_eq!(delta.local_hot.put_record_ns, 45);
     }
 
     #[test]
@@ -2592,10 +3661,106 @@ mod tests {
                 Workload::MetadataConcurrentRead,
                 Workload::CheckpointPublish,
                 Workload::TrainingRead,
+                Workload::NativeLayoutRead,
+                Workload::AiDatasetBatchRead,
+                Workload::AiShardRangeRead,
                 Workload::MlperfDlio,
                 Workload::DemoDataset
             ]
         );
+    }
+
+    #[test]
+    fn native_layout_read_defaults_to_tiered_hot_root() {
+        let config = parse(vec![
+            s("--root"),
+            s("/tmp/nokv-bench"),
+            s("--workload"),
+            s("native-layout-read"),
+        ])
+        .unwrap();
+        let object = object_config_for(&config, "native-layout-read");
+
+        assert_eq!(
+            object.local_hot_root(),
+            Some(PathBuf::from("/tmp/nokv-bench/native-layout-read/hot-objects").as_path())
+        );
+        assert_eq!(
+            object.tiered_options(),
+            Some(TieredObjectStoreOptions {
+                put_policy: TieredPutPolicy::ColdOnly,
+                populate_hot_on_get: true,
+                ..TieredObjectStoreOptions::default()
+            })
+        );
+        let labels = boundary_labels(&config, "native-layout-read");
+        assert_eq!(labels.object_backend, "rustfs+local-hot");
+    }
+
+    #[test]
+    fn checkpoint_publish_with_hot_root_uses_hot_first_put_policy() {
+        let config = parse(vec![
+            s("--root"),
+            s("/tmp/nokv-bench"),
+            s("--workload"),
+            s("checkpoint-publish"),
+            s("--hot-object-root"),
+            s("/tmp/nokv-hot"),
+        ])
+        .unwrap();
+        let object = object_config_for(&config, "checkpoint-publish");
+
+        assert_eq!(
+            object.local_hot_root(),
+            Some(PathBuf::from("/tmp/nokv-hot/checkpoint-publish").as_path())
+        );
+        assert_eq!(
+            object.tiered_options(),
+            Some(TieredObjectStoreOptions {
+                put_policy: TieredPutPolicy::HotThenBackgroundCold,
+                populate_hot_on_get: true,
+                ..TieredObjectStoreOptions::default()
+            })
+        );
+    }
+
+    #[test]
+    fn ai_dataset_batch_read_defaults_to_tiered_hot_root() {
+        let config = parse(vec![
+            s("--root"),
+            s("/tmp/nokv-bench"),
+            s("--workload"),
+            s("ai-dataset-batch-read"),
+        ])
+        .unwrap();
+        let object = object_config_for(&config, "ai-dataset-batch-read");
+
+        assert_eq!(
+            object.local_hot_root(),
+            Some(PathBuf::from("/tmp/nokv-bench/ai-dataset-batch-read/hot-objects").as_path())
+        );
+        let labels = boundary_labels(&config, "ai-dataset-batch-read");
+        assert_eq!(labels.object_backend, "rustfs+local-hot");
+    }
+
+    #[test]
+    fn ai_shard_range_read_defaults_to_tiered_hot_root() {
+        let config = parse(vec![
+            s("--root"),
+            s("/tmp/nokv-bench"),
+            s("--workload"),
+            s("ai-shard-range-read"),
+        ])
+        .unwrap();
+        assert_eq!(config.workload, Workload::AiShardRangeRead);
+        let object = object_config_for(&config, "ai-shard-range-read");
+
+        assert_eq!(
+            object.local_hot_root(),
+            Some(PathBuf::from("/tmp/nokv-bench/ai-shard-range-read/hot-objects").as_path())
+        );
+        let labels = boundary_labels(&config, "ai-shard-range-read");
+        assert_eq!(labels.object_backend, "rustfs+local-hot");
     }
 
     #[test]

@@ -1,12 +1,13 @@
+use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::time::Duration;
 
 use fuser::MountOption;
 use nokv_meta::ObjectTransferStats;
 use nokv_object::{
-    BlockCachePolicy, BlockCacheStats, FileReadPipelineOptions, ObjectPrefetchOptions,
-    ObjectPrefetchStats, ObjectWritebackStats, WritebackCacheStats,
-    DEFAULT_S3_MULTIPART_CONCURRENCY,
+    BlockCachePolicy, BlockCacheStats, FileReadPipelineOptions, LocalObjectStoreStats,
+    ObjectPrefetchOptions, ObjectPrefetchStats, ObjectWritebackStats, TieredObjectStoreStats,
+    WritebackCacheStats, DEFAULT_S3_MULTIPART_CONCURRENCY,
 };
 use nokv_types::InodeId;
 
@@ -16,6 +17,7 @@ const DEFAULT_WRITEBACK_CACHE_BYTES: u64 = 8 * 1024 * 1024 * 1024;
 const DEFAULT_WRITEBACK_CACHE_ITEMS: usize = 16 * 1024;
 const DEFAULT_WRITEBACK_QUEUE_CAPACITY: usize = 256;
 const DEFAULT_WRITEBACK_WORKERS: usize = DEFAULT_S3_MULTIPART_CONCURRENCY;
+const DEFAULT_WRITEBACK_UPLOAD_WORKERS_PER_REQUEST: usize = DEFAULT_WRITEBACK_WORKERS;
 
 #[derive(Clone, Debug)]
 pub struct FuseOptions {
@@ -32,6 +34,7 @@ pub struct FuseOptions {
     pub view: FuseView,
     pub access: FuseAccessMode,
     pub invalidation: FuseInvalidationOptions,
+    pub stats_bind: Option<SocketAddr>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -43,7 +46,7 @@ pub struct FusePrefetchOptions {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FuseWritebackOptions {
-    pub enabled: bool,
+    pub cache_enabled: bool,
     pub root: PathBuf,
     pub max_bytes: u64,
     pub max_items: usize,
@@ -58,25 +61,42 @@ pub struct FuseObjectPipelineStats {
     pub prefetch: Option<ObjectPrefetchStats>,
     pub writeback_cache: Option<WritebackCacheStats>,
     pub writeback: Option<ObjectWritebackStats>,
+    pub tiered_object: Option<TieredObjectStoreStats>,
+    pub local_hot: Option<LocalObjectStoreStats>,
+    pub foreground_object_gets: u64,
+    pub foreground_object_get_bytes: u64,
+    pub foreground_coalesced_gets: u64,
+    pub foreground_coalesced_get_bytes: u64,
+    pub foreground_cache_hits: u64,
+    pub foreground_cache_hit_bytes: u64,
+    pub foreground_block_cache_hits: u64,
+    pub foreground_block_cache_hit_bytes: u64,
+    pub foreground_read_window_hits: u64,
+    pub foreground_read_window_hit_bytes: u64,
     pub read_plan_cache_hits: u64,
     pub read_plan_cache_misses: u64,
 }
 
 impl FuseObjectPipelineStats {
     pub fn object_transfer_stats(&self) -> ObjectTransferStats {
-        let block_cache = self.block_cache.unwrap_or_default();
         let prefetch = self.prefetch.unwrap_or_default();
         let writeback = self.writeback.unwrap_or_default();
         ObjectTransferStats {
             object_puts: 0,
             object_put_bytes: 0,
-            object_gets: 0,
-            object_get_bytes: 0,
-            coalesced_gets: 0,
-            coalesced_get_bytes: 0,
-            cache_hits: block_cache.hits.saturating_add(prefetch.cache_hits),
-            cache_hit_bytes: block_cache
-                .hit_bytes
+            object_gets: self
+                .foreground_object_gets
+                .saturating_add(prefetch.object_gets),
+            object_get_bytes: self
+                .foreground_object_get_bytes
+                .saturating_add(prefetch.object_get_bytes),
+            coalesced_gets: self.foreground_coalesced_gets,
+            coalesced_get_bytes: self.foreground_coalesced_get_bytes,
+            cache_hits: self
+                .foreground_cache_hits
+                .saturating_add(prefetch.cache_hits),
+            cache_hit_bytes: self
+                .foreground_cache_hit_bytes
                 .saturating_add(prefetch.cache_hit_bytes),
             prefetch_enqueued: prefetch.enqueued,
             prefetch_dropped: prefetch.dropped,
@@ -90,7 +110,6 @@ impl FuseObjectPipelineStats {
             read_plan_cache_misses: self.read_plan_cache_misses,
             object_writeback_enqueued: writeback.enqueued,
             object_writeback_inline: writeback.inline,
-            object_writeback_fallback: writeback.fallback,
             object_writeback_completed: writeback.completed,
             object_writeback_failed: writeback.failed,
             object_writeback_staged_bytes: writeback.staged_bytes,
@@ -99,6 +118,10 @@ impl FuseObjectPipelineStats {
             object_writeback_queue_max_wait_ns: writeback.queue_max_wait_ns,
             object_writeback_upload_ns: writeback.upload_ns,
             object_writeback_upload_max_ns: writeback.upload_max_ns,
+            object_writeback_collect_ns: writeback.collect_ns,
+            object_writeback_digest_ns: writeback.digest_ns,
+            object_writeback_store_put_ns: writeback.store_put_ns,
+            object_writeback_cache_put_ns: writeback.cache_put_ns,
             manifest_chunks: 0,
             manifest_blocks: 0,
         }
@@ -152,6 +175,7 @@ impl Default for FuseOptions {
             view: FuseView::Live,
             access: FuseAccessMode::ReadWrite,
             invalidation: FuseInvalidationOptions::default(),
+            stats_bind: None,
         }
     }
 }
@@ -179,13 +203,13 @@ impl From<FusePrefetchOptions> for ObjectPrefetchOptions {
 impl Default for FuseWritebackOptions {
     fn default() -> Self {
         Self {
-            enabled: true,
+            cache_enabled: false,
             root: std::env::temp_dir().join(format!("nokv-writeback-{}", std::process::id())),
             max_bytes: DEFAULT_WRITEBACK_CACHE_BYTES,
             max_items: DEFAULT_WRITEBACK_CACHE_ITEMS,
             queue_capacity: DEFAULT_WRITEBACK_QUEUE_CAPACITY,
             workers: DEFAULT_WRITEBACK_WORKERS,
-            upload_workers_per_request: DEFAULT_WRITEBACK_WORKERS,
+            upload_workers_per_request: DEFAULT_WRITEBACK_UPLOAD_WORKERS_PER_REQUEST,
         }
     }
 }
@@ -243,3 +267,27 @@ pub(super) const STATFS_BLOCK_SIZE: u32 = 4096;
 pub(super) const STATFS_TOTAL_BYTES: u64 = 1 << 40;
 pub(super) const STATFS_TOTAL_FILES: u64 = 1 << 32;
 pub(super) const STATFS_NAME_MAX: u32 = 255;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_fuse_threads_match_parallel_read_baseline() {
+        #[cfg(target_os = "linux")]
+        assert_eq!(FuseOptions::default().threads, 4);
+        #[cfg(not(target_os = "linux"))]
+        assert_eq!(FuseOptions::default().threads, 1);
+    }
+
+    #[test]
+    fn default_writeback_parallelism_favors_request_fanout() {
+        let options = FuseWritebackOptions::default();
+        assert!(!options.cache_enabled);
+        assert_eq!(options.workers, DEFAULT_WRITEBACK_WORKERS);
+        assert_eq!(
+            options.upload_workers_per_request,
+            DEFAULT_WRITEBACK_UPLOAD_WORKERS_PER_REQUEST
+        );
+    }
+}

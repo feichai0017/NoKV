@@ -26,6 +26,8 @@ WORKLOAD="${NOKV_E2E_WORKLOAD:-mlperf-dlio}"
 OBJECT_CONCURRENCY="${NOKV_E2E_OBJECT_CONCURRENCY:-8}"
 READ_REPEATS="${NOKV_E2E_READ_REPEATS:-1}"
 BLOCK_CACHE="${NOKV_E2E_BLOCK_CACHE:-on}"
+HOT_OBJECT_MAX_BYTES="${NOKV_E2E_HOT_OBJECT_MAX_BYTES:-}"
+HOT_FILL_MODE="${NOKV_E2E_HOT_FILL_MODE:-}"
 BENCH_KEEP="${NOKV_E2E_BENCH_KEEP:-0}"
 
 RUSTFS_DATA_DIR="${NOKV_E2E_RUSTFS_DATA_DIR:-}"
@@ -44,6 +46,8 @@ Environment:
   NOKV_E2E_OBJECT_CONCURRENCY       object PUT/GET concurrency (default: 8)
   NOKV_E2E_READ_REPEATS             training-read repeat count (default: 1)
   NOKV_E2E_BLOCK_CACHE              on|off (default: on)
+  NOKV_E2E_HOT_OBJECT_MAX_BYTES     pass --hot-object-max-bytes to nokv-bench
+  NOKV_E2E_HOT_FILL_MODE            inline|background hot fill mode
   NOKV_E2E_RUSTFS_ADDRESS           RustFS listen address (default: 127.0.0.1:9000)
   NOKV_E2E_RUSTFS_CONSOLE_ADDRESS   RustFS console address (default: 127.0.0.1:9001)
   NOKV_E2E_RUSTFS_BUCKET            bucket name (default: nokv)
@@ -179,6 +183,12 @@ bench_args=(
 
 if [[ "$BENCH_KEEP" == "1" ]]; then
     bench_args+=(--keep)
+fi
+if [[ -n "$HOT_OBJECT_MAX_BYTES" ]]; then
+    bench_args+=(--hot-object-max-bytes "$HOT_OBJECT_MAX_BYTES")
+fi
+if [[ -n "$HOT_FILL_MODE" ]]; then
+    bench_args+=(--hot-fill-mode "$HOT_FILL_MODE")
 fi
 if [[ "$#" -gt 0 ]]; then
     bench_args+=("$@")

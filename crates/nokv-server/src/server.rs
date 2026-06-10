@@ -12,11 +12,11 @@ use nokv_meta::{
     MetadataBackupOptions, MetadataBackupWorker, MetadataCheckpointStore, NoKvFs, ObjectGcWorker,
     ObjectGcWorkerState,
 };
-use nokv_object::{ObjectError, S3ObjectStore};
+use nokv_object::{ConfiguredObjectStore, ObjectError};
 
 use crate::http;
 use crate::metadata::ServerMetadataStore;
-use crate::options::{MetadataMode, ServerOptions};
+use crate::options::ServerOptions;
 use crate::rpc;
 
 const DEFAULT_ROOT_MODE: u32 = 0o755;
@@ -25,8 +25,7 @@ const SERVER_CONNECTION_QUEUE: usize = 1024;
 const DEFAULT_ARCHIVE_KEEP_LAST: usize = 8;
 
 pub struct Server {
-    service: Arc<NoKvFs<ServerMetadataStore, S3ObjectStore>>,
-    metadata_mode: MetadataMode,
+    service: Arc<NoKvFs<ServerMetadataStore, ConfiguredObjectStore>>,
     object_gc: ObjectGcWorker,
     history_gc: HistoryGcWorker,
     metadata_backup: Option<MetadataBackupWorker>,
@@ -63,13 +62,8 @@ pub fn restore(options: ServerOptions) -> Result<String, ServerError> {
     };
     let objects = options.object.open()?;
     let metadata_state_path = default_metadata_state_path(&options.meta_path);
-    let metadata = match options.metadata_mode {
-        MetadataMode::Local => {
-            let store =
-                HoltMetadataStore::open_file(&metadata_state_path).map_err(MetadError::from)?;
-            ServerMetadataStore::direct(store)
-        }
-    };
+    let store = HoltMetadataStore::open_file(&metadata_state_path).map_err(MetadError::from)?;
+    let metadata = ServerMetadataStore::direct(store);
     // Install into a fresh store: do NOT bootstrap_root, which would create trees
     // the checkpoint install then collides with.
     let service = NoKvFs::new(options.mount, metadata, objects);
@@ -95,16 +89,11 @@ impl Server {
 
     fn open_with_objects(
         options: ServerOptions,
-        objects: S3ObjectStore,
+        objects: ConfiguredObjectStore,
     ) -> Result<Self, ServerError> {
         let metadata_state_path = default_metadata_state_path(&options.meta_path);
-        let metadata = match options.metadata_mode {
-            MetadataMode::Local => {
-                let store =
-                    HoltMetadataStore::open_file(&metadata_state_path).map_err(MetadError::from)?;
-                ServerMetadataStore::direct(store)
-            }
-        };
+        let store = HoltMetadataStore::open_file(&metadata_state_path).map_err(MetadError::from)?;
+        let metadata = ServerMetadataStore::direct(store);
         let service = Arc::new(NoKvFs::open_existing(options.mount, metadata, objects)?);
         service.bootstrap_root(DEFAULT_ROOT_MODE, options.uid, options.gid)?;
         let object_gc = ObjectGcWorker::spawn(Arc::clone(&service), options.object_gc);
@@ -125,7 +114,6 @@ impl Server {
         );
         Ok(Self {
             service,
-            metadata_mode: options.metadata_mode,
             object_gc,
             history_gc,
             metadata_backup,
@@ -150,7 +138,7 @@ impl Server {
         Ok(())
     }
 
-    pub(crate) fn service(&self) -> &NoKvFs<ServerMetadataStore, S3ObjectStore> {
+    pub(crate) fn service(&self) -> &NoKvFs<ServerMetadataStore, ConfiguredObjectStore> {
         &self.service
     }
 
@@ -171,8 +159,7 @@ impl Server {
         let object_gc = self.object_gc.state();
         let history_gc = self.history_gc.state();
         format!(
-            "{{\"ready\":true,\"metadata_mode\":\"{}\",\"block_cache_enabled\":{},\"object_puts\":{},\"object_put_bytes\":{},\"object_gets\":{},\"object_get_bytes\":{},\"coalesced_gets\":{},\"coalesced_get_bytes\":{},\"cache_hits\":{},\"cache_hit_bytes\":{},\"prefetch_enqueued\":{},\"prefetch_dropped\":{},\"prefetch_completed\":{},\"prefetch_failed\":{},\"prefetch_object_gets\":{},\"prefetch_object_get_bytes\":{},\"prefetch_cache_hits\":{},\"prefetch_cache_hit_bytes\":{},\"read_plan_cache_hits\":{},\"read_plan_cache_misses\":{},\"object_writeback_enqueued\":{},\"object_writeback_inline\":{},\"object_writeback_fallback\":{},\"object_writeback_completed\":{},\"object_writeback_failed\":{},\"object_writeback_staged_bytes\":{},\"object_writeback_uploaded_bytes\":{},\"object_writeback_queue_wait_ns\":{},\"object_writeback_queue_max_wait_ns\":{},\"object_writeback_upload_ns\":{},\"object_writeback_upload_max_ns\":{},\"manifest_chunks\":{},\"manifest_blocks\":{},\"metadata_store\":{},\"metadata_service\":{},\"object_gc\":{},\"history_gc\":{},\"metadata_backup\":{}}}\n",
-            self.metadata_mode.as_str(),
+            "{{\"ready\":true,\"block_cache_enabled\":{},\"object_puts\":{},\"object_put_bytes\":{},\"object_gets\":{},\"object_get_bytes\":{},\"coalesced_gets\":{},\"coalesced_get_bytes\":{},\"cache_hits\":{},\"cache_hit_bytes\":{},\"prefetch_enqueued\":{},\"prefetch_dropped\":{},\"prefetch_completed\":{},\"prefetch_failed\":{},\"prefetch_object_gets\":{},\"prefetch_object_get_bytes\":{},\"prefetch_cache_hits\":{},\"prefetch_cache_hit_bytes\":{},\"read_plan_cache_hits\":{},\"read_plan_cache_misses\":{},\"object_writeback_enqueued\":{},\"object_writeback_inline\":{},\"object_writeback_completed\":{},\"object_writeback_failed\":{},\"object_writeback_staged_bytes\":{},\"object_writeback_uploaded_bytes\":{},\"object_writeback_queue_wait_ns\":{},\"object_writeback_queue_max_wait_ns\":{},\"object_writeback_upload_ns\":{},\"object_writeback_upload_max_ns\":{},\"object_writeback_collect_ns\":{},\"object_writeback_digest_ns\":{},\"object_writeback_store_put_ns\":{},\"object_writeback_cache_put_ns\":{},\"manifest_chunks\":{},\"manifest_blocks\":{},\"metadata_store\":{},\"metadata_service\":{},\"object_gc\":{},\"history_gc\":{},\"metadata_backup\":{}}}\n",
             self.service.block_cache_enabled(),
             objects.object_puts,
             objects.object_put_bytes,
@@ -194,7 +181,6 @@ impl Server {
             objects.read_plan_cache_misses,
             objects.object_writeback_enqueued,
             objects.object_writeback_inline,
-            objects.object_writeback_fallback,
             objects.object_writeback_completed,
             objects.object_writeback_failed,
             objects.object_writeback_staged_bytes,
@@ -203,6 +189,10 @@ impl Server {
             objects.object_writeback_queue_max_wait_ns,
             objects.object_writeback_upload_ns,
             objects.object_writeback_upload_max_ns,
+            objects.object_writeback_collect_ns,
+            objects.object_writeback_digest_ns,
+            objects.object_writeback_store_put_ns,
+            objects.object_writeback_cache_put_ns,
             objects.manifest_chunks,
             objects.manifest_blocks,
             metadata_store_json(&metadata),
@@ -217,10 +207,11 @@ impl Server {
         let object = self.service.cleanup_pending_objects(limit)?;
         let history = self.service.cleanup_history(limit)?;
         Ok(format!(
-            r#"{{"object_gc":{{"scanned":{},"blocked_by_snapshots":{},"attempted":{},"deleted":{},"missing":{},"records_removed":{}}},"history_gc":{{"scanned":{},"removed":{},"retained_by_snapshots":{}}}}}
+            r#"{{"object_gc":{{"scanned":{},"blocked_by_snapshots":{},"blocked_by_read_leases":{},"attempted":{},"deleted":{},"missing":{},"records_removed":{}}},"history_gc":{{"scanned":{},"removed":{},"retained_by_snapshots":{}}}}}
 "#,
             object.scanned,
             object.blocked_by_snapshots,
+            object.blocked_by_read_leases,
             object.attempted,
             object.deleted,
             object.missing,
@@ -236,11 +227,7 @@ impl Server {
             .metadata_store()
             .checkpoint()
             .map_err(|err| ServerError::Metadata(MetadError::from(err)))?;
-        Ok(format!(
-            r#"{{"metadata_mode":"{}"}}
-"#,
-            self.metadata_mode.as_str(),
-        ))
+        Ok("{\"checkpointed\":true}\n".to_owned())
     }
 
     pub fn run_manual_backup(&self) -> Result<String, ServerError> {
@@ -476,14 +463,11 @@ pub(crate) mod tests {
     use nokv_types::MountId;
     use tempfile::tempdir;
 
-    use crate::MetadataMode;
-
     pub(crate) fn test_options(root: &Path) -> ServerOptions {
         ServerOptions {
             bind: crate::options::DEFAULT_SERVER_BIND,
             mount: MountId::new(1).unwrap(),
             meta_path: root.join("meta"),
-            metadata_mode: MetadataMode::Local,
             metadata_checkpoint_archive_prefix: None,
             object: ObjectStoreConfig::s3(S3ObjectStoreOptions {
                 bucket: "test".to_owned(),
@@ -502,6 +486,7 @@ pub(crate) mod tests {
                 interval: Duration::from_secs(3600),
                 limit: 128,
                 run_immediately: false,
+                read_lease_grace: ObjectGcOptions::default().read_lease_grace,
             },
             history_gc: HistoryGcOptions {
                 interval: Duration::from_secs(3600),
@@ -521,7 +506,7 @@ pub(crate) mod tests {
     #[test]
     fn manual_gc_reports_empty_outcomes() {
         let server = test_server();
-        assert!(server.stats_json().contains("\"metadata_mode\":\"local\""));
+        assert!(server.stats_json().contains("\"ready\":true"));
         let body = server.run_manual_gc(128).unwrap();
         assert!(body.contains("\"object_gc\""));
         assert!(body.contains("\"history_gc\""));

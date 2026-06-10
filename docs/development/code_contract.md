@@ -9,10 +9,9 @@ This repository is the Rust NoKV product line: an AI-training and
 agent-workspace filesystem with Holt-backed metadata and S3-compatible object
 storage.
 
-NoKV accepts breaking internal changes when they reduce ambiguity or remove
-old compatibility paths. Do not add forwarding wrappers, deprecated aliases, or
-dual execution paths unless the PR states the operational need and removal
-condition.
+NoKV accepts breaking internal changes when they reduce ambiguity or remove old
+migration paths. Do not add forwarding wrappers, aliases, or dual execution
+paths unless the PR states the operational need and removal condition.
 
 ## Package Boundaries
 
@@ -20,12 +19,11 @@ condition.
 | --- | --- | --- |
 | `crates/nokv-types/` | Storage-neutral namespace model: mount ids, inode ids, dentry names, inode attrs, body descriptors, record families, and typed watch events. | Import metadata layout, Holt, Raft, object-store clients, FUSE, protobuf, or service packages. |
 | `crates/nokv-protocol/` | Storage-neutral metadata RPC DTOs shared by server and service clients. | Execute metadata commands, own path resolution, import Holt, object-store clients, FUSE, metadata layout, or server/client implementations. |
-| `crates/nokv-meta/` | Metadata schema, Holt-friendly layout, `MetadataCommand`, Holt-backed metastore, in-process metadata service, snapshot retention pins, object-reference GC queue policy, history pruning, and service-level GC workers. | Own provider-specific object behavior, FUSE/kernel cache policy, Python bindings, CSI behavior, or wire protocol compatibility shims. |
-| `crates/nokv-object/` | Object-store boundary, S3-compatible backend, and in-memory test object store for file bodies. | Own namespace metadata, import Holt/FUSE/protobuf, implement metadata transactions, or expose filesystem-directory object storage as a product backend. |
+| `crates/nokv-meta/` | Metadata schema, Holt-friendly layout, `MetadataCommand`, Holt-backed metastore, in-process metadata service, snapshot retention pins, object-reference GC queue policy, history pruning, and service-level GC workers. | Own provider-specific object behavior, FUSE/kernel cache policy, Python bindings, CSI behavior, or wire-protocol migration behavior. |
+| `crates/nokv-object/` | Object-store boundary, S3-compatible backend, batch object reads, local hot-tier object store, tiered data-fabric helpers, soft placement resolution, and in-memory test object store for file bodies. | Own namespace metadata, import Holt/FUSE/protobuf, implement metadata transactions, or expose filesystem-directory object storage as a product backend. |
 | `crates/nokv-client/` | Path-oriented Rust SDK over the metadata service and object backend. | Own metadata layout, bypass `nokv-meta`, expose object-store internals, implement FUSE/kernel cache semantics, depend on `nokv-fuse`, or define metadata wire formats. |
 | `crates/nokv-fuse/` | FUSE low-level frontend, inode mapping, kernel-facing attr conversion, range reads, and close-to-open buffered writes through the metadata client/server boundary. | Resolve paths through the path SDK hot path, own metadata layout, import Holt directly, open a production metadata store, or implement object-provider-specific behavior. |
-| `crates/nokv-server/` | Long-running metadata service process, startup config, background GC ownership, health/status/control HTTP, framed metadata RPC, and future network service boundary. | Own metadata semantics, durable layout, object provider internals, FUSE/kernel cache policy, or hidden compatibility shims. |
-| `crates/nokv-cluster/` | OpenRaft metadata replication boundary, semantic log entries, log positions, durable receipts, checkpoint frontiers, and cluster test harnesses. It may apply committed `MetadataCommand` batches through the storage-neutral `MetadataStore` trait. | Own filesystem semantics, import Holt/FUSE/object/provider code outside tests, define wire compatibility shims, or expose OpenRaft types outside the cluster boundary. |
+| `crates/nokv-server/` | Long-running metadata service process, startup config, background GC ownership, health/status/control HTTP, framed metadata RPC, and future network service boundary. | Own metadata semantics, durable layout, object provider internals, FUSE/kernel cache policy, or hidden migration behavior. |
 | `crates/nokv/` | `nokv` CLI binary, command parsing, local service startup, and CLI wiring across client, FUSE, metadata, and object config. | Own metadata semantics, durable layout, object backend internals, or FUSE filesystem implementation. |
 | `bench/` | System workload harnesses for metadata smoke, MLPerf Storage/DLIO-style generated training reads, checkpoint publish/read, and demo dataset shapes. | Own product APIs, metadata layout, object backend implementation, FUSE/kernel cache policy, or hidden benchmark-only behavior in product crates. |
 
@@ -33,6 +31,7 @@ Planned package owners:
 
 | Package | Owns |
 | --- | --- |
+| `crates/nokv-control/` | Planned shard map, owner leases, shard epochs, routing metadata, and failover coordination. It must not own inode/dentry semantics, chunk manifests, object GC policy, or Holt internals. |
 | `crates/nokv-csi/` | Kubernetes CSI integration and mount lifecycle. |
 | `crates/nokv-python/` | Python SDK/fsspec bindings for training workflows. |
 
@@ -59,6 +58,8 @@ Recommended package layout:
 
 - Keep filesystem semantics above storage engine bindings.
 - Keep object bytes out of metadata values except compact descriptors.
+- Keep local hot-tier placement and cache slots out of metadata values; they
+  are data-path soft state keyed by immutable blocks.
 - Use inode/dentry as canonical truth; path indexes are derived acceleration.
 - Use `MetadataCommand` predicates as the atomicity fence.
 - Do not leak Holt internals into types, object, client, or FUSE.

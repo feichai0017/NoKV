@@ -1,7 +1,7 @@
 use super::*;
 use crate::command::{ReadItem, ScanItem};
 use crate::holtstore::HoltMetadataStore;
-use nokv_object::MemoryObjectStore;
+use nokv_object::{MemoryObjectStore, ObjectBytes};
 use nokv_types::{AdvisoryLockKind, AdvisoryLockRequest};
 use std::sync::Arc;
 
@@ -166,6 +166,41 @@ fn publish_path_artifact<O: ObjectStore>(
     bytes: &[u8],
 ) -> DentryWithAttr {
     let prepared = service.prepare_artifact_create_path(path).unwrap();
+    service
+        .publish_prepared_artifact_session(
+            prepared.clone(),
+            PublishArtifactSession {
+                parent: prepared.parent,
+                name: prepared.name,
+                producer: "unit-test".to_owned(),
+                digest_uri: "sha256:test".to_owned(),
+                content_type: "application/octet-stream".to_owned(),
+                manifest_id: manifest_id.to_owned(),
+                size: bytes.len() as u64,
+                ranges: vec![PublishArtifactRange {
+                    offset: 0,
+                    bytes: bytes.to_vec(),
+                }],
+                mode: 0o644,
+                uid: 1000,
+                gid: 1000,
+            },
+        )
+        .unwrap()
+        .entry
+}
+
+/// Supersede an existing artifact in `parent` (replace -> a fresh generation).
+fn republish_path_artifact<O: ObjectStore>(
+    service: &NoKvFs<HoltMetadataStore, O>,
+    parent: InodeId,
+    name: &str,
+    manifest_id: &str,
+    bytes: &[u8],
+) -> DentryWithAttr {
+    let prepared = service
+        .prepare_artifact_replace(parent, DentryName::new(name.as_bytes().to_vec()).unwrap())
+        .unwrap();
     service
         .publish_prepared_artifact_session(
             prepared.clone(),
@@ -1994,7 +2029,7 @@ fn read_artifact_uses_dentry_projection_body_descriptor() {
 }
 
 #[test]
-fn read_path_plan_uses_dentry_projection_body_descriptor() {
+fn open_path_read_plan_uses_dentry_projection_body_descriptor() {
     let metadata = PurposeTrackingStore::new();
     let service = NoKvFs::new(
         MountId::new(1).unwrap(),
@@ -2011,19 +2046,62 @@ fn read_path_plan_uses_dentry_projection_body_descriptor() {
         .unwrap();
 
     let before = metadata.counts();
-    let plan = service
-        .read_path_plan("/checkpoint.bin", 1, 3, Some(published.attr.generation))
+    let open = service
+        .open_path_read_plan("/checkpoint.bin", 1, 3, Some(published.attr.generation))
         .unwrap();
     let after = metadata.counts();
-    assert_eq!(plan.metadata.attr.inode, published.attr.inode);
-    assert_eq!(plan.plan.output_len, 3);
-    assert_eq!(plan.plan.blocks.len(), 1);
+    assert_eq!(open.metadata.attr.inode, published.attr.inode);
+    assert_eq!(open.plan.output_len, 3);
+    assert_eq!(open.plan.blocks.len(), 1);
     assert_eq!(
         after.user_strong_gets - before.user_strong_gets,
         2,
-        "read_path_plan should read dentry projection and one chunk manifest"
+        "open_path_read_plan should read dentry projection and one chunk manifest"
     );
     assert_eq!(after.write_plan_gets, before.write_plan_gets);
+}
+
+#[test]
+fn open_path_read_plan_returns_zero_write_lease_and_projected_plan() {
+    let metadata = PurposeTrackingStore::new();
+    let service = NoKvFs::new(
+        MountId::new(1).unwrap(),
+        metadata.clone(),
+        MemoryObjectStore::new(),
+    );
+    service.bootstrap_root(0o755, 1000, 1000).unwrap();
+    let published = service
+        .publish_artifact(artifact_request(
+            DentryName::new(b"checkpoint.bin".to_vec()).unwrap(),
+            "checkpoint/body",
+            b"abcdef",
+        ))
+        .unwrap();
+
+    let before_counts = metadata.counts();
+    let before_commits = service.metadata_store_stats().commit_total;
+    let open = service
+        .open_path_read_plan("/checkpoint.bin", 1, 3, Some(published.attr.generation))
+        .unwrap();
+    let after_counts = metadata.counts();
+
+    assert_eq!(open.metadata.attr.inode, published.attr.inode);
+    assert_eq!(open.lease.inode, published.attr.inode);
+    assert_eq!(open.lease.generation, published.attr.generation);
+    assert!(open.lease.read_version >= published.attr.generation);
+    assert_eq!(open.plan.output_len, 3);
+    assert_eq!(open.plan.blocks.len(), 1);
+    assert_eq!(
+        service.metadata_store_stats().commit_total,
+        before_commits,
+        "layout-open must not persist read state"
+    );
+    assert_eq!(
+        after_counts.user_strong_gets - before_counts.user_strong_gets,
+        2,
+        "layout-open should read dentry projection and one chunk manifest"
+    );
+    assert_eq!(after_counts.write_plan_gets, before_counts.write_plan_gets);
 }
 
 #[test]
@@ -2042,6 +2120,7 @@ fn read_file_plan_returns_ranges_without_fetching_objects() {
     assert_eq!(plan.blocks[0].object_offset, 6);
     assert_eq!(plan.blocks[0].len, 6);
     assert_eq!(plan.blocks[0].output_offset, 0);
+    assert!(plan.blocks[0].digest_uri.starts_with("xxh3-64:"));
     assert_eq!(service.object_stats().object_gets, before.object_gets);
 
     let stale = service
@@ -2265,6 +2344,128 @@ fn prepared_artifact_session_uploads_only_dirty_ranges_and_reuses_old_blocks() {
 }
 
 #[test]
+fn prepared_artifact_session_splits_noncontiguous_dirty_blocks() {
+    let service = service();
+    let name = DentryName::new(b"sparse-dirty.bin".to_vec()).unwrap();
+    let published = service
+        .publish_artifact(artifact_request(
+            name.clone(),
+            "sparse-dirty-v1",
+            b"abcdefghijklmnop",
+        ))
+        .unwrap();
+    let prepared = service
+        .prepare_artifact_replace(InodeId::root(), name.clone())
+        .unwrap();
+
+    service
+        .publish_prepared_artifact_session(
+            prepared,
+            PublishArtifactSession {
+                parent: InodeId::root(),
+                name,
+                producer: "unit-test".to_owned(),
+                digest_uri: "unknown".to_owned(),
+                content_type: "application/octet-stream".to_owned(),
+                manifest_id: "sparse-dirty-v2".to_owned(),
+                size: 16,
+                ranges: vec![
+                    PublishArtifactRange {
+                        offset: 2,
+                        bytes: b"XY".to_vec(),
+                    },
+                    PublishArtifactRange {
+                        offset: 10,
+                        bytes: b"UV".to_vec(),
+                    },
+                ],
+                mode: 0o644,
+                uid: 1000,
+                gid: 1000,
+            },
+        )
+        .unwrap();
+
+    assert_eq!(
+        service.read_file(published.attr.inode, 0, 16).unwrap(),
+        b"abXYefghijUVmnop"
+    );
+}
+
+#[test]
+fn prepared_artifact_staged_session_preserves_dirty_slice_overlay() {
+    let service = service();
+    let name = DentryName::new(b"staged-dirty.bin".to_vec()).unwrap();
+    let published = service
+        .publish_artifact(artifact_request(
+            name.clone(),
+            "staged-dirty-v1",
+            b"abcdefghijklmnop",
+        ))
+        .unwrap();
+    let prepared = service
+        .prepare_artifact_replace(InodeId::root(), name.clone())
+        .unwrap();
+    let written = service
+        .stage_prepared_artifact_ranges(
+            &prepared,
+            "staged-dirty-v2",
+            &[
+                PublishArtifactRange {
+                    offset: 2,
+                    bytes: b"XY".to_vec(),
+                },
+                PublishArtifactRange {
+                    offset: 10,
+                    bytes: b"UV".to_vec(),
+                },
+            ],
+            0,
+        )
+        .unwrap();
+    let staged = written.staged_objects().unwrap();
+    let chunks = written.chunk_manifests();
+
+    service
+        .publish_prepared_artifact_staged_session(
+            prepared,
+            PublishArtifactStagedSession {
+                parent: InodeId::root(),
+                name: name.clone(),
+                producer: "unit-test".to_owned(),
+                digest_uri: "unknown".to_owned(),
+                content_type: "application/octet-stream".to_owned(),
+                manifest_id: "staged-dirty-v2".to_owned(),
+                size: 16,
+                chunks,
+                staged,
+                mode: 0o644,
+                uid: 1000,
+                gid: 1000,
+            },
+        )
+        .unwrap();
+
+    assert_eq!(
+        service.read_file(published.attr.inode, 0, 16).unwrap(),
+        b"abXYefghijUVmnop"
+    );
+    let metadata = service.lookup_path("/staged-dirty.bin").unwrap().unwrap();
+    let body = metadata.body.as_ref().unwrap();
+    let manifests = service
+        .chunk_manifests_for_body_at_version(
+            published.attr.inode,
+            body,
+            service.read_version().unwrap(),
+            ReadPurpose::UserStrong,
+        )
+        .unwrap();
+    assert_eq!(manifests[0].slices.len(), 3);
+    assert_eq!(manifests[0].slices[1].logical_offset, 2);
+    assert_eq!(manifests[0].slices[2].logical_offset, 10);
+}
+
+#[test]
 fn replace_artifact_preserves_inode_and_returns_old_body() {
     let service = service();
     let name = DentryName::new(b"checkpoint.bin".to_vec()).unwrap();
@@ -2442,6 +2643,43 @@ fn remove_file_queues_old_body_for_object_cleanup() {
         service.cleanup_pending_objects(100).unwrap(),
         PendingObjectCleanupOutcome::default()
     );
+}
+
+#[test]
+fn read_lease_grace_blocks_recent_object_gc_records() {
+    let (service, objects) = service_with_objects();
+    let name = DentryName::new(b"checkpoint.bin".to_vec()).unwrap();
+    let first = service
+        .publish_artifact(artifact_request(name.clone(), "checkpoint/old", b"old"))
+        .unwrap();
+    let old_body = first.body.clone().unwrap();
+    let old_object = block_key(first.attr.inode, old_body.generation, 0, 0);
+    let replaced = service
+        .replace_artifact(artifact_request(
+            name.clone(),
+            "checkpoint/new",
+            b"new-body",
+        ))
+        .unwrap();
+    let new_body = replaced.entry.body.clone().unwrap();
+    let new_object = block_key(replaced.entry.attr.inode, new_body.generation, 0, 0);
+
+    let blocked = service
+        .cleanup_pending_objects_with_grace(100, std::time::Duration::from_secs(3_600))
+        .unwrap();
+    assert_eq!(blocked.scanned, 1);
+    assert_eq!(blocked.blocked_by_snapshots, 0);
+    assert_eq!(blocked.blocked_by_read_leases, 1);
+    assert_eq!(blocked.attempted, 0);
+    assert_eq!(blocked.records_removed, 0);
+    assert!(objects.head(&old_object).unwrap().is_some());
+    assert!(objects.head(&new_object).unwrap().is_some());
+
+    let cleanup = service.cleanup_pending_objects(100).unwrap();
+    assert_eq!(cleanup.deleted, 1);
+    assert_eq!(cleanup.records_removed, 1);
+    assert!(objects.head(&old_object).unwrap().is_none());
+    assert!(objects.head(&new_object).unwrap().is_some());
 }
 
 #[test]
@@ -3764,7 +4002,11 @@ impl FaultObjectStore {
 }
 
 impl ObjectStore for FaultObjectStore {
-    fn put(&self, key: &ObjectKey, bytes: &[u8]) -> Result<ObjectInfo, ObjectError> {
+    fn put(
+        &self,
+        key: &ObjectKey,
+        bytes: impl Into<ObjectBytes>,
+    ) -> Result<ObjectInfo, ObjectError> {
         if let Some(substring) = self.fail_put_substring.lock().unwrap().clone() {
             if key.as_str().contains(&substring) {
                 self.injected_put_failures.fetch_add(1, Ordering::Relaxed);
@@ -4160,4 +4402,113 @@ fn publish_checkpoint_is_atomic_multi_shard_and_range_readable() {
     // CoW version pin: snapshot the checkpoint dir = a parallelism-agnostic version.
     let pin = service.snapshot_subtree(ckpt.attr.inode).unwrap();
     assert!(service.snapshot_pin(pin.snapshot_id).unwrap().is_some());
+}
+
+#[test]
+fn open_read_is_zero_write_and_generation_cas_catches_supersede() {
+    let (service, _objects) = service_with_objects();
+    let data = service.create_dir_path("/data", 0o755, 1000, 1000).unwrap();
+    let v1 = publish_path_artifact(&service, "/data/ckpt.bin", "ckpt", b"AAAA");
+
+    // open_read writes ZERO metadata and captures the current (generation, version).
+    let before = service.metadata_store_stats().commit_total;
+    let lease = service.open_read(v1.attr.inode).unwrap();
+    assert_eq!(
+        service.metadata_store_stats().commit_total,
+        before,
+        "read-mode open must create zero metadata state"
+    );
+    assert_eq!(lease.inode, v1.attr.inode);
+    assert_eq!(lease.generation, v1.attr.generation);
+
+    // The leased generation is the reshard-on-read substrate: an arbitrary byte
+    // range read against it succeeds (a differently-parallelized consumer's read).
+    let plan = service
+        .read_file_plan(lease.inode, lease.generation, 1, 2)
+        .unwrap();
+    assert_eq!(plan.output_len, 2);
+
+    // Supersede the artifact (immutable CoW rewrite -> a new generation).
+    let v2 = republish_path_artifact(&service, data.attr.inode, "ckpt.bin", "ckpt", b"BBBBBB");
+    assert_ne!(v2.attr.generation, v1.attr.generation);
+
+    // The stale lease's generation no longer matches the live attr: the CAS in
+    // read_file_plan fails fast instead of returning stale/reclaimed bytes.
+    assert!(matches!(
+        service.read_file_plan(lease.inode, lease.generation, 0, 4),
+        Err(MetadError::StaleBodyGeneration { .. })
+    ));
+    // open_read_expecting(old gen) rejects too; a fresh open observes the new gen.
+    assert!(matches!(
+        service.open_read_expecting(v1.attr.inode, Some(v1.attr.generation)),
+        Err(MetadError::StaleBodyGeneration { .. })
+    ));
+    let lease2 = service.open_read(v1.attr.inode).unwrap();
+    assert_eq!(lease2.generation, v2.attr.generation);
+    assert!(lease2.read_version >= lease.read_version);
+}
+
+/// Externally persist a durable allocator record (simulating a control-plane
+/// epoch bump or another incarnation writing the System record).
+fn commit_allocator_record(
+    service: &NoKvFs<HoltMetadataStore, MemoryObjectStore>,
+    version: u64,
+    next_inode: u64,
+    epoch: u64,
+) {
+    let commit_version = Version::new(version).unwrap();
+    let key = allocator_key(MountId::new(1).unwrap());
+    service
+        .commit_metadata(MetadataCommand {
+            request_id: request_id(
+                b"test-alloc-epoch",
+                MountId::new(1).unwrap(),
+                InodeId::root(),
+                commit_version,
+            ),
+            kind: CommandKind::ReserveAllocator,
+            read_version: predecessor(commit_version).unwrap(),
+            commit_version,
+            primary_family: RecordFamily::System,
+            primary_key: key.clone(),
+            predicates: Vec::new(),
+            mutations: vec![Mutation {
+                family: RecordFamily::System,
+                key,
+                op: MutationOp::Put,
+                value: Some(Value(encode_allocator_state(version, next_inode, epoch))),
+            }],
+            watch: Vec::new(),
+        })
+        .unwrap();
+}
+
+#[test]
+fn allocator_epoch_recovers_monotonically_via_fetch_max() {
+    let service = service();
+    assert_eq!(
+        service.allocator_epoch(),
+        1,
+        "a single owner starts at epoch 1"
+    );
+
+    // A control plane bumps the durable epoch (ownership transfer / new incarnation).
+    commit_allocator_record(&service, 100, 500, 5);
+    service.refresh_allocator_state().unwrap();
+    assert_eq!(
+        service.allocator_epoch(),
+        5,
+        "refresh folds in the higher durable epoch"
+    );
+
+    // A record carrying a LOWER epoch (a stale incarnation) must never lower it:
+    // recovery is fetch_max, so the allocation-authority epoch never regresses —
+    // a stale owner can't re-persist itself as current.
+    commit_allocator_record(&service, 200, 600, 2);
+    service.refresh_allocator_state().unwrap();
+    assert_eq!(
+        service.allocator_epoch(),
+        5,
+        "epoch must be monotonic across refresh (fetch_max, not store)"
+    );
 }

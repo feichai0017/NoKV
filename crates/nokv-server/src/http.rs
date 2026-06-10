@@ -290,7 +290,7 @@ mod tests {
         let server = test_server();
         let response = handle_parts(&server, "POST /checkpoint HTTP/1.1", &[]);
         assert_eq!(response.status, "200 OK");
-        assert!(response.body.contains("\"metadata_mode\":\"local\""));
+        assert!(response.body.contains("\"checkpointed\":true"));
     }
 
     #[test]

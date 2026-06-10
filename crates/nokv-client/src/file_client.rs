@@ -5,10 +5,10 @@ use std::sync::{Arc, Mutex};
 
 use nokv_meta::{DentryWithAttr, ObjectTransferStats, RenameReplaceResult};
 use nokv_object::{
-    ChunkStore, ChunkWriteOptions, ChunkedWrite, ObjectBlockCache, ObjectError,
-    ObjectPrefetchOptions, ObjectPrefetchRequest, ObjectPrefetcher, ObjectReadPlan,
-    ObjectReadPlanCache, ObjectReadPlanKey, ObjectStore, StagedObjectSet, DEFAULT_BLOCK_SIZE,
-    DEFAULT_CHUNK_SIZE,
+    BlockReadOptions, ChunkStore, ChunkWriteOptions, ChunkedWrite, DataFabricReadStats,
+    LayoutReadExecutor, ObjectBlockCache, ObjectError, ObjectPrefetchOptions,
+    ObjectPrefetchRequest, ObjectPrefetcher, ObjectReadPlan, ObjectReadPlanCache,
+    ObjectReadPlanKey, ObjectStore, StagedObjectSet, DEFAULT_BLOCK_SIZE, DEFAULT_CHUNK_SIZE,
 };
 use nokv_types::{BodyDescriptor, ChunkManifest, FileType, InodeId};
 
@@ -39,6 +39,7 @@ pub struct NoKvFsClient<O> {
     read_plan_cache_misses: AtomicU64,
     manifest_chunks: AtomicU64,
     manifest_blocks: AtomicU64,
+    data_fabric_stats: Mutex<DataFabricReadStats>,
 }
 
 impl<O> NoKvFsClient<O>
@@ -80,6 +81,7 @@ where
             read_plan_cache_misses: AtomicU64::new(0),
             manifest_chunks: AtomicU64::new(0),
             manifest_blocks: AtomicU64::new(0),
+            data_fabric_stats: Mutex::new(DataFabricReadStats::default()),
         }
     }
 
@@ -134,7 +136,6 @@ where
             read_plan_cache_misses: self.read_plan_cache_misses.load(Ordering::Relaxed),
             object_writeback_enqueued: 0,
             object_writeback_inline: 0,
-            object_writeback_fallback: 0,
             object_writeback_completed: 0,
             object_writeback_failed: 0,
             object_writeback_staged_bytes: 0,
@@ -143,9 +144,20 @@ where
             object_writeback_queue_max_wait_ns: 0,
             object_writeback_upload_ns: 0,
             object_writeback_upload_max_ns: 0,
+            object_writeback_collect_ns: 0,
+            object_writeback_digest_ns: 0,
+            object_writeback_store_put_ns: 0,
+            object_writeback_cache_put_ns: 0,
             manifest_chunks: self.manifest_chunks.load(Ordering::Relaxed),
             manifest_blocks: self.manifest_blocks.load(Ordering::Relaxed),
         }
+    }
+
+    pub fn data_fabric_stats(&self) -> Result<DataFabricReadStats, ClientError> {
+        self.data_fabric_stats
+            .lock()
+            .map(|stats| *stats)
+            .map_err(|err| ClientError::Protocol(format!("data fabric stats lock poisoned: {err}")))
     }
 
     pub fn cat(&self, path: &str) -> Result<Vec<u8>, ClientError> {
@@ -186,23 +198,22 @@ where
         len: usize,
         expected_generation: Option<u64>,
     ) -> Result<NamespaceRead, ClientError> {
-        let (metadata, plan) =
-            self.metadata
-                .read_path_plan(path, offset, len, expected_generation)?;
-        let generation = metadata
-            .body
-            .as_ref()
-            .map(|body| body.generation)
-            .unwrap_or(metadata.attr.generation);
+        let open = self
+            .metadata
+            .open_path_read_plan(path, offset, len, expected_generation)?;
+        let generation = open.lease.generation;
         let bytes = self.read_planned_object_blocks(
             &read_pipeline_key(path, generation),
-            metadata.attr.inode,
+            open.metadata.attr.inode,
             generation,
-            metadata.attr.size,
+            open.metadata.attr.size,
             offset,
-            &plan,
+            &open.plan,
         )?;
-        Ok(NamespaceRead { metadata, bytes })
+        Ok(NamespaceRead {
+            metadata: open.metadata,
+            bytes,
+        })
     }
 
     fn read_entry(
@@ -256,15 +267,14 @@ where
             })?;
             pipelines.take(pipeline_key)
         };
-        let outcome = pipeline
-            .read_blocks(
-                &self.objects,
-                cache,
-                file_size,
-                offset,
-                plan.output_len,
-                &plan.blocks,
-            )
+        let executor = LayoutReadExecutor::new(self.objects.as_ref());
+        let read_options = if self.block_cache_enabled {
+            BlockReadOptions::default().with_read_coordinator(self.prefetcher.read_coordinator())
+        } else {
+            BlockReadOptions::default()
+        };
+        let outcome = executor
+            .read_plan_with_options(&mut pipeline, cache, file_size, offset, plan, read_options)
             .map_err(ClientError::Object)?;
         {
             let mut pipelines = self.read_pipelines.lock().map_err(|err| {
@@ -275,20 +285,39 @@ where
         if let Some(hint) = outcome.readahead {
             self.prefetch_read_blocks(inode, generation, hint.offset, hint.len);
         }
-        let blocks = outcome.blocks;
+        if self.block_cache_enabled {
+            if let Some(request) = outcome.cache_warmup {
+                let _ = self.prefetcher.submit(request);
+            }
+        }
+        let stats = outcome.stats;
+        self.record_object_read_stats(stats)?;
+        Ok(outcome.bytes)
+    }
+
+    fn record_object_read_stats(&self, stats: DataFabricReadStats) -> Result<(), ClientError> {
+        self.record_data_fabric_stats(stats)?;
         self.object_gets
-            .fetch_add(blocks.object_gets as u64, Ordering::Relaxed);
+            .fetch_add(stats.object_gets, Ordering::Relaxed);
         self.object_get_bytes
-            .fetch_add(blocks.object_get_bytes, Ordering::Relaxed);
+            .fetch_add(stats.object_get_bytes, Ordering::Relaxed);
         self.coalesced_gets
-            .fetch_add(blocks.coalesced_gets as u64, Ordering::Relaxed);
+            .fetch_add(stats.coalesced_ranges, Ordering::Relaxed);
         self.coalesced_get_bytes
-            .fetch_add(blocks.coalesced_get_bytes, Ordering::Relaxed);
+            .fetch_add(stats.coalesced_range_bytes, Ordering::Relaxed);
         self.cache_hits
-            .fetch_add(blocks.cache_hits as u64, Ordering::Relaxed);
+            .fetch_add(stats.cache_hits, Ordering::Relaxed);
         self.cache_hit_bytes
-            .fetch_add(blocks.cache_hit_bytes, Ordering::Relaxed);
-        Ok(blocks.bytes)
+            .fetch_add(stats.cache_hit_bytes, Ordering::Relaxed);
+        Ok(())
+    }
+
+    fn record_data_fabric_stats(&self, update: DataFabricReadStats) -> Result<(), ClientError> {
+        let mut stats = self.data_fabric_stats.lock().map_err(|err| {
+            ClientError::Protocol(format!("data fabric stats lock poisoned: {err}"))
+        })?;
+        stats.saturating_add_assign(update);
+        Ok(())
     }
 
     fn prefetch_read_blocks(&self, inode: InodeId, generation: u64, offset: u64, len: usize) {
@@ -318,7 +347,11 @@ where
             return Ok(plan);
         }
         self.read_plan_cache_misses.fetch_add(1, Ordering::Relaxed);
-        self.metadata.read_body_plan(inode, generation, offset, len)
+        let plan = self
+            .metadata
+            .read_body_plan(inode, generation, offset, len)?;
+        self.cache_read_body_plan(key, plan.clone())?;
+        Ok(plan)
     }
 
     fn cached_read_body_plan_for_key(
@@ -558,4 +591,60 @@ fn bounded_read_len(available: u64, requested: usize) -> Result<usize, ClientErr
         .map_err(|_| ClientError::Protocol("read length exceeds u64".to_owned()))?;
     let len = available.min(requested);
     usize::try_from(len).map_err(|_| ClientError::Protocol("read length exceeds usize".to_owned()))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::Read;
+    use std::net::{SocketAddr, TcpListener};
+    use std::thread;
+
+    use nokv_object::MemoryObjectStore;
+    use nokv_protocol::{decode_request, encode_envelope, MetadataRpcEnvelope, MetadataRpcRequest};
+
+    use crate::framed::{read_frame, write_frame, FRAMED_RPC_MAGIC};
+
+    use super::*;
+
+    fn serve_body_read_plans(bodies: Vec<Vec<u8>>) -> SocketAddr {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut magic = [0_u8; FRAMED_RPC_MAGIC.len()];
+            stream.read_exact(&mut magic).unwrap();
+            assert_eq!(&magic, FRAMED_RPC_MAGIC);
+            for body in bodies {
+                let (request_id, flags, request) = read_frame(&mut stream).unwrap();
+                let request = decode_request(&request).expect("framed request is metadata rpc");
+                assert!(matches!(request, MetadataRpcRequest::ReadBodyPlan { .. }));
+                write_frame(&mut stream, request_id, flags, &body).unwrap();
+            }
+        });
+        addr
+    }
+
+    fn response_body(json: &str) -> Vec<u8> {
+        let envelope: MetadataRpcEnvelope = serde_json::from_str(json).unwrap();
+        encode_envelope(&envelope).unwrap()
+    }
+
+    #[test]
+    fn file_client_caches_body_read_plan_after_miss() {
+        let read_plan = response_body(
+            r#"{"ok":true,"result":{"type":"body_read_plan","plan":{"output_len":6,"blocks":[{"object_key":"blocks/demo","digest_uri":"sha256:test","object_offset":0,"object_len":6,"len":6,"output_offset":0}]}}}"#,
+        );
+        let addr = serve_body_read_plans(vec![read_plan.clone(), read_plan]);
+        let client = NoKvFsClient::connect(addr, MemoryObjectStore::new());
+        let inode = InodeId::new(42).unwrap();
+
+        let first = client.cached_read_body_plan(inode, 7, 0, 6).unwrap();
+        let second = client.cached_read_body_plan(inode, 7, 0, 6).unwrap();
+
+        assert_eq!(first.output_len, 6);
+        assert_eq!(first, second);
+        let stats = client.object_stats();
+        assert_eq!(stats.read_plan_cache_misses, 1);
+        assert_eq!(stats.read_plan_cache_hits, 1);
+    }
 }

@@ -1,16 +1,14 @@
 use nokv_meta::{SubtreeDelta, SubtreeDeltaKind, UpdateAttr, XattrSetMode};
-use nokv_object::{
-    chunk_manifest_from_stored_chunk, ObjectReadBlock, ObjectReadPlan, StagedObjectSet, StoredChunk,
-};
+use nokv_object::{ObjectReadBlock, ObjectReadPlan, StagedObjectSet};
 use nokv_protocol::{
     WireAdvisoryLock, WireBodyDescriptor, WireBodyReadPlan, WireChunkManifest, WireDentryWithAttr,
-    WireMetadataError, WireObjectReadBlock, WirePathMetadata, WirePreparedArtifact,
+    WireMetadataError, WireObjectReadBlock, WirePathMetadata, WirePreparedArtifact, WireReadLease,
     WireStagedObject, WireStagedObjectSet, WireSubtreeDelta, WireSubtreeDeltaKind, WireUpdateAttr,
     WireXattrSetMode,
 };
 use nokv_types::{
     parse_absolute_path, AdvisoryLock, BodyDescriptor, ChunkManifest, DentryName, InodeId,
-    PathMetadata, SnapshotPin,
+    PathMetadata, ReadLease, SnapshotPin,
 };
 
 use crate::service::ClientPreparedArtifact;
@@ -113,10 +111,6 @@ pub(crate) fn chunk_to_wire(chunk: &ChunkManifest) -> WireChunkManifest {
     WireChunkManifest::from_chunk_manifest(chunk)
 }
 
-pub(crate) fn stored_chunk_to_wire(chunk: &StoredChunk) -> WireChunkManifest {
-    WireChunkManifest::from_chunk_manifest(&chunk_manifest_from_stored_chunk(chunk))
-}
-
 pub(crate) fn staged_object_set_to_wire(staged: &StagedObjectSet) -> WireStagedObjectSet {
     WireStagedObjectSet {
         objects: staged
@@ -145,7 +139,9 @@ pub(crate) fn wire_body_read_plan(plan: WireBodyReadPlan) -> Result<ObjectReadPl
 fn wire_object_read_block(block: WireObjectReadBlock) -> Result<ObjectReadBlock, ClientError> {
     Ok(ObjectReadBlock {
         object_key: block.object_key,
+        digest_uri: block.digest_uri,
         object_offset: block.object_offset,
+        object_len: block.object_len,
         len: usize::try_from(block.len).map_err(|_| {
             ClientError::Protocol("body read block length exceeds platform limit".to_owned())
         })?,
@@ -159,6 +155,10 @@ pub(crate) fn wire_snapshot(
     snapshot: nokv_protocol::WireSnapshotPin,
 ) -> Result<SnapshotPin, ClientError> {
     snapshot.into_snapshot_pin().map_err(protocol_error)
+}
+
+pub(crate) fn wire_read_lease(lease: WireReadLease) -> Result<ReadLease, ClientError> {
+    lease.into_read_lease().map_err(protocol_error)
 }
 
 pub(crate) fn subtree_delta(delta: WireSubtreeDelta) -> SubtreeDelta {

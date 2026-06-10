@@ -96,7 +96,8 @@ where
 
         // Object-first: write the checkpoint image before anything references it.
         let object_key = ObjectKey::new(checkpoint_key.clone())?;
-        self.objects.put(&object_key, &image)?;
+        let image_size = image.len() as u64;
+        self.objects.put(&object_key, image)?;
 
         // Compute the retained window; everything older than keep_last is pruned.
         let mut recent = prior.map(|m| m.recent).unwrap_or_default();
@@ -111,13 +112,13 @@ where
             seq: next_seq,
             current: checkpoint_key.clone(),
             version: commit_version,
-            size: image.len() as u64,
+            size: image_size,
             recent,
         };
         let manifest_object = ObjectKey::new(manifest_key)?;
         self.objects.put(
             &manifest_object,
-            serialize_archive_manifest(&manifest).as_bytes(),
+            serialize_archive_manifest(&manifest).into_bytes(),
         )?;
 
         // Retention deletes happen only after the manifest stops referencing
@@ -133,7 +134,7 @@ where
 
         Ok(MetadataBackupOutcome {
             checkpoint_key,
-            image_bytes: image.len() as u64,
+            image_bytes: image_size,
             commit_version,
             pruned,
         })
@@ -237,8 +238,11 @@ fn parse_archive_manifest(text: &str) -> Result<ArchiveManifest, MetadError> {
             "version" => manifest.version = parse_u64(value)?,
             "size" => manifest.size = parse_u64(value)?,
             "recent" => manifest.recent.push(value.to_owned()),
-            // Forward-compatible: ignore tags a newer writer may add.
-            _ => {}
+            _ => {
+                return Err(MetadError::Codec(format!(
+                    "archive manifest has unknown tag: {tag}"
+                )));
+            }
         }
     }
     if !saw_current || manifest.current.is_empty() {
@@ -253,4 +257,22 @@ fn parse_u64(value: &str) -> Result<u64, MetadError> {
     value
         .parse::<u64>()
         .map_err(|_| MetadError::Codec(format!("archive manifest has invalid number: {value}")))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn archive_manifest_rejects_unknown_tags() {
+        let err = parse_archive_manifest(
+            "nokv-metadata-archive\t1\nseq\t1\ncurrent\tmeta/ckpt/1.image\nversion\t2\nsize\t3\nextra\t4\n",
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            err,
+            MetadError::Codec(message) if message == "archive manifest has unknown tag: extra"
+        ));
+    }
 }

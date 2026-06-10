@@ -15,7 +15,18 @@ where
             .fetch_max(allocator.next_inode, Ordering::Relaxed);
         self.reserved_next_inode
             .fetch_max(allocator.next_inode, Ordering::Relaxed);
+        // Epoch is monotonic: a concurrent refresh that reads an older record
+        // must never lower it, or an in-flight reservation could re-persist a
+        // stale epoch. fetch_max preserves restart/refresh monotonicity.
+        self.epoch.fetch_max(allocator.epoch, Ordering::Relaxed);
         Ok(())
+    }
+
+    /// The identity of this node's allocation authority. `1` for a single owner;
+    /// a control plane bumps it on inode-range ownership transfer so a stale
+    /// owner can be fenced (see [`AllocatorState::epoch`]).
+    pub fn allocator_epoch(&self) -> u64 {
+        self.epoch.load(Ordering::Relaxed)
     }
 
     pub(super) fn ensure_allocator_reservation(
@@ -77,6 +88,7 @@ where
                     value: Some(Value(encode_allocator_state(
                         reserved_version,
                         reserved_next_inode,
+                        self.epoch.load(Ordering::Relaxed),
                     ))),
                 }],
                 watch: Vec::new(),

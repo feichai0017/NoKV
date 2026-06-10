@@ -28,8 +28,8 @@ pub use service::{
     BodyReadPlan, CheckpointHandle, CheckpointShard, CloneHandle, CreateInDirPathBatch,
     CreatedPreparedArtifact, DanglingBlock, DentryWithAttr, FsckReport, MetadError,
     MetadataArchiveConfig, MetadataBackupOutcome, MetadataRestoreOutcome, MetadataServiceStats,
-    NoKvFs, ObjectTransferStats, PendingObjectCleanupOutcome, PreparedArtifact, PublishArtifact,
-    PublishArtifactRange, PublishArtifactSession, PublishArtifactStagedSession, ReadDirPlusPage,
-    RenameReplaceResult, SubtreeDelta, SubtreeDeltaKind, UpdateAttr, XattrSetMode,
+    NoKvFs, ObjectTransferStats, OpenPathReadPlan, PendingObjectCleanupOutcome, PreparedArtifact,
+    PublishArtifact, PublishArtifactRange, PublishArtifactSession, PublishArtifactStagedSession,
+    ReadDirPlusPage, RenameReplaceResult, SubtreeDelta, SubtreeDeltaKind, UpdateAttr, XattrSetMode,
     DEFAULT_SNAPSHOT_LEASE_MS,
 };

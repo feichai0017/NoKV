@@ -4,25 +4,24 @@ use std::sync::{Arc, Mutex};
 
 use nokv_client::{ClientError, ClientPreparedArtifact, MetadataClient};
 use nokv_meta::{
-    DentryWithAttr, MetadError, PublishArtifactRange, PublishArtifactStagedSession,
-    ReadDirPlusPage, RenameReplaceResult, UpdateAttr, XattrSetMode,
+    DentryWithAttr, MetadError, PublishArtifactStagedSession, ReadDirPlusPage, RenameReplaceResult,
+    UpdateAttr, XattrSetMode,
 };
 use nokv_object::{
-    chunk_manifests_from_stored_chunks, plan_chunk_manifest_reads, put_chunked_ranges_parallel,
-    BlockCache, ChunkStore, ChunkWriteOptions, ChunkWriteRange, ChunkedWrite, FileReadPipeline,
-    FileWritePipeline, ObjectBlockCache, ObjectError, ObjectPrefetchOptions, ObjectPrefetchRequest,
-    ObjectPrefetcher, ObjectReadBlock, ObjectReadPlan, ObjectReadPlanCache, ObjectReadPlanKey,
-    ObjectStore, ObjectWritebackOptions, ObjectWritebackRequest, ObjectWritebackUploader,
-    PendingChunkedWrite, StoredChunk, WritebackCache, WritebackCacheOptions, WritebackUploadRange,
-    DEFAULT_BLOCK_SIZE, DEFAULT_CHUNK_SIZE,
+    plan_chunk_manifest_reads, put_chunked_ranges_parallel, BlockCache, BlockReadOptions,
+    BlockReadOutcome, ChunkStore, ChunkWriteOptions, ChunkWriteRange, ChunkedWrite,
+    FileReadPipeline, FileReadRequest, FileWritePipeline, ObjectBlockCache, ObjectError,
+    ObjectPrefetchOptions, ObjectPrefetchRequest, ObjectPrefetcher, ObjectReadBlock,
+    ObjectReadPlan, ObjectReadPlanCache, ObjectReadPlanKey, ObjectStore, ObjectWritebackOptions,
+    ObjectWritebackRequest, ObjectWritebackUploader, PendingChunkedWrite, WritebackCache,
+    WritebackCacheOptions, WritebackUploadRange, DEFAULT_BLOCK_SIZE, DEFAULT_CHUNK_SIZE,
 };
 use nokv_types::{
-    AdvisoryLock, AdvisoryLockRequest, DentryName, InodeAttr, InodeId, SpecialNodeSpec,
-    WatchCursor, WatchRecord,
+    AdvisoryLock, AdvisoryLockRequest, ChunkManifest, DentryName, InodeAttr, InodeId,
+    SpecialNodeSpec, WatchCursor, WatchRecord,
 };
 
-use crate::filesystem::FuseObjectPipelineStats;
-use crate::filesystem::FuseOptions;
+use crate::filesystem::{FuseObjectPipelineStats, FuseOptions, PendingBufferedRange};
 
 pub(crate) type FuseBackendResult<T> = Result<T, FuseBackendError>;
 
@@ -105,25 +104,13 @@ pub(crate) trait FuseBackend: Send + Sync + 'static {
         new_name: DentryName,
     ) -> FuseBackendResult<RenameReplaceResult>;
     fn read_file(&self, inode: InodeId, offset: u64, len: usize) -> FuseBackendResult<Vec<u8>>;
-    fn read_file_with_pipeline(
-        &self,
-        inode: InodeId,
-        offset: u64,
-        len: usize,
-        pipeline: &mut FileReadPipeline,
-    ) -> FuseBackendResult<Vec<u8>> {
-        let _ = pipeline;
-        self.read_file(inode, offset, len)
-    }
     fn read_file_with_known_attr_pipeline(
         &self,
         attr: &InodeAttr,
         offset: u64,
         len: usize,
         pipeline: &mut FileReadPipeline,
-    ) -> FuseBackendResult<Vec<u8>> {
-        self.read_file_with_pipeline(attr.inode, offset, len, pipeline)
-    }
+    ) -> FuseBackendResult<Vec<u8>>;
     fn read_file_at_snapshot(
         &self,
         snapshot_id: u64,
@@ -221,23 +208,13 @@ pub(crate) trait FuseBackend: Send + Sync + 'static {
         prepared: &Self::Prepared,
         manifest_id: &str,
     ) -> FuseBackendResult<FileWritePipeline>;
-    fn stage_prepared_artifact_ranges(
+    fn stage_prepared_artifact_shared_ranges_async(
         &self,
         prepared: &Self::Prepared,
         manifest_id: &str,
-        ranges: &[PublishArtifactRange],
+        ranges: &[PendingBufferedRange],
         block_index_base: u64,
-    ) -> FuseBackendResult<ChunkedWrite>;
-    fn stage_prepared_artifact_ranges_async(
-        &self,
-        prepared: &Self::Prepared,
-        manifest_id: &str,
-        ranges: &[PublishArtifactRange],
-        block_index_base: u64,
-    ) -> FuseBackendResult<PendingChunkedWrite> {
-        self.stage_prepared_artifact_ranges(prepared, manifest_id, ranges, block_index_base)
-            .map(|written| PendingChunkedWrite::ready(Ok(written)))
-    }
+    ) -> FuseBackendResult<PendingChunkedWrite>;
     fn cleanup_staged_objects(
         &self,
         staged: &nokv_object::StagedObjectSet,
@@ -264,6 +241,16 @@ pub(crate) struct ClientFuseBackend<O> {
     read_plan_cache: Mutex<ObjectReadPlanCache>,
     read_plan_cache_hits: AtomicU64,
     read_plan_cache_misses: AtomicU64,
+    foreground_object_gets: AtomicU64,
+    foreground_object_get_bytes: AtomicU64,
+    foreground_coalesced_gets: AtomicU64,
+    foreground_coalesced_get_bytes: AtomicU64,
+    foreground_cache_hits: AtomicU64,
+    foreground_cache_hit_bytes: AtomicU64,
+    foreground_block_cache_hits: AtomicU64,
+    foreground_block_cache_hit_bytes: AtomicU64,
+    foreground_read_window_hits: AtomicU64,
+    foreground_read_window_hit_bytes: AtomicU64,
     prefetcher: Option<ObjectPrefetcher<Arc<O>>>,
     writeback_cache: Option<WritebackCache>,
     writeback_uploader: Option<ObjectWritebackUploader<Arc<O>>>,
@@ -293,7 +280,7 @@ where
             None
         };
         let writeback = &options.writeback;
-        let writeback_cache = if writeback.enabled {
+        let writeback_cache = if writeback.cache_enabled {
             Some(WritebackCache::new(WritebackCacheOptions {
                 root: writeback.root.clone(),
                 max_bytes: writeback.max_bytes,
@@ -302,17 +289,16 @@ where
         } else {
             None
         };
-        let writeback_uploader = writeback_cache.as_ref().map(|cache| {
-            ObjectWritebackUploader::new(
-                Arc::clone(&objects),
-                cache.clone(),
-                block_cache.clone(),
-                ObjectWritebackOptions {
-                    queue_capacity: writeback.queue_capacity.max(1),
-                    workers: writeback.workers.max(1),
-                    upload_workers_per_request: writeback.upload_workers_per_request.max(1),
-                },
-            )
+        let writeback_options = ObjectWritebackOptions {
+            queue_capacity: writeback.queue_capacity.max(1),
+            workers: writeback.workers.max(1),
+            upload_workers_per_request: writeback.upload_workers_per_request.max(1),
+        };
+        let writeback_uploader = Some(match writeback_cache.clone() {
+            Some(cache) => {
+                ObjectWritebackUploader::new(Arc::clone(&objects), cache, writeback_options)
+            }
+            None => ObjectWritebackUploader::direct(Arc::clone(&objects), writeback_options),
         });
         Ok(Self {
             metadata,
@@ -321,6 +307,16 @@ where
             read_plan_cache: Mutex::new(ObjectReadPlanCache::new(4096)),
             read_plan_cache_hits: AtomicU64::new(0),
             read_plan_cache_misses: AtomicU64::new(0),
+            foreground_object_gets: AtomicU64::new(0),
+            foreground_object_get_bytes: AtomicU64::new(0),
+            foreground_coalesced_gets: AtomicU64::new(0),
+            foreground_coalesced_get_bytes: AtomicU64::new(0),
+            foreground_cache_hits: AtomicU64::new(0),
+            foreground_cache_hit_bytes: AtomicU64::new(0),
+            foreground_block_cache_hits: AtomicU64::new(0),
+            foreground_block_cache_hit_bytes: AtomicU64::new(0),
+            foreground_read_window_hits: AtomicU64::new(0),
+            foreground_read_window_hit_bytes: AtomicU64::new(0),
             prefetcher,
             writeback_cache,
             writeback_uploader,
@@ -341,6 +337,41 @@ where
         let key = ObjectReadPlanKey::new(inode.get(), generation, offset, len);
         let _ = self.cache_read_body_plan(key, plan.clone());
         let _ = prefetcher.submit(ObjectPrefetchRequest::new(plan.output_len, plan.blocks));
+    }
+
+    fn read_options(&self) -> BlockReadOptions {
+        self.prefetcher
+            .as_ref()
+            .map(|prefetcher| {
+                BlockReadOptions::default().with_read_coordinator(prefetcher.read_coordinator())
+            })
+            .unwrap_or_default()
+    }
+
+    fn record_foreground_object_read(&self, read: &BlockReadOutcome) {
+        self.foreground_object_gets
+            .fetch_add(read.object_gets as u64, Ordering::Relaxed);
+        self.foreground_object_get_bytes
+            .fetch_add(read.object_get_bytes, Ordering::Relaxed);
+        self.foreground_coalesced_gets
+            .fetch_add(read.coalesced_gets as u64, Ordering::Relaxed);
+        self.foreground_coalesced_get_bytes
+            .fetch_add(read.coalesced_get_bytes, Ordering::Relaxed);
+        self.foreground_cache_hits
+            .fetch_add(read.cache_hits as u64, Ordering::Relaxed);
+        self.foreground_cache_hit_bytes
+            .fetch_add(read.cache_hit_bytes, Ordering::Relaxed);
+        if self.block_cache.is_some() {
+            self.foreground_block_cache_hits
+                .fetch_add(read.cache_hits as u64, Ordering::Relaxed);
+            self.foreground_block_cache_hit_bytes
+                .fetch_add(read.cache_hit_bytes, Ordering::Relaxed);
+        } else {
+            self.foreground_read_window_hits
+                .fetch_add(read.cache_hits as u64, Ordering::Relaxed);
+            self.foreground_read_window_hit_bytes
+                .fetch_add(read.cache_hit_bytes, Ordering::Relaxed);
+        }
     }
 
     fn collect_object_pipeline_stats(&self) -> FuseBackendResult<FuseObjectPipelineStats> {
@@ -365,6 +396,24 @@ where
                 .as_ref()
                 .map(|uploader| uploader.stats())
                 .transpose()?,
+            tiered_object: self.objects.tiered_stats()?,
+            local_hot: self.objects.local_hot_stats()?,
+            foreground_object_gets: self.foreground_object_gets.load(Ordering::Relaxed),
+            foreground_object_get_bytes: self.foreground_object_get_bytes.load(Ordering::Relaxed),
+            foreground_coalesced_gets: self.foreground_coalesced_gets.load(Ordering::Relaxed),
+            foreground_coalesced_get_bytes: self
+                .foreground_coalesced_get_bytes
+                .load(Ordering::Relaxed),
+            foreground_cache_hits: self.foreground_cache_hits.load(Ordering::Relaxed),
+            foreground_cache_hit_bytes: self.foreground_cache_hit_bytes.load(Ordering::Relaxed),
+            foreground_block_cache_hits: self.foreground_block_cache_hits.load(Ordering::Relaxed),
+            foreground_block_cache_hit_bytes: self
+                .foreground_block_cache_hit_bytes
+                .load(Ordering::Relaxed),
+            foreground_read_window_hits: self.foreground_read_window_hits.load(Ordering::Relaxed),
+            foreground_read_window_hit_bytes: self
+                .foreground_read_window_hit_bytes
+                .load(Ordering::Relaxed),
             read_plan_cache_hits: self.read_plan_cache_hits.load(Ordering::Relaxed),
             read_plan_cache_misses: self.read_plan_cache_misses.load(Ordering::Relaxed),
         })
@@ -388,9 +437,12 @@ where
             return Ok(plan);
         }
         self.read_plan_cache_misses.fetch_add(1, Ordering::Relaxed);
-        self.metadata
+        let plan = self
+            .metadata
             .read_body_plan(inode, generation, offset, len)
-            .map_err(Into::into)
+            .map_err(FuseBackendError::from)?;
+        self.cache_read_body_plan(key, plan.clone())?;
+        Ok(plan)
     }
 
     fn cache_read_body_plan(
@@ -405,41 +457,77 @@ where
         Ok(())
     }
 
-    fn cache_new_file_staged_read_plan(
+    fn cache_published_staged_read_plan(
         &self,
         inode: InodeId,
         generation: u64,
         size: u64,
-        chunks: &[StoredChunk],
+        chunks: &[ChunkManifest],
     ) -> FuseBackendResult<()> {
         if size == 0 || chunks.is_empty() {
             return Ok(());
         }
         let len = usize::try_from(size).map_err(|_| ObjectError::InvalidRange)?;
-        let manifests = chunk_manifests_from_stored_chunks(chunks);
-        let plan = plan_chunk_manifest_reads(&manifests, 0, len)?;
+        let plan = plan_chunk_manifest_reads(chunks, 0, len)?;
         self.cache_read_body_plan(
             ObjectReadPlanKey::new(inode.get(), generation, 0, len),
             ObjectReadPlan::new(plan.output_len, plan.blocks),
         )
     }
 
-    fn stage_prepared_artifact_ranges_direct_pending(
+    fn stage_prepared_artifact_shared_ranges_direct_pending(
         &self,
         prepared: &ClientPreparedArtifact,
         manifest_id: &str,
-        ranges: &[PublishArtifactRange],
+        ranges: &[PendingBufferedRange],
         block_index_base: u64,
     ) -> FuseBackendResult<PendingChunkedWrite> {
-        <Self as FuseBackend>::stage_prepared_artifact_ranges(
-            self,
+        self.stage_prepared_artifact_chunk_ranges(
             prepared,
             manifest_id,
-            ranges,
+            pending_ranges_to_chunk_ranges(ranges),
             block_index_base,
         )
         .map(|written| PendingChunkedWrite::ready(Ok(written)))
     }
+
+    fn stage_prepared_artifact_chunk_ranges(
+        &self,
+        prepared: &ClientPreparedArtifact,
+        manifest_id: &str,
+        dirty_ranges: Vec<ChunkWriteRange>,
+        block_index_base: u64,
+    ) -> FuseBackendResult<ChunkedWrite> {
+        put_chunked_ranges_parallel(
+            &self.objects,
+            dirty_ranges,
+            ChunkWriteOptions {
+                manifest_id: manifest_id.to_owned(),
+                mount: prepared.mount,
+                inode: prepared.inode.get(),
+                generation: prepared.generation,
+                chunk_size: DEFAULT_CHUNK_SIZE,
+                block_size: DEFAULT_BLOCK_SIZE,
+            },
+            block_index_base,
+            self.upload_workers,
+            self.block_cache
+                .as_ref()
+                .map(|cache| cache as &(dyn BlockCache + Sync)),
+        )
+        .map_err(Into::into)
+    }
+}
+
+fn pending_ranges_to_chunk_ranges(ranges: &[PendingBufferedRange]) -> Vec<ChunkWriteRange> {
+    ranges
+        .iter()
+        .filter(|range| !range.is_empty())
+        .map(|range| ChunkWriteRange {
+            logical_offset: range.offset,
+            bytes: range.bytes.clone(),
+        })
+        .collect()
 }
 
 impl From<MetadError> for FuseBackendError {
@@ -607,42 +695,13 @@ where
             return Err(FuseBackendError::Metadata(MetadError::NotFound));
         };
         let plan = self.cached_read_body_plan(inode, attr.generation, offset, len)?;
-        let read =
-            self.objects
-                .read_blocks(self.block_cache.as_ref(), plan.output_len, &plan.blocks)?;
-        Ok(read.bytes)
-    }
-
-    fn read_file_with_pipeline(
-        &self,
-        inode: InodeId,
-        offset: u64,
-        len: usize,
-        pipeline: &mut FileReadPipeline,
-    ) -> FuseBackendResult<Vec<u8>> {
-        let Some(attr) = self
-            .metadata
-            .get_attr(inode)
-            .map_err(FuseBackendError::from)?
-        else {
-            return Err(FuseBackendError::Metadata(MetadError::NotFound));
-        };
-        if len == 0 || offset >= attr.size {
-            return Ok(Vec::new());
-        }
-        let plan = self.cached_read_body_plan(inode, attr.generation, offset, len)?;
-        let read = pipeline.read_blocks(
-            &self.objects,
+        let read = self.objects.read_blocks_with_options(
             self.block_cache.as_ref(),
-            attr.size,
-            offset,
             plan.output_len,
             &plan.blocks,
+            self.read_options(),
         )?;
-        if let Some(hint) = read.readahead {
-            self.prefetch_read_blocks(inode, attr.generation, hint.offset, hint.len);
-        }
-        let read = read.blocks;
+        self.record_foreground_object_read(&read);
         Ok(read.bytes)
     }
 
@@ -657,18 +716,26 @@ where
             return Ok(Vec::new());
         }
         let plan = self.cached_read_body_plan(attr.inode, attr.generation, offset, len)?;
-        let read = pipeline.read_blocks(
+        let read = pipeline.read_blocks_with_options(
             &self.objects,
             self.block_cache.as_ref(),
-            attr.size,
-            offset,
-            plan.output_len,
-            &plan.blocks,
+            FileReadRequest {
+                file_size: attr.size,
+                offset,
+                output_len: plan.output_len,
+                blocks: &plan.blocks,
+            },
+            self.read_options(),
         )?;
         if let Some(hint) = read.readahead {
             self.prefetch_read_blocks(attr.inode, attr.generation, hint.offset, hint.len);
         }
-        Ok(read.blocks.bytes)
+        if let (Some(prefetcher), Some(request)) = (&self.prefetcher, read.cache_warmup) {
+            let _ = prefetcher.submit(request);
+        }
+        let read = read.blocks;
+        self.record_foreground_object_read(&read);
+        Ok(read.bytes)
     }
 
     fn read_file_at_snapshot(
@@ -849,41 +916,6 @@ where
             .map_err(Into::into)
     }
 
-    fn stage_prepared_artifact_ranges(
-        &self,
-        prepared: &Self::Prepared,
-        manifest_id: &str,
-        ranges: &[PublishArtifactRange],
-        block_index_base: u64,
-    ) -> FuseBackendResult<ChunkedWrite> {
-        let dirty_ranges = ranges
-            .iter()
-            .filter(|range| !range.bytes.is_empty())
-            .map(|range| ChunkWriteRange {
-                logical_offset: range.offset,
-                bytes: range.bytes.clone(),
-            })
-            .collect::<Vec<_>>();
-        put_chunked_ranges_parallel(
-            &self.objects,
-            &dirty_ranges,
-            ChunkWriteOptions {
-                manifest_id: manifest_id.to_owned(),
-                mount: prepared.mount,
-                inode: prepared.inode.get(),
-                generation: prepared.generation,
-                chunk_size: DEFAULT_CHUNK_SIZE,
-                block_size: DEFAULT_BLOCK_SIZE,
-            },
-            block_index_base,
-            self.upload_workers,
-            self.block_cache
-                .as_ref()
-                .map(|cache| cache as &(dyn BlockCache + Sync)),
-        )
-        .map_err(Into::into)
-    }
-
     fn new_write_pipeline(
         &self,
         prepared: &Self::Prepared,
@@ -900,17 +932,15 @@ where
         .map_err(Into::into)
     }
 
-    fn stage_prepared_artifact_ranges_async(
+    fn stage_prepared_artifact_shared_ranges_async(
         &self,
         prepared: &Self::Prepared,
         manifest_id: &str,
-        ranges: &[PublishArtifactRange],
+        ranges: &[PendingBufferedRange],
         block_index_base: u64,
     ) -> FuseBackendResult<PendingChunkedWrite> {
-        let (Some(writeback_cache), Some(writeback_uploader)) =
-            (&self.writeback_cache, &self.writeback_uploader)
-        else {
-            return self.stage_prepared_artifact_ranges_direct_pending(
+        let Some(writeback_uploader) = &self.writeback_uploader else {
+            return self.stage_prepared_artifact_shared_ranges_direct_pending(
                 prepared,
                 manifest_id,
                 ranges,
@@ -918,32 +948,36 @@ where
             );
         };
         let mut upload_ranges: Vec<WritebackUploadRange> = Vec::new();
-        for range in ranges.iter().filter(|range| !range.bytes.is_empty()) {
-            let key = format!(
-                "{manifest_id}:{}:{}:{}",
-                prepared.generation,
-                range.offset,
-                range.bytes.len()
-            );
-            let ticket = match writeback_cache.stage(key, &range.bytes) {
-                Ok(ticket) => ticket,
-                Err(_) => {
-                    for range in upload_ranges {
-                        let _ = writeback_cache.remove(&range.ticket);
+        if let Some(writeback_cache) = &self.writeback_cache {
+            for range in ranges.iter().filter(|range| !range.is_empty()) {
+                let key = format!(
+                    "{manifest_id}:{}:{}:{}",
+                    prepared.generation,
+                    range.offset,
+                    range.len()
+                );
+                let ticket = match writeback_cache.stage(key, range.as_slice()) {
+                    Ok(ticket) => ticket,
+                    Err(err) => {
+                        for range in upload_ranges {
+                            if let Some(ticket) = range.into_cache_ticket() {
+                                let _ = writeback_cache.remove(&ticket);
+                            }
+                        }
+                        return Err(err.into());
                     }
-                    let _ = writeback_uploader.record_fallback();
-                    return self.stage_prepared_artifact_ranges_direct_pending(
-                        prepared,
-                        manifest_id,
-                        ranges,
-                        block_index_base,
-                    );
-                }
-            };
-            upload_ranges.push(WritebackUploadRange {
-                logical_offset: range.offset,
-                ticket,
-            });
+                };
+                upload_ranges.push(WritebackUploadRange::cache(range.offset, ticket));
+            }
+        } else {
+            upload_ranges.extend(
+                ranges
+                    .iter()
+                    .filter(|range| !range.is_empty())
+                    .map(|range| {
+                        WritebackUploadRange::inline_bytes(range.offset, range.bytes.clone())
+                    }),
+            );
         }
         if upload_ranges.is_empty() {
             return Ok(PendingChunkedWrite::ready(Ok(ChunkedWrite {
@@ -970,17 +1004,15 @@ where
         };
         match writeback_uploader.submit(request) {
             Ok(pending) => Ok(pending),
-            Err(_) => {
-                for range in upload_ranges {
-                    let _ = writeback_cache.remove(&range.ticket);
+            Err(err) => {
+                if let Some(writeback_cache) = &self.writeback_cache {
+                    for range in upload_ranges {
+                        if let Some(ticket) = range.into_cache_ticket() {
+                            let _ = writeback_cache.remove(&ticket);
+                        }
+                    }
                 }
-                let _ = writeback_uploader.record_fallback();
-                self.stage_prepared_artifact_ranges_direct_pending(
-                    prepared,
-                    manifest_id,
-                    ranges,
-                    block_index_base,
-                )
+                Err(err.into())
             }
         }
     }
@@ -1000,9 +1032,13 @@ where
         output_len: usize,
         blocks: &[ObjectReadBlock],
     ) -> FuseBackendResult<Vec<u8>> {
-        let read = self
-            .objects
-            .read_blocks(self.block_cache.as_ref(), output_len, blocks)?;
+        let read = self.objects.read_blocks_with_options(
+            self.block_cache.as_ref(),
+            output_len,
+            blocks,
+            BlockReadOptions::default(),
+        )?;
+        self.record_foreground_object_read(&read);
         Ok(read.bytes)
     }
 
@@ -1020,7 +1056,6 @@ where
             ));
         }
         let staged = request.staged.clone();
-        let cache_new_file_plan = !prepared.replace;
         let cache_chunks = request.chunks.clone();
         let cache_size = request.size;
         let result = self
@@ -1030,14 +1065,12 @@ where
                 let _ = self.objects.delete_staged(&staged);
                 FuseBackendError::from(err)
             })?;
-        if cache_new_file_plan {
-            let _ = self.cache_new_file_staged_read_plan(
-                result.entry.attr.inode,
-                result.entry.attr.generation,
-                cache_size,
-                &cache_chunks,
-            );
-        }
+        let _ = self.cache_published_staged_read_plan(
+            result.entry.attr.inode,
+            result.entry.attr.generation,
+            cache_size,
+            &cache_chunks,
+        );
         Ok(result)
     }
 
@@ -1051,11 +1084,17 @@ mod tests {
     use std::net::SocketAddr;
 
     use nokv_client::MetadataClientOptions;
-    use nokv_meta::PublishArtifactRange;
-    use nokv_object::{MemoryObjectStore, ObjectStore};
+    use nokv_object::{MemoryObjectStore, ObjectKey, ObjectStore};
     use nokv_types::DentryName;
 
     use super::*;
+
+    fn pending_range(offset: u64, bytes: &[u8]) -> PendingBufferedRange {
+        PendingBufferedRange {
+            offset,
+            bytes: bytes.to_vec().into(),
+        }
+    }
 
     #[test]
     fn client_backend_reports_writeback_pipeline_stats() {
@@ -1070,6 +1109,7 @@ mod tests {
             objects.clone(),
             &FuseOptions {
                 writeback: crate::filesystem::FuseWritebackOptions {
+                    cache_enabled: true,
                     root: temp.path().join("writeback"),
                     workers: 1,
                     upload_workers_per_request: 1,
@@ -1094,13 +1134,10 @@ mod tests {
         };
 
         let pending = backend
-            .stage_prepared_artifact_ranges_async(
+            .stage_prepared_artifact_shared_ranges_async(
                 &prepared,
                 "checkpoint.bin",
-                &[PublishArtifactRange {
-                    offset: 0,
-                    bytes: b"checkpoint".to_vec(),
-                }],
+                &[pending_range(0, b"checkpoint")],
                 0,
             )
             .unwrap();
@@ -1114,7 +1151,6 @@ mod tests {
         let stats = backend.object_pipeline_stats().unwrap();
         let writeback = stats.writeback.unwrap();
         assert_eq!(writeback.enqueued, 1);
-        assert_eq!(writeback.fallback, 0);
         assert_eq!(writeback.completed, 1);
         assert_eq!(writeback.failed, 0);
         assert_eq!(writeback.staged_bytes, 10);
@@ -1129,7 +1165,66 @@ mod tests {
     }
 
     #[test]
-    fn writeback_cache_capacity_falls_back_to_direct_upload() {
+    fn client_backend_default_writeback_uses_direct_upload() {
+        let metadata = MetadataClient::new(MetadataClientOptions::new(SocketAddr::from((
+            [127, 0, 0, 1],
+            9,
+        ))));
+        let objects = MemoryObjectStore::new();
+        let backend = ClientFuseBackend::new(
+            metadata,
+            objects.clone(),
+            &FuseOptions {
+                writeback: crate::filesystem::FuseWritebackOptions {
+                    workers: 1,
+                    upload_workers_per_request: 1,
+                    ..crate::filesystem::FuseWritebackOptions::default()
+                },
+                ..FuseOptions::default()
+            },
+        )
+        .unwrap();
+        let prepared = ClientPreparedArtifact {
+            mount: 1,
+            parent: InodeId::new(1).unwrap(),
+            name: DentryName::new("checkpoint.bin").unwrap(),
+            path: Some("/checkpoint.bin".to_owned()),
+            inode: InodeId::new(42).unwrap(),
+            generation: 7,
+            mtime_ms: 1,
+            ctime_ms: 1,
+            replace: true,
+            dentry_version: Some(1),
+            old_generation: None,
+        };
+
+        let pending = backend
+            .stage_prepared_artifact_shared_ranges_async(
+                &prepared,
+                "checkpoint.bin",
+                &[pending_range(0, b"checkpoint")],
+                0,
+            )
+            .unwrap();
+        let written = pending.wait().unwrap();
+        assert_eq!(written.object_puts, 1);
+        assert!(objects
+            .head(&nokv_object::ObjectKey::new("blocks/1/42/7/0/0").unwrap())
+            .unwrap()
+            .is_some());
+
+        let stats = backend.object_pipeline_stats().unwrap();
+        let writeback = stats.writeback.unwrap();
+        assert_eq!(writeback.enqueued, 1);
+        assert_eq!(writeback.completed, 1);
+        assert_eq!(writeback.failed, 0);
+        assert_eq!(writeback.staged_bytes, 10);
+        assert_eq!(writeback.uploaded_bytes, 10);
+        assert!(stats.writeback_cache.is_none());
+    }
+
+    #[test]
+    fn writeback_cache_capacity_error_rejects_upload() {
         let temp = tempfile::tempdir().unwrap();
         let metadata = MetadataClient::new(MetadataClientOptions::new(SocketAddr::from((
             [127, 0, 0, 1],
@@ -1141,6 +1236,7 @@ mod tests {
             objects.clone(),
             &FuseOptions {
                 writeback: crate::filesystem::FuseWritebackOptions {
+                    cache_enabled: true,
                     root: temp.path().join("writeback"),
                     max_bytes: 4,
                     workers: 1,
@@ -1165,28 +1261,27 @@ mod tests {
             old_generation: None,
         };
 
-        let pending = backend
-            .stage_prepared_artifact_ranges_async(
+        let err = backend
+            .stage_prepared_artifact_shared_ranges_async(
                 &prepared,
                 "checkpoint.bin",
-                &[PublishArtifactRange {
-                    offset: 0,
-                    bytes: b"checkpoint".to_vec(),
-                }],
+                &[pending_range(0, b"checkpoint")],
                 0,
             )
-            .unwrap();
-        let written = pending.wait().unwrap();
-        assert_eq!(written.object_puts, 1);
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            FuseBackendError::Object(ObjectError::Backend(message))
+                if message == "writeback cache capacity exceeded"
+        ));
         assert!(objects
             .head(&nokv_object::ObjectKey::new("blocks/1/42/7/0/0").unwrap())
             .unwrap()
-            .is_some());
+            .is_none());
 
         let stats = backend.object_pipeline_stats().unwrap();
         let writeback = stats.writeback.unwrap();
         assert_eq!(writeback.enqueued, 0);
-        assert_eq!(writeback.fallback, 1);
         assert_eq!(writeback.completed, 0);
         assert_eq!(writeback.failed, 0);
         let cache = stats.writeback_cache.unwrap();
@@ -1212,7 +1307,9 @@ mod tests {
                     12,
                     vec![ObjectReadBlock {
                         object_key: "blocks/demo".to_owned(),
+                        digest_uri: "sha256:test".to_owned(),
                         object_offset: 0,
+                        object_len: 12,
                         len: 12,
                         output_offset: 0,
                     }],
@@ -1225,7 +1322,9 @@ mod tests {
             plan.blocks,
             vec![ObjectReadBlock {
                 object_key: "blocks/demo".to_owned(),
+                digest_uri: "sha256:test".to_owned(),
                 object_offset: 4,
+                object_len: 12,
                 len: 4,
                 output_offset: 0,
             }]
@@ -1236,7 +1335,41 @@ mod tests {
     }
 
     #[test]
-    fn client_backend_caches_new_file_staged_read_plan() {
+    fn client_backend_reports_foreground_object_read_stats() {
+        let metadata = MetadataClient::new(MetadataClientOptions::new(SocketAddr::from((
+            [127, 0, 0, 1],
+            9,
+        ))));
+        let objects = MemoryObjectStore::new();
+        let key = ObjectKey::new("blocks/demo").unwrap();
+        objects.put(&key, b"abcdefgh".to_vec()).unwrap();
+        let backend = ClientFuseBackend::new(metadata, objects, &FuseOptions::default()).unwrap();
+
+        let bytes = FuseBackend::read_session_object_blocks(
+            &backend,
+            4,
+            &[ObjectReadBlock {
+                object_key: key.as_str().to_owned(),
+                digest_uri: "sha256:test".to_owned(),
+                object_offset: 2,
+                object_len: 8,
+                len: 4,
+                output_offset: 0,
+            }],
+        )
+        .unwrap();
+
+        assert_eq!(bytes, b"cdef");
+        let stats = backend.object_pipeline_stats().unwrap();
+        assert_eq!(stats.foreground_object_gets, 1);
+        assert_eq!(stats.foreground_object_get_bytes, 4);
+        let object = stats.object_transfer_stats();
+        assert_eq!(object.object_gets, 1);
+        assert_eq!(object.object_get_bytes, 4);
+    }
+
+    #[test]
+    fn client_backend_caches_published_staged_read_plan() {
         let metadata = MetadataClient::new(MetadataClientOptions::new(SocketAddr::from((
             [127, 0, 0, 1],
             9,
@@ -1259,16 +1392,18 @@ mod tests {
         )
         .unwrap();
 
+        let manifests = write.chunk_manifests();
         backend
-            .cache_new_file_staged_read_plan(inode, 7, write.size, &write.chunks)
+            .cache_published_staged_read_plan(inode, 7, write.size, &manifests)
             .unwrap();
 
         let plan = backend.cached_read_body_plan(inode, 7, 4, 4).unwrap();
         let read = objects
-            .read_blocks(
+            .read_blocks_with_options(
                 None::<&nokv_object::MemoryBlockCache>,
                 plan.output_len,
                 &plan.blocks,
+                BlockReadOptions::default(),
             )
             .unwrap();
         assert_eq!(read.bytes, b"efgh");

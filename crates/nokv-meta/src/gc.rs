@@ -9,7 +9,7 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use crate::command::{HistoryPruneOutcome, MetadataStore};
-use crate::service::{NoKvFs, PendingObjectCleanupOutcome};
+use crate::service::{NoKvFs, PendingObjectCleanupOutcome, DEFAULT_READ_LEASE_MS};
 use nokv_object::ObjectStore;
 
 const DEFAULT_INTERVAL: Duration = Duration::from_secs(30);
@@ -20,6 +20,7 @@ pub struct ObjectGcOptions {
     pub interval: Duration,
     pub limit: usize,
     pub run_immediately: bool,
+    pub read_lease_grace: Duration,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -61,6 +62,7 @@ impl Default for ObjectGcOptions {
             interval: DEFAULT_INTERVAL,
             limit: DEFAULT_LIMIT,
             run_immediately: true,
+            read_lease_grace: Duration::from_millis(DEFAULT_READ_LEASE_MS),
         }
     }
 }
@@ -87,7 +89,12 @@ impl ObjectGcWorker {
         let worker_state = Arc::clone(&state);
         let handle = thread::spawn(move || {
             if options.run_immediately {
-                run_once(&service, options.limit, &worker_state);
+                run_once(
+                    &service,
+                    options.limit,
+                    options.read_lease_grace,
+                    &worker_state,
+                );
             }
             loop {
                 let (lock, cvar) = &*worker_stop;
@@ -106,7 +113,12 @@ impl ObjectGcWorker {
                     break;
                 }
                 drop(stopped);
-                run_once(&service, options.limit, &worker_state);
+                run_once(
+                    &service,
+                    options.limit,
+                    options.read_lease_grace,
+                    &worker_state,
+                );
             }
         });
         Self {
@@ -207,12 +219,16 @@ impl Drop for HistoryGcWorker {
     }
 }
 
-fn run_once<M, O>(service: &NoKvFs<M, O>, limit: usize, state: &Mutex<ObjectGcWorkerState>)
-where
+fn run_once<M, O>(
+    service: &NoKvFs<M, O>,
+    limit: usize,
+    read_lease_grace: Duration,
+    state: &Mutex<ObjectGcWorkerState>,
+) where
     M: MetadataStore,
     O: ObjectStore,
 {
-    let result = service.cleanup_pending_objects(limit);
+    let result = service.cleanup_pending_objects_with_grace(limit, read_lease_grace);
     if let Ok(mut state) = state.lock() {
         state.iterations += 1;
         match result {
@@ -298,6 +314,7 @@ mod tests {
                 interval: Duration::from_secs(3600),
                 limit: 100,
                 run_immediately: false,
+                read_lease_grace: Duration::ZERO,
             },
         );
 
@@ -343,6 +360,7 @@ mod tests {
                 interval: Duration::from_millis(10),
                 limit: 100,
                 run_immediately: true,
+                read_lease_grace: Duration::ZERO,
             },
         );
         wait_for(|| objects.head(&object).unwrap().is_none());
@@ -377,6 +395,7 @@ mod tests {
                 interval: Duration::from_millis(10),
                 limit: 100,
                 run_immediately: true,
+                read_lease_grace: Duration::ZERO,
             },
         );
         wait_for(|| {

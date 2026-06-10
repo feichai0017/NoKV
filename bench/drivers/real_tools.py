@@ -178,12 +178,23 @@ def run_mdtest(args) -> list[str]:
                                         concurrency=args.concurrency,
                                         tool="mdtest", workload="mdtest")]
     branches, items, depth = _MDTEST_TREE.get(args.profile, _MDTEST_TREE["smoke"])
-    target = Path(args.mount) / f"mdtest-{args.system}"
-    target.mkdir(parents=True, exist_ok=True)
+    try:
+        target = Path(tempfile.mkdtemp(
+            prefix=f"mdtest-{args.system}-p{args.concurrency}-",
+            dir=args.mount,
+        ))
+    except OSError as err:
+        return [_row(args, tool="mdtest", workload="mdtest", phase="n/a", cache_state="n/a",
+                     operations=0, seconds=0.0,
+                     caveat=f"mdtest-target-failed:{type(err).__name__}",
+                     shape=str(err)[:160])]
     mpirun = _bin("NOKV_BENCH_MPIRUN_BIN", "mpirun")
     cmd = []
     if mpirun and args.concurrency > 1:
-        cmd = [mpirun, "-np", str(args.concurrency)]
+        cmd = [mpirun]
+        if _mpirun_supports_oversubscribe(mpirun):
+            cmd.append("--oversubscribe")
+        cmd += ["-np", str(args.concurrency)]
     cmd += [binary, "-d", str(target), "-b", branches, "-I", items, "-z", depth, "-F", "-C", "-T", "-r"]
     shape = f"b={branches} I={items} z={depth} np={args.concurrency if mpirun else 1}"
     try:
@@ -201,6 +212,23 @@ def run_mdtest(args) -> list[str]:
                              operations=0, seconds=0.0, caveat="parse-failed", shape=shape)]
     finally:
         shutil.rmtree(target, ignore_errors=True)
+
+
+def _mpirun_supports_oversubscribe(mpirun: str) -> bool:
+    requested = os.environ.get("NOKV_BENCH_MPIRUN_OVERSUBSCRIBE", "1").lower()
+    if requested in {"0", "false", "no"}:
+        return False
+    try:
+        out = subprocess.run(
+            [mpirun, "--version"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    text = f"{out.stdout}\n{out.stderr}"
+    return "Open MPI" in text
 
 
 def run_juicefs_bench(args) -> list[str]:

@@ -2,9 +2,7 @@ use nokv_meta::{
     DentryWithAttr, MetadError, PreparedArtifact, SubtreeDelta, SubtreeDeltaKind, UpdateAttr,
     XattrSetMode,
 };
-use nokv_object::{
-    ObjectKey, ObjectReadBlock, StagedObject, StagedObjectSet, StoredBlock, StoredChunk,
-};
+use nokv_object::{ObjectKey, ObjectReadBlock, StagedObject, StagedObjectSet};
 use nokv_protocol::{
     MetadataProtocolError, MetadataRpcEnvelope, MetadataRpcResult, WireAdvisoryLock,
     WireBodyReadPlan, WireDentryWithAttr, WireMetadataError, WireObjectReadBlock,
@@ -169,30 +167,6 @@ pub(super) fn prepared_artifact(
     })
 }
 
-pub(super) fn stored_chunk(
-    chunk: nokv_protocol::WireChunkManifest,
-) -> Result<StoredChunk, MetadError> {
-    Ok(StoredChunk {
-        chunk_index: chunk.chunk_index,
-        logical_offset: chunk.logical_offset,
-        len: chunk.len,
-        blocks: chunk
-            .slices
-            .into_iter()
-            .flat_map(|slice| slice.blocks.into_iter())
-            .map(|block| {
-                Ok(StoredBlock {
-                    object_key: block.object_key,
-                    logical_offset: block.logical_offset,
-                    object_offset: block.object_offset,
-                    len: block.len,
-                    digest_uri: block.digest_uri,
-                })
-            })
-            .collect::<Result<Vec<_>, MetadError>>()?,
-    })
-}
-
 pub(super) fn staged_object_set(
     staged: WireStagedObjectSet,
 ) -> Result<StagedObjectSet, MetadError> {
@@ -219,7 +193,9 @@ pub(super) fn wire_body_read_plan(plan: &nokv_meta::BodyReadPlan) -> WireBodyRea
 fn wire_object_read_block(block: &ObjectReadBlock) -> WireObjectReadBlock {
     WireObjectReadBlock {
         object_key: block.object_key.clone(),
+        digest_uri: block.digest_uri.clone(),
         object_offset: block.object_offset,
+        object_len: block.object_len,
         len: block.len as u64,
         output_offset: block.output_offset as u64,
     }

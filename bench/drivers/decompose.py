@@ -2,11 +2,11 @@
 """NoKV ``/stats`` latency decomposition.
 
 The mounted driver only sees the filesystem, so the per-op FUSE / metadata /
-object cost split is read out-of-band from the NoKV metadata server's ``/stats``
-endpoint. This tool snapshots that endpoint and turns a before/after delta into
-a ``cost_breakdown`` string (the canonical schema's decomposition column),
-attributing time to metadata commit, Raft proposal, and object writeback, plus
-the cold-read-revealing object GET count.
+object cost split is read out-of-band from NoKV ``/stats`` endpoints. For
+metadata-server phases this can be the metadata server; for L2 FUSE read phases
+it should be the mount-local stats endpoint so foreground object reads are
+visible. This tool snapshots that endpoint and turns a before/after delta into a
+``cost_breakdown`` string (the canonical schema's decomposition column).
 
 Usage:
   decompose.py --snapshot http://127.0.0.1:7841/stats --out before.json
@@ -28,8 +28,28 @@ _NS_FIELDS = {
     "meta_commit": ("metadata_atomic_apply_ns", "metadata_commit_prepare_ns"),
     "raft_propose": ("metadata_raft_proposal_ns",),
     "object_writeback": ("object_writeback_upload_ns",),
+    "object_writeback_collect": ("object_writeback_collect_ns",),
+    "object_writeback_digest": ("object_writeback_digest_ns",),
+    "object_writeback_store_put": ("object_writeback_store_put_ns",),
+    "object_writeback_cache_put": ("object_writeback_cache_put_ns",),
+    "tiered_hot_put": ("tiered_hot_put_ns",),
+    "tiered_pending_cold_put": ("tiered_pending_cold_put_ns",),
+    "tiered_cold_put_enqueue": ("tiered_cold_put_enqueue_ns",),
+    "local_hot_put": ("local_hot_put_total_ns",),
+    "local_hot_prepare": ("local_hot_put_prepare_ns",),
+    "local_hot_write": ("local_hot_put_write_ns",),
+    "local_hot_sync": ("local_hot_put_sync_ns",),
+    "local_hot_rename": ("local_hot_put_rename_ns",),
+    "local_hot_record": ("local_hot_put_record_ns",),
 }
-_COUNT_FIELDS = ("object_gets", "object_puts", "read_plan_cache_misses")
+_COUNT_FIELDS = (
+    "object_gets", "object_get_bytes", "object_puts", "object_put_bytes",
+    "cache_hits", "cache_hit_bytes", "block_cache_hits",
+    "block_cache_hit_bytes", "read_window_hits", "read_window_hit_bytes",
+    "prefetch_object_gets",
+    "prefetch_object_get_bytes", "read_plan_cache_misses",
+    "local_hot_puts", "local_hot_put_bytes",
+)
 
 
 def fetch(url: str) -> dict:
@@ -64,12 +84,17 @@ def cost_breakdown(before: dict, after: dict) -> str:
 
 def _selftest() -> int:
     before = {"metadata_store": {"metadata_atomic_apply_ns": 1000, "metadata_commit_prepare_ns": 500},
-              "object": {"object_gets": 10}}
+              "object": {"object_gets": 10, "object_writeback_digest_ns": 1000},
+              "local_hot_put_total_ns": 1000, "local_hot_puts": 1}
     after = {"metadata_store": {"metadata_atomic_apply_ns": 3000, "metadata_commit_prepare_ns": 1500},
-             "object": {"object_gets": 42}}
+             "object": {"object_gets": 42, "object_writeback_digest_ns": 4000},
+             "local_hot_put_total_ns": 6000, "local_hot_puts": 3}
     cb = cost_breakdown(before, after)
     assert "meta_commit=3us" in cb, cb        # (2000 + 1000) ns -> 3us
+    assert "object_writeback_digest=3us" in cb, cb
+    assert "local_hot_put=5us" in cb, cb
     assert "object_gets=32" in cb, cb
+    assert "local_hot_puts=2" in cb, cb
     print("decompose selftest OK")
     return 0
 

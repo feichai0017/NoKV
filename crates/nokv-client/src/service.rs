@@ -16,7 +16,7 @@ use nokv_protocol::{
 };
 use nokv_types::{
     AdvisoryLock, AdvisoryLockRequest, BodyDescriptor, ChunkManifest, DentryName, InodeAttr,
-    InodeId, PathMetadata, SnapshotPin, SpecialNodeSpec,
+    InodeId, PathMetadata, ReadLease, SnapshotPin, SpecialNodeSpec,
 };
 
 use crate::ClientError;
@@ -66,6 +66,13 @@ pub struct ClientCreatedPreparedArtifact {
 pub struct ClientReadDirPlusPage {
     pub entries: Vec<DentryWithAttr>,
     pub next_cursor: Option<DentryName>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PathLayoutOpen {
+    pub metadata: PathMetadata,
+    pub lease: ReadLease,
+    pub plan: ObjectReadPlan,
 }
 
 /// Result of a copy-on-write subtree clone: the fork's namespace root inode and the
@@ -973,24 +980,30 @@ impl MetadataClient {
         }
     }
 
-    pub fn read_path_plan(
+    pub fn open_path_read_plan(
         &self,
         path: &str,
         offset: u64,
         len: usize,
         expected_generation: Option<u64>,
-    ) -> Result<(PathMetadata, ObjectReadPlan), ClientError> {
+    ) -> Result<PathLayoutOpen, ClientError> {
         let len = u64::try_from(len)
             .map_err(|_| ClientError::Protocol("path read length exceeds u64".to_owned()))?;
-        match self.call(MetadataRpcRequest::ReadPathPlan {
+        match self.call(MetadataRpcRequest::OpenPathReadPlan {
             path: path.to_owned(),
             offset,
             len,
             expected_generation,
         })? {
-            MetadataRpcResult::PathReadPlan { metadata, plan } => {
-                Ok((wire_path_metadata(metadata)?, wire_body_read_plan(plan)?))
-            }
+            MetadataRpcResult::OpenPathReadPlan {
+                metadata,
+                lease,
+                plan,
+            } => Ok(PathLayoutOpen {
+                metadata: wire_path_metadata(metadata)?,
+                lease: wire_read_lease(lease)?,
+                plan: wire_body_read_plan(plan)?,
+            }),
             other => Err(unexpected_result(other)),
         }
     }
@@ -1137,7 +1150,7 @@ impl MetadataClient {
             content_type: request.content_type,
             manifest_id: request.manifest_id,
             size: request.size,
-            chunks: request.chunks.iter().map(stored_chunk_to_wire).collect(),
+            chunks: request.chunks.iter().map(chunk_to_wire).collect(),
             staged: staged_object_set_to_wire(&request.staged),
             mode: request.mode,
             uid: request.uid,

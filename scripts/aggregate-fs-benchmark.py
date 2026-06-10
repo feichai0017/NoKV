@@ -3,7 +3,7 @@
 
 The mounted benchmark emits one canonical row per measured phase per repeat.
 This script folds those raw rows by the baseline-comparison key and writes a
-canonical-compatible CSV where the main metric columns contain medians. Extra
+canonical aggregate CSV where the main metric columns contain medians. Extra
 columns preserve sample count, p95 values, and the run/env ids that contributed
 to the aggregate.
 """
