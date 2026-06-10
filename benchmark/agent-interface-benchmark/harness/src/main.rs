@@ -7692,7 +7692,7 @@ mod tests {
     }
 
     #[test]
-    fn phase1_tasks_are_nokv_dominant_ml_research_prompts() {
+    fn phase1_tasks_are_researcher_shaped_prompts() {
         let task_set = phase1_task_set().unwrap();
         let task_ids: Vec<&str> = task_set
             .tasks

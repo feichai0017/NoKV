@@ -11,11 +11,8 @@ crate and is documented in `docs/benchmarks.md`.
 
 ## Current Status
 
-The harness is a local experimental benchmark tree. It is not part of
-`origin/main` at the time this README was written.
-
-The current NoKV product crates now expose the intended low-level native
-namespace surface:
+The NoKV product crates expose the low-level native namespace surface used
+by the benchmark:
 
 - `nokvfs-meta`: `stat_card`, `list_page`, `find_paths`, `grep_paths`, and
   `read_page`, plus native indexed `aggregate_paths`;
@@ -203,18 +200,6 @@ Run one task for one arm:
   --output-jsonl benchmark/data/yanex-demo/results/phase1.jsonl
 ```
 
-Use the legacy hand-written runner only for A/B comparison while validating the
-schema-once Agent SDK path:
-
-```bash
-./benchmark/agent-interface-benchmark/scripts/run_phase1_batch.sh \
-  --api-surface openai_chat_completions \
-  --arm nokv_native_v1 \
-  --task-id cancelled_train_interrupt_triage \
-  --repeats 1 \
-  --output-jsonl benchmark/data/yanex-demo/results/legacy.jsonl
-```
-
 Install runner dependencies in the local benchmark virtual environment. The
 wrapper automatically uses this environment when `PYTHON` is not set:
 
@@ -253,8 +238,8 @@ cargo run --manifest-path benchmark/agent-interface-benchmark/harness/Cargo.toml
 ```
 
 The `nokv-*` direct commands above remain raw debugging commands. The benchmark
-arm uses the product-native `ls`/`stat`/`read`/`find` adapter exposed by
-`nokvfs-client`.
+arm uses the product-native `ls`/`stat`/`catalog`/`read`/`find`/`aggregate`
+adapter exposed by `nokvfs-client`, plus the namespace `grep` surface.
 
 Inspect SQLite schema:
 
@@ -263,15 +248,28 @@ cargo run --manifest-path benchmark/agent-interface-benchmark/harness/Cargo.toml
   --db benchmark/data/yanex-demo/sqlite/yanex.db
 ```
 
-## Next Work
+## Cost Accounting
 
-The next benchmark-specific PR should run the full `sqlite_raw_v1` vs
-`nokv_native_v1` Phase 1 batch and use the metric output to decide the next
-NoKV API increment. V1 must produce correctness, token, tool, bytes, and
-wall-time metrics; outperforming SQL is not the first PR gate.
+Set pricing environment variables before a batch to record per-run USD cost
+in the telemetry (`all_in_cost_usd`):
 
-Useful follow-up product increments include typed facets for metric
-latest/min/max by run, params, dependencies, and richer git patch availability.
-Do not implement one-sided semantics in the harness as benchmark-only
-shortcuts.
-The harness should remain a thin adapter over `nokvfs-client` or `nokvfs-meta`.
+```bash
+export OPENAI_INPUT_USD_PER_1M_TOKENS=0.75
+export OPENAI_CACHED_INPUT_USD_PER_1M_TOKENS=0.075
+export OPENAI_OUTPUT_USD_PER_1M_TOKENS=4.50
+```
+
+Cached prompt tokens are billed at the cached rate; uncached prompt tokens at
+the input rate; completion tokens at the output rate.
+
+## Methodology Notes
+
+- Run at least 5 repeats per arm/task pair before quoting numbers; small
+  models show high per-run variance on compound tasks.
+- Judge-side gold (gold SQL or file-body oracles) is never exposed to either
+  arm.
+- Do not implement one-sided semantics in the harness as benchmark-only
+  shortcuts; the harness stays a thin adapter over `nokvfs-client` and
+  `nokvfs-meta`, and the raw SQLite arm keeps line-oriented `grep_blob`
+  parity for body search.
+- The published benchmark report lives at `benchmark/AGENT_INTERFACE_BENCHMARK_REPORT.md`.
