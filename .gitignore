@@ -29,3 +29,6 @@ coverage.out
 # Local benchmark corpus materializations and run results (never commit)
 benchmark/data/
 *.jsonl
+
+# Published benchmark result telemetry (committed deliberately)
+!benchmark/agent-interface-benchmark/results/*.jsonl

@@ -168,9 +168,10 @@ export OPENAI_OUTPUT_USD_PER_1M_TOKENS=4.50
   --output-jsonl benchmark/data/yanex-demo/results/run1.jsonl
 ```
 
-Result telemetry for the published numbers:
-`benchmark/data/yanex-demo/results/20260610/research-v3-final-5repeats-gpt54mini.jsonl`
-and `...-b2.jsonl` (local artifacts; result files are never committed).
+Result telemetry for the published numbers is committed at
+`benchmark/agent-interface-benchmark/results/gpt-5.4-mini-5repeats-run1.jsonl`
+and `.../gpt-5.4-mini-5repeats-run2.jsonl` (two 5-repeat batches, 100 runs).
+Locally produced result files under `benchmark/data/` stay uncommitted.
 
 ## Limitations
 

@@ -273,4 +273,5 @@ the input rate; completion tokens at the output rate.
   shortcuts; the harness stays a thin adapter over `nokvfs-client` and
   `nokvfs-meta`, and the raw SQLite arm keeps line-oriented `grep_blob`
   parity for body search.
-- The published benchmark report lives at `benchmark/AGENT_INTERFACE_BENCHMARK_REPORT.md`.
+- The published benchmark report lives at `benchmark/AGENT_INTERFACE_BENCHMARK_REPORT.md`;
+  its raw telemetry is committed under `benchmark/agent-interface-benchmark/results/`.
