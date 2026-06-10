@@ -19,7 +19,7 @@ by the benchmark:
 - `nokvfs-protocol`: `StatCard`, `ListPage`, `FindPaths`, `AggregatePaths`,
   `GrepPaths`, and `ReadPage` RPC DTOs;
 - `nokvfs-client`: SDK methods plus the product-native agent adapter exposing
-  `ls`, `stat`, `catalog`, `read`, `find`, and `aggregate`;
+  `ls`, `stat`, `catalog`, `read`, `find`, `aggregate`, and `grep`;
 - `nokvfs-server`: framed metadata RPC handlers for the same operations.
 
 Native grep is now implemented through `nokvfs-meta`, `nokvfs-protocol`, and
@@ -238,8 +238,9 @@ cargo run --manifest-path benchmark/agent-interface-benchmark/harness/Cargo.toml
 ```
 
 The `nokv-*` direct commands above remain raw debugging commands. The benchmark
-arm uses the product-native `ls`/`stat`/`catalog`/`read`/`find`/`aggregate`
-adapter exposed by `nokvfs-client`, plus the namespace `grep` surface.
+arm uses the product-native `ls`/`stat`/`catalog`/`read`/`find`/`aggregate`/`grep`
+adapter exposed by `nokvfs-client`; the harness passes tool calls through
+without owning any namespace semantics.
 
 Inspect SQLite schema:
 

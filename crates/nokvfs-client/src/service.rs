@@ -12,7 +12,8 @@ use nokvfs_meta::{
     NamespaceAggregateSample, NamespaceAggregateSort, NamespaceAggregateValue, NamespaceCard,
     NamespaceCardKind, NamespaceFacetSummary, NamespaceFacetValue, NamespaceFieldSource,
     NamespaceFieldSourceKind, NamespaceFieldValue, NamespaceFilterCapability, NamespaceFindField,
-    NamespaceFindRequest, NamespaceFindResult, NamespaceInclude, NamespaceIndexValue,
+    NamespaceFindRequest, NamespaceFindResult, NamespaceGrepMatch, NamespaceGrepRequest,
+    NamespaceGrepResult, NamespaceInclude, NamespaceIndexValue,
     NamespaceListOptions, NamespaceListPage, NamespacePredicate, NamespacePredicateOp,
     NamespacePredicateValue, NamespaceQueryCatalog, NamespaceReadFormat, NamespaceReadItem,
     NamespaceReadOptions, NamespaceReadPage, NamespaceRecordCount, NamespaceRecordType,
@@ -34,7 +35,8 @@ use nokvfs_protocol::{
     WireNamespaceCardKind, WireNamespaceFacetSummary, WireNamespaceFacetValue,
     WireNamespaceFieldSource, WireNamespaceFieldSourceKind, WireNamespaceFieldValue,
     WireNamespaceFilterCapability, WireNamespaceFindField, WireNamespaceFindRequest,
-    WireNamespaceFindResult, WireNamespaceInclude, WireNamespaceIndexValue, WireNamespaceListPage,
+    WireNamespaceFindResult, WireNamespaceGrepMatch, WireNamespaceGrepRequest,
+    WireNamespaceGrepResult, WireNamespaceInclude, WireNamespaceIndexValue, WireNamespaceListPage,
     WireNamespacePredicate, WireNamespacePredicateOp, WireNamespacePredicateValue,
     WireNamespaceQueryCatalog, WireNamespaceReadFormat, WireNamespaceReadItem,
     WireNamespaceReadOptions, WireNamespaceReadPage, WireNamespaceRecordCount,
@@ -245,6 +247,13 @@ where
         request: NamespaceAggregateRequest,
     ) -> Result<NamespaceAggregateResult, ClientError> {
         self.metadata.aggregate_paths(request)
+    }
+
+    pub fn grep_paths(
+        &self,
+        request: NamespaceGrepRequest,
+    ) -> Result<NamespaceGrepResult, ClientError> {
+        self.metadata.grep_paths(request)
     }
 
     pub fn read_page(
@@ -612,6 +621,18 @@ impl MetadataClient {
             MetadataRpcResult::NamespaceAggregateResult { result } => {
                 namespace_aggregate_result(*result)
             }
+            other => Err(unexpected_result(other)),
+        }
+    }
+
+    pub fn grep_paths(
+        &self,
+        request: NamespaceGrepRequest,
+    ) -> Result<NamespaceGrepResult, ClientError> {
+        match self.call(MetadataRpcRequest::GrepPaths {
+            request: Box::new(wire_namespace_grep_request(&request)?),
+        })? {
+            MetadataRpcResult::NamespaceGrepResult { result } => namespace_grep_result(*result),
             other => Err(unexpected_result(other)),
         }
     }
@@ -1301,6 +1322,73 @@ fn namespace_find_result(
         scanned_entries: usize::try_from(result.scanned_entries).map_err(|_| {
             ClientError::Protocol("scanned_entries exceeds platform limit".to_owned())
         })?,
+    })
+}
+
+fn wire_namespace_grep_request(
+    request: &NamespaceGrepRequest,
+) -> Result<WireNamespaceGrepRequest, ClientError> {
+    Ok(WireNamespaceGrepRequest {
+        path: request.path.clone(),
+        pattern: request.pattern.clone(),
+        recursive: request.recursive,
+        cursor: request.cursor.clone(),
+        limit: u64::try_from(request.limit)
+            .map_err(|_| ClientError::Protocol("namespace grep limit exceeds u64".to_owned()))?,
+        max_files: request
+            .max_files
+            .map(|value| {
+                u64::try_from(value).map_err(|_| {
+                    ClientError::Protocol("namespace grep max_files exceeds u64".to_owned())
+                })
+            })
+            .transpose()?,
+        max_bytes: request
+            .max_bytes
+            .map(|value| {
+                u64::try_from(value).map_err(|_| {
+                    ClientError::Protocol("namespace grep max_bytes exceeds u64".to_owned())
+                })
+            })
+            .transpose()?,
+    })
+}
+
+fn namespace_grep_result(
+    result: WireNamespaceGrepResult,
+) -> Result<NamespaceGrepResult, ClientError> {
+    Ok(NamespaceGrepResult {
+        path: result.path,
+        pattern: result.pattern,
+        recursive: result.recursive,
+        evidence: result.evidence,
+        snapshot_id: result.snapshot_id,
+        matches: result
+            .matches
+            .into_iter()
+            .map(namespace_grep_match)
+            .collect::<Result<Vec<_>, _>>()?,
+        files_scanned: usize::try_from(result.files_scanned).map_err(|_| {
+            ClientError::Protocol("grep files_scanned exceeds platform limit".to_owned())
+        })?,
+        bytes_read: usize::try_from(result.bytes_read)
+            .map_err(|_| ClientError::Protocol("grep bytes_read exceeds platform limit".to_owned()))?,
+        next_cursor: result.next_cursor,
+        truncated: result.truncated,
+    })
+}
+
+fn namespace_grep_match(
+    match_: WireNamespaceGrepMatch,
+) -> Result<NamespaceGrepMatch, ClientError> {
+    Ok(NamespaceGrepMatch {
+        path: match_.path,
+        line_number: usize::try_from(match_.line_number).map_err(|_| {
+            ClientError::Protocol("grep line_number exceeds platform limit".to_owned())
+        })?,
+        snippet: match_.snippet,
+        evidence: match_.evidence,
+        generation: match_.generation,
     })
 }
 

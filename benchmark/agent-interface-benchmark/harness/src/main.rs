@@ -20,8 +20,8 @@ use nokvfs_client::{
     agent_tool_definitions, execute_agent_tool, ArtifactRepository, ArtifactRepositoryOptions,
 };
 use nokvfs_meta::{
-    HoltMetadataStore, MetadError, MetadataStore, NamespaceFindField, NamespaceGrepMatch,
-    NamespaceGrepRequest, NamespaceGrepResult, NamespaceIndexField, NamespaceIndexRegistration,
+    HoltMetadataStore, MetadError, MetadataStore, NamespaceFindField, NamespaceIndexField,
+    NamespaceIndexRegistration,
     NamespaceIndexRow, NamespaceIndexValue, NamespacePredicateOp, NamespacePredicateValue, NoKvFs,
 };
 use nokvfs_object::{ObjectStore, S3ObjectStore, S3ObjectStoreOptions};
@@ -1594,7 +1594,7 @@ fn print_tool_registry(options: Options) -> Result<(), HarnessError> {
 
 fn tool_registry_for_arm(arm: &str) -> Result<Vec<ToolDefinition>, HarnessError> {
     if arm == "nokv_native_v1" {
-        let mut tools = agent_tool_definitions()
+        let tools = agent_tool_definitions()
             .into_iter()
             .map(|tool| ToolDefinition {
                 name: tool.name.to_owned(),
@@ -1602,22 +1602,6 @@ fn tool_registry_for_arm(arm: &str) -> Result<Vec<ToolDefinition>, HarnessError>
                 parameters: tool.parameters,
             })
             .collect::<Vec<_>>();
-        tools.push(ToolDefinition {
-            name: "grep".to_owned(),
-            description: "Search file bodies for a case-insensitive literal substring and return matching lines with line numbers. Scope path to one run directory or file when known; use for log body text, not for run metadata fields.".to_owned(),
-            parameters: json!({
-                "type": "object",
-                "required": ["path", "pattern", "recursive"],
-                "properties": {
-                    "path": {"type": "string"},
-                    "pattern": {"type": "string"},
-                    "recursive": {"type": "boolean"},
-                    "cursor": {"type": ["string", "null"]},
-                    "limit": {"type": "integer", "minimum": 1, "maximum": 100}
-                },
-                "additionalProperties": false
-            }),
-        });
         return Ok(tools);
     }
     let names = match arm {
@@ -3306,58 +3290,13 @@ where
     O: ObjectStore,
 {
     match name {
-        "ls" | "stat" | "catalog" | "read" | "find" | "aggregate" => {
+        "ls" | "stat" | "catalog" | "read" | "find" | "aggregate" | "grep" => {
             execute_agent_tool(service, name, args).map_err(from_nokv)
         }
-        "grep" => execute_nokv_grep_tool(service, args),
         other => Err(HarnessError::Corpus(format!(
             "unknown NoKV native tool {other}"
         ))),
     }
-}
-
-fn execute_nokv_grep_tool<M, O>(service: &NoKvFs<M, O>, args: &Value) -> Result<Value, HarnessError>
-where
-    M: MetadataStore,
-    O: ObjectStore,
-{
-    let result = service
-        .grep_paths(NamespaceGrepRequest {
-            path: required_string_arg(args, "path")?,
-            pattern: required_string_arg(args, "pattern")?,
-            recursive: required_bool_arg(args, "recursive")?,
-            cursor: optional_string_arg(args, "cursor"),
-            limit: optional_usize_arg(args, "limit")?.unwrap_or(100),
-            max_files: optional_usize_arg(args, "max_files")?,
-            max_bytes: optional_usize_arg(args, "max_bytes")?,
-        })
-        .map_err(from_nokv)?;
-    Ok(nokv_grep_result_json(&result))
-}
-
-fn nokv_grep_result_json(result: &NamespaceGrepResult) -> Value {
-    json!({
-        "tool": "grep",
-        "path": result.path,
-        "pattern": result.pattern,
-        "recursive": result.recursive,
-        "evidence": result.evidence,
-        "snapshot_id": result.snapshot_id,
-        "matches": result.matches.iter().map(nokv_grep_match_json).collect::<Vec<_>>(),
-        "files_scanned": result.files_scanned,
-        "bytes_read": result.bytes_read,
-        "next_cursor": result.next_cursor,
-        "truncated": result.truncated,
-    })
-}
-
-fn nokv_grep_match_json(match_: &NamespaceGrepMatch) -> Value {
-    json!({
-        "path": match_.path,
-        "line_number": match_.line_number,
-        "snippet": match_.snippet,
-        "evidence": match_.evidence,
-    })
 }
 
 fn to_json_value(value: impl Serialize) -> Result<Value, HarnessError> {
@@ -7525,8 +7464,9 @@ mod tests {
             })
             .unwrap();
 
-        let result = execute_nokv_grep_tool(
+        let result = execute_nokv_tool(
             &service,
+            "grep",
             &json!({
                 "path": "/runs",
                 "pattern": "needle",

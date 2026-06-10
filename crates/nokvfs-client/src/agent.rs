@@ -3,7 +3,8 @@ use nokvfs_meta::{
     NamespaceAggregateRequest, NamespaceAggregateResult, NamespaceAggregateSort,
     NamespaceAggregateValue, NamespaceBodyDescriptor, NamespaceCard, NamespaceCardKind,
     NamespaceFacetSummary, NamespaceFacetValue, NamespaceFilterCapability, NamespaceFindField,
-    NamespaceFindRequest, NamespaceFindResult, NamespaceIndexValue, NamespaceListOptions,
+    NamespaceFindRequest, NamespaceFindResult, NamespaceGrepRequest, NamespaceGrepResult,
+    NamespaceIndexValue, NamespaceListOptions,
     NamespaceListPage, NamespacePredicate, NamespacePredicateOp, NamespacePredicateValue,
     NamespaceQueryCatalog, NamespaceReadFormat, NamespaceReadItem, NamespaceReadOptions,
     NamespaceReadPage, NamespaceRecordCount, NamespaceRecordType, NamespaceSchema, NamespaceSort,
@@ -20,6 +21,8 @@ const DEFAULT_AGENT_FIND_LIMIT: usize = 10;
 const MAX_AGENT_FIND_LIMIT: usize = 10;
 const DEFAULT_AGENT_AGGREGATE_LIMIT: usize = 20;
 const MAX_AGENT_AGGREGATE_LIMIT: usize = 100;
+const DEFAULT_AGENT_GREP_LIMIT: usize = 100;
+const MAX_AGENT_GREP_LIMIT: usize = 100;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct AgentToolDefinition {
@@ -46,6 +49,11 @@ pub trait AgentNamespace {
         &self,
         request: NamespaceAggregateRequest,
     ) -> Result<NamespaceAggregateResult, ClientError>;
+
+    fn agent_grep_paths(
+        &self,
+        request: NamespaceGrepRequest,
+    ) -> Result<NamespaceGrepResult, ClientError>;
 
     fn agent_read_page(
         &self,
@@ -79,6 +87,13 @@ impl AgentNamespace for MetadataClient {
         request: NamespaceAggregateRequest,
     ) -> Result<NamespaceAggregateResult, ClientError> {
         self.aggregate_paths(request)
+    }
+
+    fn agent_grep_paths(
+        &self,
+        request: NamespaceGrepRequest,
+    ) -> Result<NamespaceGrepResult, ClientError> {
+        self.grep_paths(request)
     }
 
     fn agent_read_page(
@@ -120,6 +135,13 @@ where
         self.aggregate_paths(request)
     }
 
+    fn agent_grep_paths(
+        &self,
+        request: NamespaceGrepRequest,
+    ) -> Result<NamespaceGrepResult, ClientError> {
+        self.grep_paths(request)
+    }
+
     fn agent_read_page(
         &self,
         path: &str,
@@ -158,6 +180,13 @@ where
         request: NamespaceAggregateRequest,
     ) -> Result<NamespaceAggregateResult, ClientError> {
         self.aggregate_paths(request).map_err(ClientError::Metadata)
+    }
+
+    fn agent_grep_paths(
+        &self,
+        request: NamespaceGrepRequest,
+    ) -> Result<NamespaceGrepResult, ClientError> {
+        self.grep_paths(request).map_err(ClientError::Metadata)
     }
 
     fn agent_read_page(
@@ -360,6 +389,22 @@ pub fn agent_tool_definitions() -> Vec<AgentToolDefinition> {
                 "additionalProperties": false
             }),
         },
+        AgentToolDefinition {
+            name: "grep",
+            description: "Search file bodies for a case-insensitive literal substring and return matching lines with line numbers. Scope path to one directory or file when known.",
+            parameters: json!({
+                "type": "object",
+                "required": ["path", "pattern", "recursive"],
+                "properties": {
+                    "path": {"type": "string"},
+                    "pattern": {"type": "string"},
+                    "recursive": {"type": "boolean"},
+                    "cursor": {"type": ["string", "null"]},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": MAX_AGENT_GREP_LIMIT}
+                },
+                "additionalProperties": false
+            }),
+        },
     ]
 }
 
@@ -371,6 +416,7 @@ where
         "ls" => execute_ls(namespace, args),
         "stat" => execute_stat(namespace, args),
         "catalog" => execute_catalog(namespace, args),
+        "grep" => execute_grep(namespace, args),
         "read" => execute_read(namespace, args),
         "find" => execute_find(namespace, args),
         "aggregate" => execute_aggregate(namespace, args),
@@ -429,6 +475,53 @@ where
         "catalog": catalog_json(&catalog),
         "child_catalogs": child_catalogs,
     }))
+}
+
+fn execute_grep<T>(namespace: &T, args: &Value) -> Result<Value, ClientError>
+where
+    T: AgentNamespace + ?Sized,
+{
+    let path = required_string_arg(args, "path")?;
+    let pattern = required_string_arg(args, "pattern")?;
+    let recursive = optional_bool_arg(args, "recursive")?.ok_or_else(|| {
+        ClientError::Protocol("grep requires a boolean recursive argument".to_owned())
+    })?;
+    let result = namespace.agent_grep_paths(NamespaceGrepRequest {
+        path: path.to_owned(),
+        pattern: pattern.to_owned(),
+        recursive,
+        cursor: optional_string_arg(args, "cursor")?,
+        limit: optional_bounded_usize_arg(args, "limit", MAX_AGENT_GREP_LIMIT)?
+            .unwrap_or(DEFAULT_AGENT_GREP_LIMIT),
+        max_files: None,
+        max_bytes: None,
+    })?;
+    Ok(grep_result_json(&result))
+}
+
+fn grep_result_json(result: &NamespaceGrepResult) -> Value {
+    json!({
+        "tool": "grep",
+        "path": result.path,
+        "pattern": result.pattern,
+        "recursive": result.recursive,
+        "evidence": result.evidence,
+        "snapshot_id": result.snapshot_id,
+        "matches": result
+            .matches
+            .iter()
+            .map(|match_| json!({
+                "path": match_.path,
+                "line_number": match_.line_number,
+                "snippet": match_.snippet,
+                "evidence": match_.evidence,
+            }))
+            .collect::<Vec<_>>(),
+        "files_scanned": result.files_scanned,
+        "bytes_read": result.bytes_read,
+        "next_cursor": result.next_cursor,
+        "truncated": result.truncated,
+    })
 }
 
 fn execute_read<T>(namespace: &T, args: &Value) -> Result<Value, ClientError>
@@ -1312,7 +1405,8 @@ mod tests {
     use super::*;
     use nokvfs_meta::{
         NamespaceAggregateOutputMeasure, NamespaceFieldSource, NamespaceFieldSourceKind,
-        NamespaceFieldValue, NamespaceInclude, NamespaceRecordCount, RecordCountProvenance,
+        NamespaceFieldValue, NamespaceGrepMatch, NamespaceInclude, NamespaceRecordCount,
+        RecordCountProvenance,
     };
     use nokvfs_types::InodeId;
     use std::cell::RefCell;
@@ -1460,6 +1554,42 @@ mod tests {
             result.predicates = request.predicates.clone();
             self.last_aggregate.replace(Some(request));
             Ok(result)
+        }
+
+        fn agent_grep_paths(
+            &self,
+            request: NamespaceGrepRequest,
+        ) -> Result<NamespaceGrepResult, ClientError> {
+            let matched = "Checkpoint: best_model_1.0_1.pt";
+            let matches = if matched
+                .to_lowercase()
+                .contains(&request.pattern.to_lowercase())
+            {
+                vec![NamespaceGrepMatch {
+                    path: format!("{}/artifacts/stdout.txt", request.path),
+                    line_number: 3,
+                    snippet: matched.to_owned(),
+                    evidence: format!(
+                        "nokv-native://{}/artifacts/stdout.txt@generation:1#L3",
+                        request.path
+                    ),
+                    generation: 1,
+                }]
+            } else {
+                Vec::new()
+            };
+            Ok(NamespaceGrepResult {
+                path: request.path.clone(),
+                pattern: request.pattern.clone(),
+                recursive: request.recursive,
+                evidence: format!("nokv-native://{}", request.path),
+                snapshot_id: Some(1),
+                matches,
+                files_scanned: 1,
+                bytes_read: matched.len(),
+                next_cursor: None,
+                truncated: false,
+            })
         }
 
         fn agent_read_page(
@@ -1718,7 +1848,7 @@ mod tests {
 
         assert_eq!(
             names,
-            vec!["ls", "stat", "catalog", "read", "aggregate", "find"]
+            vec!["ls", "stat", "catalog", "read", "aggregate", "find", "grep"]
         );
     }
 
