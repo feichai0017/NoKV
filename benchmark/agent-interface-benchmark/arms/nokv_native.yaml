@@ -16,12 +16,14 @@ runtime_context:
     - Use only field ids returned by stat or catalog for the current search root.
     - If a catalog is empty, use returned child_catalogs as candidate search roots.
   tool_roles:
+    - When a task names an exact body phrase, use grep on /yanex/runs with recursive=true before reading whole files.
     - Use ls to discover direct child paths.
     - Use stat to inspect one path's compact card, including body, schema, sample, catalog, and indexed values.
     - Use catalog to discover fields for find and aggregate.
     - Use find to search paths and project indexed fields.
     - Use aggregate for counts, groups, and summary measures.
-    - Use read only when the task requires actual file body content.
+    - Use grep for body line search under a namespace path.
+    - Use read only when the task requires actual file body content and no narrower search or audit tool applies.
   safety:
     - Do not invent field ids or paths.
     - Do not treat body descriptors as file content.

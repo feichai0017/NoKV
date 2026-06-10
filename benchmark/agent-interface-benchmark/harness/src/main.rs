@@ -102,6 +102,7 @@ fn run(args: Vec<String>) -> Result<(), HarnessError> {
         "judge" => judge(options),
         "run-task" => run_benchmark_task(options),
         "run-batch" => run_benchmark_batch(options),
+        "agent-tool" => agent_tool_debug(options),
         other => Err(HarnessError::UnknownCommand(other.to_owned())),
     }
 }
@@ -129,6 +130,8 @@ struct Options {
     max_completion_tokens: Option<usize>,
     repeats: Option<usize>,
     run_id: Option<String>,
+    tool_name: Option<String>,
+    args_json: Option<String>,
     reset: bool,
     s3: S3Options,
 }
@@ -168,7 +171,8 @@ struct BenchmarkTask {
     task_id: String,
     category: String,
     prompt: String,
-    gold_sql: String,
+    #[serde(default)]
+    gold_sql: Option<String>,
     expected: ExpectedSpec,
 }
 
@@ -854,6 +858,14 @@ impl Options {
                 "--sql" => {
                     index += 1;
                     options.sql = Some(value(args, index, "--sql")?.to_owned());
+                }
+                "--tool-name" => {
+                    index += 1;
+                    options.tool_name = Some(value(args, index, "--tool-name")?.to_owned());
+                }
+                "--args-json" => {
+                    index += 1;
+                    options.args_json = Some(value(args, index, "--args-json")?.to_owned());
                 }
                 "--blob-ref" => {
                     index += 1;
@@ -1581,7 +1593,7 @@ fn print_tool_registry(options: Options) -> Result<(), HarnessError> {
 
 fn tool_registry_for_arm(arm: &str) -> Result<Vec<ToolDefinition>, HarnessError> {
     if arm == "nokv_native_v1" {
-        let tools = agent_tool_definitions()
+        let mut tools = agent_tool_definitions()
             .into_iter()
             .map(|tool| ToolDefinition {
                 name: tool.name.to_owned(),
@@ -1589,6 +1601,24 @@ fn tool_registry_for_arm(arm: &str) -> Result<Vec<ToolDefinition>, HarnessError>
                 parameters: tool.parameters,
             })
             .collect::<Vec<_>>();
+        tools.push(ToolDefinition {
+            name: "grep".to_owned(),
+            description: "Search file bodies under a namespace path and return matching line snippets with paths. Use grep when a task asks about body text without needing full file reads.".to_owned(),
+            parameters: json!({
+                "type": "object",
+                "required": ["path", "pattern", "recursive"],
+                "properties": {
+                    "path": {"type": "string"},
+                    "pattern": {"type": "string"},
+                    "recursive": {"type": "boolean"},
+                    "cursor": {"type": ["string", "null"]},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 100},
+                    "max_files": {"type": ["integer", "null"], "minimum": 1},
+                    "max_bytes": {"type": ["integer", "null"], "minimum": 1}
+                },
+                "additionalProperties": false
+            }),
+        });
         return Ok(tools);
     }
     let names = match arm {
@@ -3218,11 +3248,15 @@ fn execute_sqlite_raw_tool(
     }
 }
 
-fn execute_nokv_tool(
-    service: &NoKvFs<HoltMetadataStore, S3ObjectStore>,
+fn execute_nokv_tool<M, O>(
+    service: &NoKvFs<M, O>,
     name: &str,
     args: &Value,
-) -> Result<Value, HarnessError> {
+) -> Result<Value, HarnessError>
+where
+    M: MetadataStore,
+    O: ObjectStore,
+{
     match name {
         "ls" | "stat" | "catalog" | "read" | "find" | "aggregate" => {
             execute_agent_tool(service, name, args).map_err(from_nokv)
@@ -3575,13 +3609,199 @@ fn actual_run_ids(answer: &Value, expected: &ExpectedSpec) -> Vec<String> {
 }
 
 fn query_gold_rows(conn: &Connection, task: &BenchmarkTask) -> Result<Vec<Value>, HarnessError> {
-    execute_sqlite_query_tool(conn, &task.gold_sql).map(|result| {
-        result
-            .rows
-            .into_iter()
-            .map(|row| row.row)
-            .collect::<Vec<_>>()
+    if let Some(sql) = task
+        .gold_sql
+        .as_deref()
+        .filter(|sql| !sql.trim().is_empty())
+    {
+        return execute_sqlite_query_tool(conn, sql).map(|result| {
+            result
+                .rows
+                .into_iter()
+                .map(|row| row.row)
+                .collect::<Vec<_>>()
+        });
+    }
+    query_oracle_rows(conn, &task.task_id)
+}
+
+fn query_oracle_rows(conn: &Connection, task_id: &str) -> Result<Vec<Value>, HarnessError> {
+    match task_id {
+        "tabdiff_ddxplus_dcr_checkpoint_provenance" => tabdiff_checkpoint_provenance_rows(conn),
+        "best_detection_eval_method_audit" => best_detection_eval_method_rows(conn),
+        "cancelled_train_interrupt_triage" => cancelled_train_interrupt_rows(conn),
+        other => Err(HarnessError::Judge(format!(
+            "task {other} has no gold_sql and no file-body oracle"
+        ))),
+    }
+}
+
+fn tabdiff_checkpoint_provenance_rows(conn: &Connection) -> Result<Vec<Value>, HarnessError> {
+    let mut stmt = conn
+        .prepare(
+            r#"
+            SELECT e.experiment_id, a.blob_ref
+            FROM experiments e
+            JOIN params p ON p.experiment_id = e.experiment_id
+                AND p.param_path = 'tabdiff.dataset'
+                AND p.value_json = '"ddxplus_dcr"'
+            JOIN artifacts a ON a.experiment_id = e.experiment_id
+                AND a.artifact_path = 'stdout.txt'
+                AND a."exists" = 1
+            WHERE e.script_path = 'sample_tabdiff.py'
+            ORDER BY e.experiment_id ASC
+            "#,
+        )
+        .map_err(from_sql)?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
+        .map_err(from_sql)?;
+    let mut matches = Vec::new();
+    for row in rows {
+        let (experiment_id, blob_ref) = row.map_err(from_sql)?;
+        let stdout = sqlite_blob_text(conn, &blob_ref)?;
+        let Some(checkpoint_file) = body_anchor_value(&stdout, "Checkpoint: ")
+            .map(|value| value.split(" (").next().unwrap_or(value).trim().to_owned())
+        else {
+            continue;
+        };
+        let Some(model_parameters) = body_anchor_value(&stdout, "Model parameters: ")
+            .and_then(|value| value.trim().replace(',', "").parse::<i64>().ok())
+        else {
+            continue;
+        };
+        matches.push(json!({
+            "experiment_id": experiment_id,
+            "checkpoint_file": checkpoint_file,
+            "model_parameters": model_parameters,
+        }));
+    }
+    Ok(matches)
+}
+
+fn best_detection_eval_method_rows(conn: &Connection) -> Result<Vec<Value>, HarnessError> {
+    let mut stmt = conn
+        .prepare(
+            r#"
+            WITH latest AS (
+                SELECT experiment_id, value
+                FROM metrics
+                WHERE metric_name = 'detection_roc_auc'
+                    AND value IS NOT NULL
+                    AND value > -9.0e+999
+                    AND value < 9.0e+999
+                GROUP BY experiment_id
+                HAVING step = MAX(step)
+            )
+            SELECT e.experiment_id, l.value, a.blob_ref
+            FROM experiments e
+            JOIN latest l ON l.experiment_id = e.experiment_id
+            JOIN artifacts a ON a.experiment_id = e.experiment_id
+                AND a.artifact_path = 'stdout.txt'
+                AND a."exists" = 1
+            WHERE e.status = 'completed'
+                AND e.script_path = 'eval.py'
+            ORDER BY l.value DESC, e.experiment_id ASC
+            LIMIT 1
+            "#,
+        )
+        .map_err(from_sql)?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, f64>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })
+        .map_err(from_sql)?;
+    for row in rows {
+        let (experiment_id, detection_roc_auc, blob_ref) = row.map_err(from_sql)?;
+        let stdout = sqlite_blob_text(conn, &blob_ref)?;
+        let Some(method) = body_anchor_value(&stdout, "Method: ")
+            .map(|value| value.trim_end_matches(')').trim().to_owned())
+        else {
+            continue;
+        };
+        return Ok(vec![json!({
+            "experiment_id": experiment_id,
+            "detection_roc_auc": detection_roc_auc,
+            "detection_method": method,
+        })]);
+    }
+    Ok(Vec::new())
+}
+
+fn cancelled_train_interrupt_rows(conn: &Connection) -> Result<Vec<Value>, HarnessError> {
+    let mut stmt = conn
+        .prepare(
+            r#"
+            SELECT
+                e.experiment_id,
+                e.status,
+                a.size_bytes,
+                a.blob_ref
+            FROM experiments e
+            LEFT JOIN artifacts a ON a.experiment_id = e.experiment_id
+                AND a.artifact_path = 'stderr.txt'
+                AND a."exists" = 1
+            WHERE e.status != 'completed'
+            ORDER BY e.experiment_id ASC
+            "#,
+        )
+        .map_err(from_sql)?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, Option<i64>>(2)?,
+                row.get::<_, Option<String>>(3)?,
+            ))
+        })
+        .map_err(from_sql)?;
+    let mut matches = Vec::new();
+    for row in rows {
+        let (experiment_id, status, stderr_size, blob_ref) = row.map_err(from_sql)?;
+        let interrupt_line = match blob_ref.as_deref() {
+            Some(blob_ref) => {
+                let stderr = sqlite_blob_text(conn, blob_ref)?;
+                stderr
+                    .lines()
+                    .enumerate()
+                    .filter(|(_, line)| line.contains("KeyboardInterrupt"))
+                    .map(|(index, _)| (index + 1) as i64)
+                    .last()
+            }
+            None => None,
+        };
+        matches.push(json!({
+            "experiment_id": experiment_id,
+            "status": status,
+            "stderr_size_bytes": stderr_size,
+            "keyboard_interrupt": interrupt_line.is_some(),
+            "interrupt_line_number": interrupt_line,
+        }));
+    }
+    Ok(matches)
+}
+
+fn body_anchor_value<'a>(body: &'a str, anchor: &str) -> Option<&'a str> {
+    body.lines().find_map(|line| {
+        let start = line.find(anchor)? + anchor.len();
+        Some(&line[start..])
     })
+}
+
+fn sqlite_blob_text(conn: &Connection, blob_ref: &str) -> Result<String, HarnessError> {
+    let bytes = query_single_blob(
+        conn,
+        "SELECT content FROM blobs WHERE blob_ref = ?1",
+        blob_ref,
+    )?;
+    Ok(String::from_utf8_lossy(&bytes).to_string())
 }
 
 fn expected_run_ids(rows: &[Value], column: Option<&str>) -> Vec<String> {
@@ -6118,6 +6338,34 @@ fn nokv_register_indexes(options: Options) -> Result<(), HarnessError> {
     }))
 }
 
+fn agent_tool_debug(options: Options) -> Result<(), HarnessError> {
+    let data_root = required_data_root(&options)?;
+    let arm = options
+        .arm
+        .clone()
+        .ok_or_else(|| HarnessError::Corpus("agent-tool requires --arm".to_owned()))?;
+    let tool_name = options
+        .tool_name
+        .clone()
+        .ok_or_else(|| HarnessError::Corpus("agent-tool requires --tool-name".to_owned()))?;
+    let args: Value = serde_json::from_str(options.args_json.as_deref().unwrap_or("{}"))
+        .map_err(|err| HarnessError::Json(err.to_string()))?;
+    let mut runtime = ArmRuntime::open(&arm, &data_root, &options.s3)?;
+    let result = match &mut runtime {
+        ArmRuntime::SqliteRaw { conn } => execute_sqlite_raw_tool(conn, &tool_name, &args)?,
+        ArmRuntime::NokvNative { service } => {
+            execute_nokv_tool(service.as_ref(), &tool_name, &args)?
+        }
+    };
+    let compact = serde_json::to_string(&result).map_err(|err| HarnessError::Json(err.to_string()))?;
+    eprintln!(
+        "tool={tool_name} arm={arm} result_bytes={} approx_tokens={}",
+        compact.len(),
+        compact.len() / 4
+    );
+    print_json(&result)
+}
+
 fn open_existing_nokv(
     meta_path: &Path,
     s3: &S3Options,
@@ -6466,10 +6714,9 @@ mod tests {
         prepare_sqlite(&sqlite_path(data_root), &[run], &indexes).unwrap();
     }
 
-    fn successful_status_counts_answer() -> Value {
+    fn successful_empty_runs_answer() -> Value {
         json!({
-            "status_counts": [{"status": "completed", "count": 1}],
-            "total_runs": 1
+            "runs": []
         })
     }
 
@@ -6763,39 +7010,15 @@ mod tests {
     }
 
     #[test]
-    fn train_lr_batch_gold_ignores_nonfinite_min_val_loss() {
+    fn file_body_oracle_returns_empty_rows_when_sample_data_has_no_cancelled_runs() {
         let conn = Connection::open_in_memory().unwrap();
         create_schema(&conn).unwrap();
-        let finite = sample_run();
-        let mut nonfinite = sample_run();
-        nonfinite.id = "run-inf".to_owned();
-        nonfinite.metadata["id"] = json!("run-inf");
-        nonfinite.metadata_bytes = serde_json::to_vec(&nonfinite.metadata).unwrap();
-        nonfinite.metrics_bytes =
-            Some(br#"[{"step":0,"val_loss":Infinity,"timestamp":"now"}]"#.to_vec());
-        nonfinite.metrics = Some(
-            parse_metrics_bytes(
-                Path::new("/tmp/run-inf/metrics.json"),
-                nonfinite.metrics_bytes.as_ref().unwrap(),
-            )
-            .unwrap(),
-        );
-        insert_run(&conn, &finite).unwrap();
-        insert_run(&conn, &nonfinite).unwrap();
-        let task = phase1_task_set()
-            .unwrap()
-            .tasks
-            .into_iter()
-            .find(|task| task.task_id == "train_lr_batch_loss_top5")
-            .unwrap();
+        insert_run(&conn, &sample_run()).unwrap();
+        let task = find_task("cancelled_train_interrupt_triage").unwrap();
 
         let rows = query_gold_rows(&conn, &task).unwrap();
 
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0]["learning_rate"], json!("0.001"));
-        assert_eq!(rows[0]["batch_size"], json!("32"));
-        assert_eq!(rows[0]["run_count"], json!(1));
-        assert_eq!(rows[0]["avg_min_val_loss"], json!(0.3));
+        assert!(rows.is_empty());
     }
 
     #[test]
@@ -7117,7 +7340,7 @@ mod tests {
         );
         assert_eq!(
             tool_names(&tool_registry_for_arm("nokv_native_v1").unwrap()),
-            vec!["ls", "stat", "catalog", "read", "aggregate", "find"]
+            vec!["ls", "stat", "catalog", "read", "aggregate", "find", "grep"]
         );
         assert!(tool_registry_for_arm("unknown_arm_v1").is_err());
     }
@@ -7239,13 +7462,19 @@ mod tests {
     }
 
     #[test]
-    fn train_lr_batch_prompt_documents_finite_metric_policy() {
-        let task = find_task("train_lr_batch_loss_top5").unwrap();
+    fn phase1_prompts_request_body_and_namespace_research_workflows() {
+        let task_set = phase1_task_set().unwrap();
+        let combined = task_set
+            .tasks
+            .iter()
+            .map(|task| task.prompt.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
 
-        assert!(task.prompt.contains("Ignore non-finite val_loss values"));
-        assert!(task
-            .prompt
-            .contains("runs with no finite val_loss are excluded"));
+        assert!(combined.contains("stdout log"));
+        assert!(combined.contains("stderr log"));
+        assert!(combined.contains("ddxplus_dcr"));
+        assert!(combined.contains("KeyboardInterrupt"));
     }
 
     #[test]
@@ -7308,7 +7537,7 @@ mod tests {
     }
 
     #[test]
-    fn phase1_tasks_are_fixed_to_ten_read_only_prompts() {
+    fn phase1_tasks_are_nokv_dominant_ml_research_prompts() {
         let task_set = phase1_task_set().unwrap();
         let task_ids: Vec<&str> = task_set
             .tasks
@@ -7319,27 +7548,28 @@ mod tests {
         assert_eq!(
             task_ids,
             vec![
-                "status_counts",
-                "train_lr_batch_loss_top5",
-                "eval_best_utility_tstr",
-                "cancelled_runs_stderr",
-                "dirty_git_missing_patches",
-                "index_completed_consistency",
-                "stdout_availability_by_script",
-                "cancelled_stderr_root_cause",
-                "eval_details_worst_fidelity_field",
-                "best_eval_lineage_trace",
+                "train_top_configs_report",
+                "eval_fidelity_leaderboard",
+                "tabdiff_ddxplus_dcr_checkpoint_provenance",
+                "best_detection_eval_method_audit",
+                "cancelled_train_interrupt_triage",
             ]
         );
-        assert!(!task_ids.contains(&"completed_scripts_top5"));
-        assert!(!task_ids.contains(&"train_best_min_val_loss"));
-        assert!(!task_ids.contains(&"largest_stderr_files"));
-        assert!(!task_ids.contains(&"stderr_dataframe_fragmentation_top10"));
-        assert!(!task_ids.contains(&"sample_tabdiff_checkpoint_top5"));
-        assert!(!task_ids.contains(&"eval_privacy_default_warning_counts"));
+        assert!(!task_ids.contains(&"status_counts"));
+        assert!(!task_ids.contains(&"train_lr_batch_loss_top5"));
+        assert!(!task_ids.contains(&"eval_best_utility_tstr"));
+        let oracle_task_ids = [
+            "tabdiff_ddxplus_dcr_checkpoint_provenance",
+            "best_detection_eval_method_audit",
+            "cancelled_train_interrupt_triage",
+        ];
         for task in &task_set.tasks {
             assert!(!task.prompt.trim().is_empty());
-            assert!(!task.gold_sql.trim().is_empty());
+            if oracle_task_ids.contains(&task.task_id.as_str()) {
+                assert!(task.gold_sql.is_none());
+            } else {
+                assert!(task.gold_sql.is_some());
+            }
             let lower = task.prompt.to_ascii_lowercase();
             assert!(!lower.contains("watch"));
             assert!(!lower.contains("snapshot"));
@@ -7519,7 +7749,7 @@ mod tests {
             );
         fs::write(&profile_path, &profile_yaml).unwrap();
         let (endpoint, requests, server) =
-            start_response_capture_server(2, successful_status_counts_answer());
+            start_response_capture_server(2, successful_empty_runs_answer());
         let _api_key = TestEnvVar::set("OPENAI_API_KEY", "unit-api-key");
         let _endpoint = TestEnvVar::set("OPENAI_RESPONSES_URL", &endpoint);
         let options = Options::parse(&[
@@ -7534,7 +7764,7 @@ mod tests {
             "--arm".to_owned(),
             "sqlite_raw_v1".to_owned(),
             "--task-id".to_owned(),
-            "status_counts".to_owned(),
+            "cancelled_train_interrupt_triage".to_owned(),
             "--model".to_owned(),
             "unit-profile-model".to_owned(),
         ])
@@ -7582,7 +7812,7 @@ mod tests {
             assert!(messages[2]["content"]
                 .as_str()
                 .unwrap()
-                .contains("Task ID: status_counts"));
+                .contains("Task ID: cancelled_train_interrupt_triage"));
             assert!(!combined_context.contains("Base profile YAML:"));
             assert!(!combined_context.contains("Rubric YAML:"));
             assert!(!combined_context.contains("gold_sql"));
@@ -7611,7 +7841,7 @@ mod tests {
             .replace("max_turns: 20", "max_turns: 2")
             .replace("repeats_per_arm_task: 10", "repeats_per_arm_task: 1");
         fs::write(&profile_path, &profile_yaml).unwrap();
-        let final_answer = successful_status_counts_answer();
+        let final_answer = successful_empty_runs_answer();
         let first_response = json!({
             "id": "resp-tool-0",
             "model": "unit-profile-model",
@@ -7665,7 +7895,7 @@ mod tests {
             "--arm".to_owned(),
             "sqlite_raw_v1".to_owned(),
             "--task-id".to_owned(),
-            "status_counts".to_owned(),
+            "cancelled_train_interrupt_triage".to_owned(),
             "--model".to_owned(),
             "unit-profile-model".to_owned(),
         ])
@@ -7705,7 +7935,7 @@ mod tests {
             .replace("max_turns: 20", "max_turns: 2")
             .replace("repeats_per_arm_task: 10", "repeats_per_arm_task: 1");
         fs::write(&profile_path, &profile_yaml).unwrap();
-        let final_answer = successful_status_counts_answer();
+        let final_answer = successful_empty_runs_answer();
         let first_response = json!({
             "id": "resp-agent-tool-0",
             "model": "unit-profile-model",
@@ -7758,7 +7988,7 @@ mod tests {
             "--arm".to_owned(),
             "sqlite_raw_v1".to_owned(),
             "--task-id".to_owned(),
-            "status_counts".to_owned(),
+            "cancelled_train_interrupt_triage".to_owned(),
             "--model".to_owned(),
             "unit-profile-model".to_owned(),
         ])
@@ -7850,7 +8080,7 @@ mod tests {
             .replace("repeats_per_arm_task: 10", "repeats_per_arm_task: 2");
         fs::write(&profile_path, &profile_yaml).unwrap();
         let (endpoint, requests, server) =
-            start_response_capture_server(2, successful_status_counts_answer());
+            start_response_capture_server(2, successful_empty_runs_answer());
         let _api_key = TestEnvVar::set("OPENAI_API_KEY", "unit-api-key");
         let _endpoint = TestEnvVar::set("OPENAI_RESPONSES_URL", &endpoint);
         let _no_sdk = TestEnvVar::set("YANEX_BENCH_AGENT_SDK_TEST_NO_SDK", "1");
@@ -7864,7 +8094,7 @@ mod tests {
             "--arm".to_owned(),
             "sqlite_raw_v1".to_owned(),
             "--task-id".to_owned(),
-            "status_counts".to_owned(),
+            "cancelled_train_interrupt_triage".to_owned(),
             "--model".to_owned(),
             "unit-profile-model".to_owned(),
         ])
@@ -7901,7 +8131,7 @@ mod tests {
     #[test]
     fn agent_visible_context_only_requests_task_answer() {
         let profile = base_profile().unwrap();
-        let task = find_task("status_counts").unwrap();
+        let task = find_task("cancelled_train_interrupt_triage").unwrap();
         let messages = benchmark_messages(&profile, arm_card_yaml("sqlite_raw_v1").unwrap(), &task);
         let combined_context = messages
             .iter()
@@ -7942,20 +8172,20 @@ mod tests {
     }
 
     #[test]
-    fn batch_plan_defaults_to_two_arms_ten_tasks_ten_repeats() {
+    fn batch_plan_defaults_to_two_arms_five_tasks_ten_repeats() {
         let profile = base_profile().unwrap();
         let tasks = phase1_task_set().unwrap();
         let repeat_count = repeat_count_from_options(&Options::default(), &profile);
         let plan = batch_plan(None, None, repeat_count, &tasks);
 
         assert_eq!(repeat_count, 10);
-        assert_eq!(plan.len(), 2 * 10 * 10);
+        assert_eq!(plan.len(), 2 * 5 * 10);
         assert_eq!(benchmark_arm_ids(), &["sqlite_raw_v1", "nokv_native_v1"]);
         assert_eq!(plan[0].arm_id, "sqlite_raw_v1");
-        assert_eq!(plan[0].task_id, "status_counts");
+        assert_eq!(plan[0].task_id, "train_top_configs_report");
         assert_eq!(plan[0].repeat_index, 0);
         assert_eq!(plan[9].repeat_index, 9);
-        assert_eq!(plan[10].task_id, "train_lr_batch_loss_top5");
+        assert_eq!(plan[10].task_id, "eval_fidelity_leaderboard");
     }
 
     #[test]
@@ -7963,17 +8193,78 @@ mod tests {
         let tasks = phase1_task_set().unwrap();
         let plan = batch_plan(Some("nokv_native_v1"), None, 5, &tasks);
 
-        assert_eq!(plan.len(), 10 * 5);
-        assert_eq!(plan[0].task_id, "status_counts");
+        assert_eq!(plan.len(), 5 * 5);
+        assert_eq!(plan[0].task_id, "train_top_configs_report");
         assert_eq!(plan[0].repeat_index, 0);
-        assert_eq!(plan[4].task_id, "status_counts");
+        assert_eq!(plan[4].task_id, "train_top_configs_report");
         assert_eq!(plan[4].repeat_index, 4);
-        assert_eq!(plan[5].task_id, "train_lr_batch_loss_top5");
+        assert_eq!(plan[5].task_id, "eval_fidelity_leaderboard");
         assert_eq!(plan[5].repeat_index, 0);
-        assert_eq!(plan[34].task_id, "stdout_availability_by_script");
-        assert_eq!(plan[34].repeat_index, 4);
-        assert_eq!(plan[49].task_id, "best_eval_lineage_trace");
-        assert_eq!(plan[49].repeat_index, 4);
+        assert_eq!(plan[24].task_id, "cancelled_train_interrupt_triage");
+        assert_eq!(plan[24].repeat_index, 4);
+    }
+
+    #[test]
+    fn nokv_native_tool_registry_exposes_body_grep() {
+        let tools = tool_registry_for_arm("nokv_native_v1").unwrap();
+        let tool_names = tools
+            .iter()
+            .map(|tool| tool.name.as_str())
+            .collect::<BTreeSet<_>>();
+
+        assert!(tool_names.contains("grep"));
+        assert!(!tool_names.contains("research_audit"));
+    }
+
+    #[test]
+    fn local_judge_can_use_file_body_oracle_without_gold_sql() {
+        let conn = Connection::open_in_memory().unwrap();
+        create_schema(&conn).unwrap();
+        let mut run = sample_run();
+        run.id = "cancel-1".to_owned();
+        run.metadata["id"] = json!("cancel-1");
+        run.metadata["status"] = json!("cancelled");
+        run.metadata["cli_args"]["script"] = json!("scripts/train.py");
+        run.metadata_bytes = serde_json::to_vec(&run.metadata).unwrap();
+        run.artifacts = vec![CorpusFile {
+            relative_path: "stderr.txt".to_owned(),
+            bytes:
+                b"Traceback\n  File \"/tmp/train.py\", line 10, in <module>\nKeyboardInterrupt\n"
+                    .to_vec(),
+        }];
+        insert_run(&conn, &run).unwrap();
+        let task = BenchmarkTask {
+            task_id: "cancelled_train_interrupt_triage".to_owned(),
+            category: "failure_triage".to_owned(),
+            prompt: "return cancelled keyboard interrupts".to_owned(),
+            gold_sql: None,
+            expected: ExpectedSpec {
+                kind: "rows_exact".to_owned(),
+                answer_key: Some("runs".to_owned()),
+                run_id_column: Some("experiment_id".to_owned()),
+                columns: vec![
+                    "experiment_id".to_owned(),
+                    "status".to_owned(),
+                    "stderr_size_bytes".to_owned(),
+                    "keyboard_interrupt".to_owned(),
+                    "interrupt_line_number".to_owned(),
+                ],
+            },
+        };
+        let answer = json!({
+            "runs": [{
+                "experiment_id": "cancel-1",
+                "status": "cancelled",
+                "stderr_size_bytes": 73,
+                "keyboard_interrupt": true,
+                "interrupt_line_number": 3
+            }]
+        });
+
+        let result = judge_answer(&conn, &task, "sqlite_raw_v1", &answer, None).unwrap();
+
+        assert!(result.task_success, "{result:?}");
+        assert_eq!(result.expected_run_ids, vec!["cancel-1"]);
     }
 
     #[test]
@@ -7993,8 +8284,9 @@ mod tests {
             task_id: "unit".to_owned(),
             category: "structured_analytics".to_owned(),
             prompt: "return the run".to_owned(),
-            gold_sql: "SELECT experiment_id, status FROM experiments ORDER BY experiment_id"
-                .to_owned(),
+            gold_sql: Some(
+                "SELECT experiment_id, status FROM experiments ORDER BY experiment_id".to_owned(),
+            ),
             expected: ExpectedSpec {
                 kind: "rows_exact".to_owned(),
                 answer_key: Some("runs".to_owned()),
@@ -8024,8 +8316,9 @@ mod tests {
             task_id: "unit".to_owned(),
             category: "structured_analytics".to_owned(),
             prompt: "return the run".to_owned(),
-            gold_sql: "SELECT experiment_id, status FROM experiments ORDER BY experiment_id"
-                .to_owned(),
+            gold_sql: Some(
+                "SELECT experiment_id, status FROM experiments ORDER BY experiment_id".to_owned(),
+            ),
             expected: ExpectedSpec {
                 kind: "rows_exact".to_owned(),
                 answer_key: Some("runs".to_owned()),
