@@ -11,7 +11,6 @@ runtime_context:
   path_model:
     - Paths are absolute NoKV namespace paths.
     - Runs live under /yanex/runs; each run directory holds its run files and an artifacts/ subdirectory with log and output files such as stdout.txt and stderr.txt.
-    - Derived read-only indexes live under /yanex/index.
     - For paths outside this documented layout, discover children from returned cards or catalogs before use.
   field_discovery:
     - Use only field ids returned by stat or catalog for the current search root.
