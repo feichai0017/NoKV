@@ -124,11 +124,6 @@ if [ -z "${output_jsonl}" ]; then
   output_jsonl="${data_root}/results/${run_date}/phase1-${run_timestamp}.jsonl"
 fi
 
-if [ -z "${output_jsonl}" ]; then
-  echo "--output-jsonl resolved to an empty path" >&2
-  exit 2
-fi
-
 if [ -n "${repeats}" ] && { ! [[ "${repeats}" =~ ^[0-9]+$ ]] || [ "${repeats}" -lt 1 ]; }; then
   echo "--repeats expects a positive integer, got ${repeats}" >&2
   exit 2

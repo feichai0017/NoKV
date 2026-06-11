@@ -1,3 +1,4 @@
+import asyncio
 import unittest
 import importlib.metadata
 import json
@@ -139,6 +140,87 @@ class OpenAiAgentsVersionTest(unittest.TestCase):
         self.assertIn("Error running tool stat", message)
         self.assertIn("/yanex/runs/02b8a944/artifacts/git_diff.patch", message)
         self.assertIn("Connection reset by peer", message)
+
+    def test_no_sdk_path_records_real_request_metadata(self) -> None:
+        sent_requests = []
+
+        def fake_send_request(model, request):  # type: ignore[no-untyped-def]
+            sent_requests.append(request)
+            if "previous_response_id" not in request:
+                return (
+                    {
+                        "id": "resp-1",
+                        "model": "unit-model",
+                        "output": [
+                            {
+                                "type": "function_call",
+                                "call_id": "call-1",
+                                "name": "stat",
+                                "arguments": json.dumps({"path": "/runs"}),
+                            }
+                        ],
+                        "usage": {"input_tokens": 7, "output_tokens": 3, "total_tokens": 10},
+                    },
+                    "req-1",
+                    111,
+                    222,
+                )
+            self.assertEqual(request["previous_response_id"], "resp-1")
+            return (
+                {
+                    "id": "resp-2",
+                    "model": "unit-model",
+                    "output_text": json.dumps({"answer": "ok"}),
+                    "usage": {"input_tokens": 5, "output_tokens": 2, "total_tokens": 7},
+                },
+                "req-2",
+                333,
+                444,
+            )
+
+        config = {
+            "model": "unit-model",
+            "endpoint": "https://example.test/v1/responses",
+            "max_completion_tokens": 128,
+            "messages": [{"role": "user", "content": "inspect /runs"}],
+            "tools": [
+                {
+                    "name": "stat",
+                    "description": "Stat a path.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"path": {"type": "string"}},
+                        "required": ["path"],
+                        "additionalProperties": False,
+                    },
+                }
+            ],
+            "tool_bridge_url": "http://127.0.0.1:12345",
+            "run_id": "run-1",
+        }
+
+        with mock.patch.dict(runner.os.environ, {"OPENAI_API_KEY": "unit-key"}):
+            with mock.patch.object(
+                runner.SchemaOnceResponsesModel,
+                "send_request",
+                autospec=True,
+                side_effect=fake_send_request,
+            ):
+                with mock.patch.object(
+                    runner,
+                    "post_tool_bridge",
+                    return_value={"content": {"path": "/runs"}},
+                ):
+                    result = asyncio.run(runner.run_without_agents_sdk(config))
+
+        self.assertEqual(result["final_answer"], {"answer": "ok"})
+        self.assertEqual(len(sent_requests), 2)
+        self.assertEqual(result["api_calls"][0]["request_id"], "req-1")
+        self.assertEqual(result["api_calls"][0]["started_at_unix_ms"], 111)
+        self.assertEqual(result["api_calls"][0]["completed_at_unix_ms"], 222)
+        self.assertEqual(result["api_calls"][1]["request_id"], "req-2")
+        self.assertEqual(result["api_calls"][1]["started_at_unix_ms"], 333)
+        self.assertEqual(result["api_calls"][1]["completed_at_unix_ms"], 444)
 
 
 if __name__ == "__main__":

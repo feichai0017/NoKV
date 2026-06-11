@@ -726,7 +726,12 @@ where
         let mut entries = Vec::new();
         self.collect_entries(&root, root_inode, version, &mut entries)?;
         let scanned_entries = entries.len();
-        let projection = CardProjection::find(&request.include);
+        let include_body = request.include.contains(&NamespaceInclude::Body);
+        let body_facet_requested = request.facets.iter().any(field_needs_body_projection);
+        let mut projection = CardProjection::find(&request.include);
+        if body_facet_requested {
+            projection.body = true;
+        }
         let mut cards = entries
             .into_iter()
             .filter_map(|entry| {
@@ -750,6 +755,11 @@ where
             .collect::<Result<Vec<_>, _>>()?;
         apply_sort(&mut cards, &request.sort);
         let facets = filtered_facet_summaries(&cards, &request.facets, DEFAULT_FACET_VALUE_LIMIT);
+        if body_facet_requested && !include_body {
+            for card in &mut cards {
+                card.body = None;
+            }
+        }
         let total_matches = cards.len();
         let matches = cards
             .into_iter()
@@ -1011,8 +1021,22 @@ where
     ) -> Result<(), MetadError> {
         let path = normalize_card_path(&registration.path)?;
         let version = self.next_version()?;
+        let read_version = predecessor(version)?;
         let mut mutations = Vec::new();
         let catalog_key = path_index_catalog_key(self.mount, &path);
+        let catalog_item = self.metadata.get_versioned(
+            RecordFamily::PathIndex,
+            &catalog_key,
+            read_version,
+            ReadPurpose::UserStrong,
+        )?;
+        let predicates = vec![PredicateRef {
+            family: RecordFamily::PathIndex,
+            key: catalog_key.clone(),
+            predicate: catalog_item
+                .map(|item| Predicate::VersionEquals(item.version))
+                .unwrap_or(Predicate::NotExists),
+        }];
         mutations.push(Mutation {
             family: RecordFamily::PathIndex,
             key: catalog_key.clone(),
@@ -1026,7 +1050,7 @@ where
             family: RecordFamily::PathIndex,
             prefix: path_index_row_prefix(self.mount, &path),
             start_after: None,
-            version: self.read_version()?,
+            version: read_version,
             limit: 0,
             purpose: ReadPurpose::UserStrong,
         })?;
@@ -1036,6 +1060,11 @@ where
 
         for row in registration.rows {
             let row_path = normalize_card_path(&row.path)?;
+            if !path_is_self_or_descendant(&path, &row_path) {
+                return Err(MetadError::InvalidQuery(format!(
+                    "index row path {row_path} is outside registered namespace {path}"
+                )));
+            }
             validate_index_values(&row.values)?;
             let record = path_index_row_record(&row_path, row.values);
             mutations.push(Mutation {
@@ -1054,11 +1083,11 @@ where
                 version,
             ),
             kind: CommandKind::RegisterNamespaceIndex,
-            read_version: predecessor(version)?,
+            read_version,
             commit_version: version,
             primary_family: RecordFamily::PathIndex,
             primary_key: catalog_key,
-            predicates: Vec::new(),
+            predicates,
             mutations,
             watch: Vec::new(),
         })?;
@@ -1374,13 +1403,13 @@ where
         options: NamespaceReadOptions,
     ) -> Result<NamespaceReadPage, MetadError> {
         let limit = bounded_limit(options.limit)?;
+        let offset = parse_byte_cursor(options.cursor.as_deref(), options.offset)?;
         let body = metadata
             .body
             .as_ref()
             .ok_or(MetadError::MissingBodyDescriptor)?;
-        let bytes =
-            self.read_file_at_version(metadata.attr.inode, body, options.offset, limit, version)?;
-        let next_offset = options.offset.saturating_add(
+        let bytes = self.read_file_at_version(metadata.attr.inode, body, offset, limit, version)?;
+        let next_offset = offset.saturating_add(
             u64::try_from(bytes.len())
                 .map_err(|_| MetadError::InvalidQuery("read length overflow".to_owned()))?,
         );
@@ -1522,6 +1551,13 @@ fn validate_index_values(values: &[NamespaceIndexValue]) -> Result<(), MetadErro
     Ok(())
 }
 
+fn path_is_self_or_descendant(root: &str, path: &str) -> bool {
+    path == root
+        || path
+            .strip_prefix(root)
+            .is_some_and(|suffix| root == "/" || suffix.starts_with('/'))
+}
+
 fn validate_grep_request(request: &NamespaceGrepRequest) -> Result<(), MetadError> {
     bounded_limit(request.limit)?;
     if let Some(max_files) = request.max_files {
@@ -1610,7 +1646,7 @@ fn numeric_filter_capability(field: NamespaceFindField) -> NamespaceFilterCapabi
 
 fn validate_predicate(predicate: &NamespacePredicate) -> Result<(), MetadError> {
     match (&predicate.op, &predicate.value) {
-        (NamespacePredicateOp::Exists | NamespacePredicateOp::NotExists, None) => Ok(()),
+        (NamespacePredicateOp::Exists | NamespacePredicateOp::NotExists, _) => Ok(()),
         (NamespacePredicateOp::In, Some(NamespacePredicateValue::List(values))) => {
             if values.is_empty()
                 || values
@@ -2205,6 +2241,13 @@ fn filtered_facet_summaries(
         .collect()
 }
 
+fn field_needs_body_projection(field: &NamespaceFindField) -> bool {
+    matches!(
+        field.as_str(),
+        "body.content_type" | "body.producer" | "body.manifest_id"
+    )
+}
+
 fn facet_summary_from_counts(
     field: NamespaceFindField,
     counts: BTreeMap<NamespacePredicateValue, usize>,
@@ -2512,6 +2555,15 @@ fn parse_cursor(cursor: Option<&str>) -> Result<usize, MetadError> {
         .unwrap_or("0")
         .parse::<usize>()
         .map_err(|err| MetadError::InvalidQuery(format!("invalid cursor: {err}")))
+}
+
+fn parse_byte_cursor(cursor: Option<&str>, offset: u64) -> Result<u64, MetadError> {
+    match cursor {
+        Some(cursor) => cursor
+            .parse::<u64>()
+            .map_err(|err| MetadError::InvalidQuery(format!("invalid cursor: {err}"))),
+        None => Ok(offset),
+    }
 }
 
 fn parse_grep_cursor(cursor: Option<&str>) -> Result<GrepCursor, MetadError> {

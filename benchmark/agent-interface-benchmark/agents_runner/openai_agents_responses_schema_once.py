@@ -561,16 +561,19 @@ async def run_without_agents_sdk(config: dict[str, Any]) -> dict[str, Any]:
         response_format=config.get("response_format"),
     )
     tools = [SimpleTool(spec) for spec in tool_specs]
-    first_response, _, _, _ = await asyncio.to_thread(
-        model.send_request,
-        model.build_request(None, config["messages"], tools, None),
-    )
-    model.record_call(
-        model.build_request(None, config["messages"], tools, None),
+    first_request = model.build_request(None, config["messages"], tools, None)
+    (
         first_response,
-        None,
-        now_ms(),
-        now_ms(),
+        first_request_id,
+        first_started,
+        first_completed,
+    ) = await asyncio.to_thread(model.send_request, first_request)
+    model.record_call(
+        first_request,
+        first_response,
+        first_request_id,
+        first_started,
+        first_completed,
     )
     calls = response_tool_calls(first_response)
     previous_response_id = first_response["id"]
@@ -599,11 +602,19 @@ async def run_without_agents_sdk(config: dict[str, Any]) -> dict[str, Any]:
                 }
             )
         second_request = model.build_request(None, tool_outputs, tools, previous_response_id)
-        second_response, _, second_started, second_completed = await asyncio.to_thread(
-            model.send_request,
+        (
+            second_response,
+            second_request_id,
+            second_started,
+            second_completed,
+        ) = await asyncio.to_thread(model.send_request, second_request)
+        model.record_call(
             second_request,
+            second_response,
+            second_request_id,
+            second_started,
+            second_completed,
         )
-        model.record_call(second_request, second_response, None, second_started, second_completed)
         final_output = response_final_text(second_response)
         return {
             "final_answer": parse_final_answer(final_output),

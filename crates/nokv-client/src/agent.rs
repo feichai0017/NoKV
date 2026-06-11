@@ -464,7 +464,7 @@ where
         .ok_or_else(|| ClientError::NotFound(path.to_owned()))?;
     let catalog = filtered_catalog(&card.catalog, field_prefix.as_deref(), include_facets);
     let catalog_empty = catalog_is_empty(&catalog);
-    let child_catalogs = if catalog_empty {
+    let child_catalogs = if catalog_empty && matches!(card.kind, NamespaceCardKind::Directory) {
         child_catalogs(namespace, &card.path, include_facets)?
     } else {
         Vec::new()
@@ -501,12 +501,9 @@ where
 
 fn grep_result_json(result: &NamespaceGrepResult) -> Value {
     json!({
-        "tool": "grep",
         "path": result.path,
         "pattern": result.pattern,
         "recursive": result.recursive,
-        "evidence": result.evidence,
-        "snapshot_id": result.snapshot_id,
         "matches": result
             .matches
             .iter()
@@ -514,11 +511,9 @@ fn grep_result_json(result: &NamespaceGrepResult) -> Value {
                 "path": match_.path,
                 "line_number": match_.line_number,
                 "snippet": match_.snippet,
-                "evidence": match_.evidence,
             }))
             .collect::<Vec<_>>(),
         "files_scanned": result.files_scanned,
-        "bytes_read": result.bytes_read,
         "next_cursor": result.next_cursor,
         "truncated": result.truncated,
     })
@@ -2031,6 +2026,26 @@ mod tests {
     }
 
     #[test]
+    fn catalog_tool_does_not_discover_child_catalogs_for_files() {
+        let namespace = FakeNamespace::new();
+
+        let output = execute_agent_tool(
+            &namespace,
+            "catalog",
+            &json!({
+                "path": "/runs/run-1",
+                "field_prefix": "missing.",
+                "include_facets": false
+            }),
+        )
+        .unwrap();
+
+        assert_eq!(output["catalog_empty"], true);
+        assert_eq!(output["child_catalogs"], json!([]));
+        assert_json_lacks_agent_noise(&output);
+    }
+
+    #[test]
     fn find_tool_translates_catalog_field_ids() {
         let namespace = FakeNamespace::new();
 
@@ -2263,6 +2278,34 @@ mod tests {
         let match_ = &output["matches"][0];
         assert_eq!(match_["path"], "/runs/run-1");
         assert_eq!(match_["values"], json!({}));
+        assert_json_lacks_agent_noise(&output);
+    }
+
+    #[test]
+    fn grep_tool_returns_compact_matches_without_agent_noise() {
+        let namespace = FakeNamespace::new();
+
+        let output = execute_agent_tool(
+            &namespace,
+            "grep",
+            &json!({
+                "path": "/runs/run-1",
+                "pattern": "best_model",
+                "recursive": true,
+                "limit": 5
+            }),
+        )
+        .unwrap();
+
+        assert_eq!(output["path"], "/runs/run-1");
+        assert_eq!(output["matches"][0]["line_number"], 3);
+        assert_eq!(
+            output["matches"][0]["snippet"],
+            "Checkpoint: best_model_1.0_1.pt"
+        );
+        assert!(output.get("tool").is_none());
+        assert!(output.get("bytes_read").is_none());
+        assert!(output["matches"][0].get("evidence").is_none());
         assert_json_lacks_agent_noise(&output);
     }
 
