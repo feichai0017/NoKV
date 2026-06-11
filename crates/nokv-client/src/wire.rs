@@ -237,6 +237,9 @@ pub(crate) fn client_error_from_wire_error(error: WireMetadataError) -> ClientEr
         WireMetadataError::InvalidPath { message } => {
             ClientError::Metadata(nokv_meta::MetadError::InvalidPath(message))
         }
+        WireMetadataError::InvalidQuery { message } => {
+            ClientError::Metadata(nokv_meta::MetadError::InvalidQuery(message))
+        }
         WireMetadataError::Metadata { message } => ClientError::Metadata(
             nokv_meta::MetadError::Metadata(nokv_meta::MetadataError::Backend(message)),
         ),
