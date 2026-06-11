@@ -16,16 +16,18 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use flate2::read::GzDecoder;
-use nokvfs_client::{
-    agent_tool_definitions, execute_agent_tool, ArtifactRepository, ArtifactRepositoryOptions,
+use nokv_client::{
+    agent_tool_definitions, execute_agent_tool, ArtifactBackend, ArtifactMetadata,
+    ArtifactRepository, ArtifactRepositoryOptions, ClientError,
 };
-use nokvfs_meta::{
-    HoltMetadataStore, MetadError, MetadataStore, NamespaceFindField, NamespaceIndexField,
-    NamespaceIndexRegistration,
-    NamespaceIndexRow, NamespaceIndexValue, NamespacePredicateOp, NamespacePredicateValue, NoKvFs,
+use nokv_meta::{
+    DentryWithAttr, HoltMetadataStore, MetadError, MetadataStore, NamespaceFindField,
+    NamespaceIndexField, NamespaceIndexRegistration, NamespaceIndexRow, NamespaceIndexValue,
+    NamespacePredicateOp, NamespacePredicateValue, NoKvFs, PreparedArtifact, PublishArtifactRange,
+    PublishArtifactSession, RenameReplaceResult,
 };
-use nokvfs_object::{ObjectStore, S3ObjectStore, S3ObjectStoreOptions};
-use nokvfs_types::{BodyDescriptor, FileType, InodeAttr, MountId, PathMetadata};
+use nokv_object::{ObjectStore, S3ObjectStore, S3ObjectStoreOptions};
+use nokv_types::{BodyDescriptor, DentryName, FileType, InodeAttr, MountId, PathMetadata};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -1584,6 +1586,9 @@ fn file_type_name(file_type: FileType) -> &'static str {
         FileType::File => "file",
         FileType::Directory => "directory",
         FileType::Symlink => "symlink",
+        FileType::NamedPipe | FileType::CharDevice | FileType::BlockDevice | FileType::Socket => {
+            "special"
+        }
     }
 }
 
@@ -3432,12 +3437,6 @@ fn optional_usize_arg(args: &Value, name: &'static str) -> Result<Option<usize>,
 
 fn optional_u64_arg(args: &Value, name: &'static str) -> Option<u64> {
     args.get(name).and_then(Value::as_u64)
-}
-
-fn required_bool_arg(args: &Value, name: &'static str) -> Result<bool, HarnessError> {
-    args.get(name)
-        .and_then(Value::as_bool)
-        .ok_or(HarnessError::MissingOption(name))
 }
 
 fn tool_success_outcome(content: Value) -> ToolExecutionOutcome {
@@ -5948,6 +5947,139 @@ fn u64_to_i64(value: u64, field: &str) -> Result<i64, HarnessError> {
     })
 }
 
+struct DirectNoKvBackend<'a, M, O> {
+    service: &'a NoKvFs<M, O>,
+}
+
+impl<M, O> ArtifactBackend for DirectNoKvBackend<'_, M, O>
+where
+    M: MetadataStore,
+    O: ObjectStore,
+{
+    fn lookup_path(&self, absolute_path: &str) -> Result<Option<DentryWithAttr>, ClientError> {
+        self.service.lookup_path(absolute_path).map_err(ClientError::from)
+    }
+
+    fn list_path(&self, absolute_path: &str) -> Result<Vec<DentryWithAttr>, ClientError> {
+        self.service
+            .read_dir_plus_path(absolute_path)
+            .map_err(ClientError::from)
+    }
+
+    fn list_indexed_path(&self, absolute_path: &str) -> Result<Vec<DentryWithAttr>, ClientError> {
+        let mut entries = Vec::new();
+        let mut after: Option<DentryName> = None;
+        loop {
+            let page = self
+                .service
+                .list_indexed_path_page(absolute_path, after.as_ref(), 1024)
+                .map_err(ClientError::from)?;
+            entries.extend(page.entries);
+            let Some(cursor) = page.next_cursor else {
+                break;
+            };
+            after = Some(cursor);
+        }
+        Ok(entries)
+    }
+
+    fn create_directory_path(
+        &self,
+        absolute_path: &str,
+        mode: u32,
+        uid: u32,
+        gid: u32,
+    ) -> Result<DentryWithAttr, ClientError> {
+        self.service
+            .create_dir_path(absolute_path, mode, uid, gid)
+            .map_err(ClientError::from)
+    }
+
+    fn publish_new_artifact_path(
+        &self,
+        absolute_path: &str,
+        bytes: Vec<u8>,
+        metadata: ArtifactMetadata,
+    ) -> Result<DentryWithAttr, ClientError> {
+        let prepared = self
+            .service
+            .prepare_artifact_create_path(absolute_path)
+            .map_err(ClientError::from)?;
+        let session = artifact_publish_session(&prepared, bytes, metadata)?;
+        self.service
+            .publish_prepared_artifact_session(prepared, session)
+            .map(|result| result.entry)
+            .map_err(ClientError::from)
+    }
+
+    fn replace_artifact_path(
+        &self,
+        absolute_path: &str,
+        bytes: Vec<u8>,
+        metadata: ArtifactMetadata,
+    ) -> Result<RenameReplaceResult, ClientError> {
+        let prepared = self
+            .service
+            .prepare_artifact_replace_path(absolute_path)
+            .map_err(ClientError::from)?;
+        let session = artifact_publish_session(&prepared, bytes, metadata)?;
+        self.service
+            .publish_prepared_artifact_session(prepared, session)
+            .map_err(ClientError::from)
+    }
+
+    fn read_file_path(&self, absolute_path: &str) -> Result<Vec<u8>, ClientError> {
+        let entry = self
+            .service
+            .lookup_path(absolute_path)
+            .map_err(ClientError::from)?
+            .ok_or_else(|| ClientError::NotFound(absolute_path.to_owned()))?;
+        if entry.attr.file_type != FileType::File {
+            return Err(ClientError::Metadata(MetadError::NotFile));
+        }
+        let len = usize::try_from(entry.attr.size).map_err(|_| {
+            ClientError::Protocol(format!("artifact {absolute_path} size exceeds platform limit"))
+        })?;
+        self.service
+            .read_file(entry.attr.inode, 0, len)
+            .map_err(ClientError::from)
+    }
+
+    fn remove_file_path(&self, absolute_path: &str) -> Result<DentryWithAttr, ClientError> {
+        self.service
+            .remove_file_path(absolute_path)
+            .map_err(ClientError::from)
+    }
+
+    fn remove_empty_dir_path(&self, absolute_path: &str) -> Result<DentryWithAttr, ClientError> {
+        self.service
+            .remove_empty_dir_path(absolute_path)
+            .map_err(ClientError::from)
+    }
+}
+
+fn artifact_publish_session(
+    prepared: &PreparedArtifact,
+    bytes: Vec<u8>,
+    metadata: ArtifactMetadata,
+) -> Result<PublishArtifactSession, ClientError> {
+    let size = u64::try_from(bytes.len())
+        .map_err(|_| ClientError::Protocol("artifact size exceeds u64".to_owned()))?;
+    Ok(PublishArtifactSession {
+        parent: prepared.parent,
+        name: prepared.name.clone(),
+        producer: metadata.producer,
+        digest_uri: metadata.digest_uri,
+        content_type: metadata.content_type,
+        manifest_id: metadata.manifest_id,
+        size,
+        ranges: vec![PublishArtifactRange { offset: 0, bytes }],
+        mode: metadata.mode,
+        uid: metadata.uid,
+        gid: metadata.gid,
+    })
+}
+
 fn prepare_nokv(
     meta_path: &Path,
     s3: &S3Options,
@@ -5969,7 +6101,7 @@ fn prepare_nokv(
         .bootstrap_root(DEFAULT_MODE_DIR, DEFAULT_UID, DEFAULT_GID)
         .map_err(from_nokv)?;
     let repo = ArtifactRepository::with_options(
-        service,
+        DirectNoKvBackend { service: &service },
         ArtifactRepositoryOptions {
             producer: "yanex-agent-benchmark-etl".to_owned(),
             content_type: "application/octet-stream".to_owned(),
@@ -6018,7 +6150,7 @@ fn prepare_nokv(
         repo.put_bytes(&format!("{NOKV_PREFIX}{}", path), bytes.clone())
             .map_err(from_nokv)?;
     }
-    register_nokv_agent_indexes(repo.backend(), runs)?;
+    register_nokv_agent_indexes(&service, runs)?;
     Ok(())
 }
 
@@ -6937,17 +7069,17 @@ mod tests {
     fn prepare_memory_nokv(
         runs: &[CorpusRun],
         indexes: &DerivedIndexes,
-    ) -> NoKvFs<HoltMetadataStore, nokvfs_object::MemoryObjectStore> {
+    ) -> NoKvFs<HoltMetadataStore, nokv_object::MemoryObjectStore> {
         let service = NoKvFs::new(
             MountId::new(1).unwrap(),
             HoltMetadataStore::open_memory().unwrap(),
-            nokvfs_object::MemoryObjectStore::new(),
+            nokv_object::MemoryObjectStore::new(),
         );
         service
             .bootstrap_root(DEFAULT_MODE_DIR, DEFAULT_UID, DEFAULT_GID)
             .unwrap();
         let repo = ArtifactRepository::with_options(
-            service,
+            DirectNoKvBackend { service: &service },
             ArtifactRepositoryOptions {
                 producer: "unit-test".to_owned(),
                 content_type: "application/octet-stream".to_owned(),
@@ -6996,8 +7128,8 @@ mod tests {
             repo.put_bytes(&format!("{NOKV_PREFIX}{}", path), bytes.clone())
                 .unwrap();
         }
-        register_nokv_agent_indexes(repo.backend(), runs).unwrap();
-        repo.into_backend()
+        register_nokv_agent_indexes(&service, runs).unwrap();
+        service
     }
 
     #[test]
@@ -7441,7 +7573,7 @@ mod tests {
 
     #[test]
     fn nokv_native_grep_tool_maps_to_product_service_surface() {
-        let objects = nokvfs_object::MemoryObjectStore::new();
+        let objects = nokv_object::MemoryObjectStore::new();
         let service = NoKvFs::new(
             MountId::new(1).unwrap(),
             HoltMetadataStore::open_memory().unwrap(),
@@ -7450,9 +7582,9 @@ mod tests {
         service.bootstrap_root(0o755, 1000, 1000).unwrap();
         let runs = service.create_dir_path("/runs", 0o755, 1000, 1000).unwrap();
         let published = service
-            .publish_artifact(nokvfs_meta::PublishArtifact {
+            .publish_artifact(nokv_meta::PublishArtifact {
                 parent: runs.attr.inode,
-                name: nokvfs_types::DentryName::new(b"stdout.txt".to_vec()).unwrap(),
+                name: nokv_types::DentryName::new(b"stdout.txt".to_vec()).unwrap(),
                 producer: "unit-test".to_owned(),
                 digest_uri: "sha256:test".to_owned(),
                 content_type: "text/plain".to_owned(),

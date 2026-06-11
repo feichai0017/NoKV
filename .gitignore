@@ -32,3 +32,7 @@ benchmark/data/
 
 # Published benchmark result telemetry (committed deliberately)
 !benchmark/agent-interface-benchmark/results/*.jsonl
+third_party/
+
+# Benchmark run output
+bench/results/

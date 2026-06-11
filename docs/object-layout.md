@@ -53,6 +53,12 @@ block_size
 It is not the physical object key. Physical object keys are derived from mount,
 inode, generation, chunk, and block.
 
+`digest_uri` is a compact integrity summary. SDK artifact uploads normally use
+`sha256:<content-digest>`. Chunk block entries use `xxh3-64:<block-checksum>` so
+the write hot path avoids a cryptographic digest per block. FUSE write sessions
+use `manifest-sha256:<manifest-digest>` so publish remains proportional to the
+changed chunk/slice metadata instead of rereading or hashing the whole file body.
+
 The same object boundary works for AWS S3, RustFS, MinIO, and Ceph RGW.
 
 Use `--object-backend rustfs` for a local RustFS deployment or
@@ -80,7 +86,11 @@ reachability. The current local service exposes an explicit cleanup API and a
 background object GC worker; live FUSE mounts start the worker by default.
 Active snapshot pins conservatively block object cleanup so snapshot-version
 artifact reads can still fetch the old blocks. Retiring the snapshot lets later
-cleanup consume the queued records.
+cleanup consume the queued records. Each queued object record also stores its
+enqueue time. The background worker applies a read-lease grace window before it
+deletes a queued object, so recently returned read plans have time to finish
+their object-range reads. The explicit cleanup API can still run with a zero
+grace window for tests and manual recovery.
 
 Metadata history uses the same retention boundary. Active snapshot pins define
 the oldest read version that must remain reconstructible. History cleanup keeps
@@ -90,18 +100,24 @@ Live FUSE mounts start the history GC worker alongside object GC.
 
 ## Chunk Manifest
 
-Each `chunk_manifest` record stores the blocks that cover one logical chunk:
+Each `chunk_manifest` record stores the slice stack for one logical chunk.
+Newer slices overlay older slices, which lets partial writes publish only dirty
+blocks while reusing the previous generation's unchanged blocks:
 
 ```text
 chunk_index
 logical_offset
 len
-blocks:
-  object_key
+slices:
+  slice_id
   logical_offset
-  object_offset
   len
-  digest_uri
+  blocks:
+    object_key
+    logical_offset
+    object_offset
+    len
+    digest_uri
 ```
 
 Readers construct a range read plan from the manifests, fetch object ranges, and

@@ -39,14 +39,15 @@ jobs:
         run: |
           set -euo pipefail
           crates=(
-            nokvfs-types
-            nokvfs-object
-            nokvfs-protocol
-            nokvfs-meta
-            nokvfs-client
-            nokvfs-fuse
-            nokvfs-server
-            nokvfs-cli
+            nokv-types
+            nokv-protocol
+            nokv-object
+            nokv-meta
+            nokv-cluster
+            nokv-server
+            nokv-client
+            nokv-fuse
+            nokv
           )
           {
             echo "list<<EOF"

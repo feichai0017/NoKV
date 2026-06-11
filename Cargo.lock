@@ -646,9 +646,9 @@ dependencies = [
 
 [[package]]
 name = "holt"
-version = "0.4.2"
+version = "0.5.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a575ba10c4518a023f3a951b0fecfc2a8afccf7843261d2915481438e2839e74"
+checksum = "576f0d0563f9bbf7f00c99d07ce45ac92496462cddf9a29f12ec5286b7f5f69f"
 dependencies = [
  "crc32fast",
  "crossbeam-channel",
@@ -1139,62 +1139,65 @@ dependencies = [
 ]
 
 [[package]]
-name = "nokvfs-bench"
+name = "nokv"
 version = "0.1.0"
 dependencies = [
- "nokvfs-client",
- "nokvfs-meta",
- "nokvfs-object",
- "nokvfs-server",
- "nokvfs-types",
-]
-
-[[package]]
-name = "nokvfs-cli"
-version = "0.1.0"
-dependencies = [
- "nokvfs-client",
- "nokvfs-fuse",
- "nokvfs-meta",
- "nokvfs-object",
- "nokvfs-server",
- "nokvfs-types",
+ "nokv-client",
+ "nokv-fuse",
+ "nokv-meta",
+ "nokv-object",
+ "nokv-server",
+ "nokv-types",
  "sha2 0.10.9",
  "tempfile",
 ]
 
 [[package]]
-name = "nokvfs-client"
+name = "nokv-bench"
 version = "0.1.0"
 dependencies = [
- "nokvfs-meta",
- "nokvfs-object",
- "nokvfs-protocol",
- "nokvfs-types",
+ "nokv-client",
+ "nokv-meta",
+ "nokv-object",
+ "nokv-server",
+ "nokv-types",
+]
+
+[[package]]
+name = "nokv-client"
+version = "0.1.0"
+dependencies = [
+ "nokv-meta",
+ "nokv-object",
+ "nokv-protocol",
+ "nokv-server",
+ "nokv-types",
  "serde_json",
  "sha2 0.10.9",
  "tempfile",
 ]
 
 [[package]]
-name = "nokvfs-fuse"
+name = "nokv-fuse"
 version = "0.1.0"
 dependencies = [
  "fuser",
- "nokvfs-meta",
- "nokvfs-object",
- "nokvfs-types",
+ "libc",
+ "nokv-client",
+ "nokv-meta",
+ "nokv-object",
+ "nokv-types",
  "sha2 0.10.9",
  "tempfile",
 ]
 
 [[package]]
-name = "nokvfs-meta"
+name = "nokv-meta"
 version = "0.1.0"
 dependencies = [
  "holt",
- "nokvfs-object",
- "nokvfs-types",
+ "nokv-object",
+ "nokv-types",
  "serde_json",
  "serde_yaml",
  "sha2 0.10.9",
@@ -1202,36 +1205,40 @@ dependencies = [
 ]
 
 [[package]]
-name = "nokvfs-object"
+name = "nokv-object"
 version = "0.1.0"
 dependencies = [
+ "nokv-types",
  "opendal",
+ "sha2 0.10.9",
  "tempfile",
  "tokio",
+ "xxhash-rust",
 ]
 
 [[package]]
-name = "nokvfs-protocol"
+name = "nokv-protocol"
 version = "0.1.0"
 dependencies = [
- "nokvfs-types",
+ "nokv-types",
  "rmp-serde",
  "serde",
 ]
 
 [[package]]
-name = "nokvfs-server"
+name = "nokv-server"
 version = "0.1.0"
 dependencies = [
- "nokvfs-meta",
- "nokvfs-object",
- "nokvfs-protocol",
- "nokvfs-types",
+ "nokv-meta",
+ "nokv-object",
+ "nokv-protocol",
+ "nokv-types",
+ "sha2 0.10.9",
  "tempfile",
 ]
 
 [[package]]
-name = "nokvfs-types"
+name = "nokv-types"
 version = "0.1.0"
 
 [[package]]
@@ -3055,6 +3062,12 @@ name = "writeable"
 version = "0.6.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1ffae5123b2d3fc086436f8834ae3ab053a283cfac8fe0a0b8eaae044768a4c4"
+
+[[package]]
+name = "xxhash-rust"
+version = "0.8.15"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fdd20c5420375476fbd4394763288da7eb0cc0b8c11deed431a91562af7335d3"
 
 [[package]]
 name = "yoke"

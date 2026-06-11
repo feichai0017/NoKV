@@ -44,7 +44,7 @@ SPDX-License-Identifier: Apache-2.0
     <div class="nokv-card">
       <div class="nokv-card-kicker">Application surface</div>
       <h3>FUSE · SDK · CLI</h3>
-      <p>Mount it, call the Rust SDK, or drive it from <code>nokv-fs</code>. One namespace, three front doors.</p>
+      <p>Mount it, call the Rust SDK, or drive it from <code>nokv</code>. One namespace, three front doors.</p>
     </div>
     <div class="nokv-card">
       <div class="nokv-card-kicker">Metadata layer</div>
@@ -100,16 +100,16 @@ SPDX-License-Identifier: Apache-2.0
     <h2 class="nokv-h2">Running in a handful of commands</h2>
   </div>
   <pre class="nokv-code"><code><span class="c"># Build the CLI</span>
-cargo build --release -p nokvfs-cli --bin nokv-fs
+cargo build --release -p nokv --bin nokv
 <span class="c"># A local S3 endpoint (RustFS) — bucket `nokv`, dev creds rustfsadmin</span>
 rustfs server --address 127.0.0.1:9000 \
   --access-key rustfsadmin --secret-key rustfsadmin ./rustfs-data &amp;
 <span class="c"># Initialize, publish an artifact, read it back</span>
-nokv-fs --object-backend rustfs init
-nokv-fs --object-backend rustfs put-artifact /runs/1/ckpt.bin ./ckpt.bin
-nokv-fs --object-backend rustfs cat /runs/1/ckpt.bin &gt; restored.bin
+nokv --object-backend rustfs init
+nokv --object-backend rustfs put-artifact /runs/1/ckpt.bin ./ckpt.bin
+nokv --object-backend rustfs cat /runs/1/ckpt.bin &gt; restored.bin
 <span class="c"># Mount with FUSE (macOS needs macFUSE)</span>
-nokv-fs --object-backend rustfs mount /tmp/nokv-mount</code></pre>
+nokv --object-backend rustfs mount /tmp/nokv-mount</code></pre>
 </div>
 
 <div class="recognition">

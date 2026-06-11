@@ -18,13 +18,13 @@ metadata needs to be fast, typed, and easy to mount.
 
 ## Access Paths
 
-FUSE gives immediate compatibility with tools that expect paths. The Rust SDK
-is the lower-overhead path for native jobs and future Python bindings.
+FUSE is the mounted-file frontend for tools that expect paths. The Rust SDK is
+the lower-overhead path for native jobs and future Python bindings.
 
 ```text
 PyTorch / training process
   -> FUSE or SDK
-  -> nokvfs-meta
+  -> nokv-meta
   -> Holt metadata
   -> S3-compatible object store
 ```
@@ -38,7 +38,7 @@ use a native client should bypass kernel/FUSE overhead and call the Rust or
 Python API directly:
 
 ```text
-compatibility path:
+mounted-file path:
   existing tool -> FUSE -> metadata/object service
 
 performance path:

@@ -8,10 +8,10 @@ license = "Apache-2.0"
 
 [dependencies]
 flate2 = "1"
-nokvfs-client = { path = "../../../crates/nokvfs-client" }
-nokvfs-meta = { path = "../../../crates/nokvfs-meta" }
-nokvfs-object = { path = "../../../crates/nokvfs-object" }
-nokvfs-types = { path = "../../../crates/nokvfs-types" }
+nokv-client = { path = "../../../crates/nokv-client" }
+nokv-meta = { path = "../../../crates/nokv-meta" }
+nokv-object = { path = "../../../crates/nokv-object" }
+nokv-types = { path = "../../../crates/nokv-types" }
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 rusqlite = { version = "0.37", features = ["hooks"] }
 serde = { version = "1", features = ["derive"] }

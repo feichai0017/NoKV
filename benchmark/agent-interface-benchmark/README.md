@@ -14,22 +14,22 @@ crate and is documented in `docs/benchmarks.md`.
 The NoKV product crates expose the low-level native namespace surface used
 by the benchmark:
 
-- `nokvfs-meta`: `stat_card`, `list_page`, `find_paths`, `grep_paths`, and
+- `nokv-meta`: `stat_card`, `list_page`, `find_paths`, `grep_paths`, and
   `read_page`, plus native indexed `aggregate_paths`;
-- `nokvfs-protocol`: `StatCard`, `ListPage`, `FindPaths`, `AggregatePaths`,
+- `nokv-protocol`: `StatCard`, `ListPage`, `FindPaths`, `AggregatePaths`,
   `GrepPaths`, and `ReadPage` RPC DTOs;
-- `nokvfs-client`: SDK methods plus the product-native agent adapter exposing
+- `nokv-client`: SDK methods plus the product-native agent adapter exposing
   `ls`, `stat`, `catalog`, `read`, `find`, `aggregate`, and `grep`;
-- `nokvfs-server`: framed metadata RPC handlers for the same operations.
+- `nokv-server`: framed metadata RPC handlers for the same operations.
 
-Native grep is now implemented through `nokvfs-meta`, `nokvfs-protocol`, and
-`nokvfs-server` as a product-native file-content scan. The current five-task
+Native grep is now implemented through `nokv-meta`, `nokv-protocol`, and
+`nokv-server` as a product-native file-content scan. The current five-task
 Phase 1 registry exposes `ls`, `stat`, `catalog`, `read`, `aggregate`, `find`,
 and `grep`. Native grep matches a case-insensitive literal substring and
 returns matching lines with line numbers, so log-extraction tasks resolve
 body facts without full file reads.
 
-The benchmark arm named `nokv_native_v1` uses the `nokvfs-client` agent adapter
+The benchmark arm named `nokv_native_v1` uses the `nokv-client` agent adapter
 with the Phase 1 tool profile above. The harness translates OpenAI tool calls
 into product API calls, but does not own the measured card, find, index catalog,
 aggregation, pagination, or consistency semantics.
@@ -239,7 +239,7 @@ cargo run --manifest-path benchmark/agent-interface-benchmark/harness/Cargo.toml
 
 The `nokv-*` direct commands above remain raw debugging commands. The benchmark
 arm uses the product-native `ls`/`stat`/`catalog`/`read`/`find`/`aggregate`/`grep`
-adapter exposed by `nokvfs-client`; the harness passes tool calls through
+adapter exposed by `nokv-client`; the harness passes tool calls through
 without owning any namespace semantics.
 
 Inspect SQLite schema:
@@ -270,8 +270,8 @@ the input rate; completion tokens at the output rate.
 - Judge-side gold (gold SQL or file-body oracles) is never exposed to either
   arm.
 - Do not implement one-sided semantics in the harness as benchmark-only
-  shortcuts; the harness stays a thin adapter over `nokvfs-client` and
-  `nokvfs-meta`, and the raw SQLite arm keeps line-oriented `grep_blob`
+  shortcuts; the harness stays a thin adapter over `nokv-client` and
+  `nokv-meta`, and the raw SQLite arm keeps line-oriented `grep_blob`
   parity for body search.
 - The published benchmark report lives at `benchmark/AGENT_INTERFACE_BENCHMARK_REPORT.md`;
   its raw telemetry is committed under `benchmark/agent-interface-benchmark/results/`.

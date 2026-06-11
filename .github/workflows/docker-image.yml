@@ -50,8 +50,8 @@ jobs:
           build-args: |
             RUST_VERSION=${{ env.RUST_VERSION }}
             DEBIAN_VERSION=${{ env.DEBIAN_VERSION }}
-            NOKV_PACKAGE=nokvfs-cli
-            NOKV_BINARY=nokv-fs
+            NOKV_PACKAGE=nokv
+            NOKV_BINARY=nokv
           push: ${{ github.repository == 'feichai0017/NoKV' && github.ref == 'refs/heads/main' }}
           tags: |
             ${{ env.IMAGE_NAME }}:latest
