@@ -170,21 +170,31 @@ cargo test --workspace
 cargo build --release -p nokv --bin nokv
 ```
 
-Start a local RustFS-compatible S3 endpoint:
+Start a local RustFS-compatible S3 endpoint and create the default bucket:
 
 ```bash
-rustfs server --address 127.0.0.1:9000 ./rustfs-data
+mkdir -p /tmp/rustfs-data
+RUSTFS_ACCESS_KEY=rustfsadmin \
+RUSTFS_SECRET_KEY=rustfsadmin \
+rustfs server --address 127.0.0.1:9000 /tmp/rustfs-data &
+
+AWS_ACCESS_KEY_ID=rustfsadmin \
+AWS_SECRET_ACCESS_KEY=rustfsadmin \
+aws --endpoint-url http://127.0.0.1:9000 \
+  s3api create-bucket --bucket nokv
 ```
 
 By default NoKV expects bucket `nokv` at `http://127.0.0.1:9000` with
 development credentials `rustfsadmin` / `rustfsadmin`. See
-[docs/rustfs.md](docs/rustfs.md) for setup commands.
+[docs/rustfs.md](docs/rustfs.md) for other deployment modes.
 
-Initialize local metadata and start a metadata server:
+Start the metadata server, then initialize the namespace. Every other command
+talks to the server on `127.0.0.1:7777`, so keep it running:
 
 ```bash
+cargo run --release -p nokv --bin nokv -- serve &
+
 cargo run --release -p nokv --bin nokv -- init
-cargo run --release -p nokv --bin nokv -- serve
 ```
 
 Publish and read an artifact:
