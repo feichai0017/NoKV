@@ -7,7 +7,13 @@ SPDX-License-Identifier: Apache-2.0
   <img src="./docs/public/img/logo.svg" width="200" alt="NoKV" />
 
   <p>
-    <strong>A Rust filesystem for AI training and agent workspaces.</strong>
+    <strong>Give your agents the interface they were trained on.</strong>
+  </p>
+
+  <p>
+    NoKV is a metadata control plane for agent workspaces — one filesystem-shaped
+    namespace, built in Rust, over the runs, logs, checkpoints, and artifacts
+    your AI work produces.
   </p>
 
   <p>
@@ -27,11 +33,11 @@ SPDX-License-Identifier: Apache-2.0
   <p>
     <a href="https://nokv.io/architecture">Docs</a> ·
     <a href="#-quick-start">Quick Start</a> ·
-    <a href="#-headline-evidence">Benchmarks</a> ·
+    <a href="#-measured-evidence">Benchmarks</a> ·
     <a href="https://github.com/feichai0017/NoKV/discussions">Discussions</a>
   </p>
 
-  <h3>Recognized In The AI-Native Storage Ecosystem</h3>
+  <h3>Listed In The AI-Native Storage Ecosystem</h3>
 
   <table>
     <tr>
@@ -61,11 +67,12 @@ SPDX-License-Identifier: Apache-2.0
 
 ## What Is NoKV?
 
-NoKV is a Rust filesystem for AI training and agent workspaces. It keeps
-namespace metadata in its own path-native engine
-([Holt](https://crates.io/crates/holt)) and stores file bodies as immutable
-blocks in S3-compatible object storage such as RustFS, MinIO, Ceph RGW, or AWS
-S3.
+To your tools and agents, NoKV looks like a filesystem: paths, folders, files —
+mountable, listable, readable. Underneath, file bodies live as immutable blocks
+in S3-compatible object storage such as RustFS, MinIO, Ceph RGW, or AWS S3, and
+NoKV's built-in path-native metadata engine
+([Holt](https://crates.io/crates/holt)) keeps the namespace — what exists,
+where, in which version — transactional, queryable, and snapshot-able.
 
 ```text
 FUSE / SDK / CLI
@@ -81,27 +88,70 @@ than a filesystem plus a separate Redis, MySQL, or TiKV cluster.
 
 ## Why NoKV
 
-AI training and agent systems want a normal file interface while their real data
-lives in object storage. The hard part is not just moving bytes; it is metadata:
+Agent workflows are artifact-heavy; their workspaces aren't. Every run leaves
+behind configs, metrics, logs, checkpoints — and that state scatters across
+folders, JSON files, object-store keys, and database rows. Agents pay a
+navigation tax in tokens every time they go looking. NoKV gives that state one
+address, with the metadata guarantees the workload actually needs:
 
-- **datasets** want fast directory scans and stable snapshot views;
-- **checkpoints** want atomic publish, where readers see a complete checkpoint
-  or the previous one, never a half-written one;
-- **artifacts** want body references, digests, and cleanup of failed staged
-  uploads;
-- **agent workspaces** want scoped namespace views and typed change events;
-- **immutable, versioned data** lets node-local caches avoid invalidating object
-  bytes after publish.
+- **Checkpoints publish atomically.** Readers see the complete new checkpoint
+  or the previous one — never a half-written file, even across a crash.
+- **Snapshots are time travel.** Pin a frozen view of any subtree and keep
+  reading it while jobs write; GC never deletes what a snapshot still needs.
+- **Changes are events, not polls.** Every create, rename, and publish lands as
+  a typed, replayable event with a cursor.
+- **Artifacts carry body references and digests**, with cleanup of failed
+  staged uploads.
+- **Bodies are immutable, versioned blocks.** Replacement publishes a new
+  generation, so node-local caches never invalidate object bytes after publish.
 
 The primary write model is write-once publish, matching how datasets,
 checkpoints, and artifacts are commonly written.
 
-## 📊 Headline Evidence
+## 🤖 The Agent Interface
 
-Measured local engineering baselines, not official MLPerf results. Single-node
-service numbers are release builds through the NoKV server and Holt metadata
-path. FUSE comparison numbers depend on kernel/FUSE, object backend, cache
-settings, and workload shape.
+`ls` · `stat` · `catalog` · `find` · `aggregate` · `read` · `grep`
+
+Seven verbs, one progressive-disclosure surface: an agent discovers what
+exists, learns what is queryable, and pays to read only what it needs.
+Predicates, sort, and projection are pushed into the engine, so a "top-5 runs
+by val_loss" report costs two calls — one `catalog`, one `find`. `grep` sweeps
+a subtree and returns line-numbered matches with citable evidence URIs
+(`nokv-native://path@generation:N#L3`).
+
+The verbs are defined in [`nokv-client`](crates/nokv-client/src/agent.rs): the
+tool definitions are LLM-ready JSON schemas, and `execute_agent_tool` routes
+calls over the same `AgentNamespace` trait whether the namespace is remote
+(metadata RPC) or embedded.
+
+**Today** the agent verbs ship in the Rust SDK; filesystem operations ship in
+the `nokv` CLI and FUSE mount. An **MCP server is in development** — follow
+[#354](https://github.com/feichai0017/NoKV/issues/354).
+
+## 📊 Measured Evidence
+
+**Agent interface.** We gave the same agent (`gpt-5.4-mini`) the same 875-run
+experiment corpus through two surfaces — raw SQL over SQLite, and the NoKV
+namespace — across five tasks, 10 repeats per arm and task (100 fully stateless
+runs), judged against deterministic gold facts neither arm can see:
+
+| Set mean (per 5-task pass) | Raw SQLite | NoKV namespace |
+| --- | --- | --- |
+| Tasks solved correctly | 4.40 / 5 | **4.50 / 5** |
+| Prompt tokens (incl. cached) | 151,572 | **82,827 (−45%)** |
+| Cost (USD, list rates) | $0.0708 | **$0.0433 (−39%)** |
+
+In this 10-repeat sample, the token gap widens to ~2.4× on the
+compound-exploration subset, and SQL won the single-shot analytics task —
+per-task results, wins and losses both, are in the report. Harness, tasks,
+judge, and the raw telemetry of all 100 runs are committed, so every published
+number is recomputable: see
+[`bench/agent-interface/`](bench/agent-interface/BENCHMARK_REPORT.md).
+
+**Storage engine.** Local engineering baselines, not official MLPerf results.
+Single-node service numbers are release builds through the NoKV server and Holt
+metadata path. FUSE comparison numbers depend on kernel/FUSE, object backend,
+cache settings, and workload shape.
 
 | Workload | Result |
 | --- | --- |
@@ -122,20 +172,21 @@ Holt metadata engine alone.
 NoKV follows the same high-level separation used by systems like JuiceFS and
 3FS: metadata is separate from file body storage. The difference is that NoKV
 ships its metadata engine as part of the filesystem and optimizes for
-AI-training publish/read patterns first.
+agent-workspace and artifact publish/read patterns first.
 
 | | JuiceFS | NoKV |
 | --- | --- | --- |
 | Metadata engine | External DB such as Redis, MySQL, or TiKV | Built-in, path-native Holt engine |
 | Atomic checkpoint publish | POSIX rename/write semantics over the metadata engine | First-class publish-by-generation primitive |
 | Block model | Slice/block model supporting broad POSIX behavior | Immutable object blocks plus new-generation manifests |
-| AI-native primitives | Layered on top of the filesystem | Snapshots, typed watch, body descriptors, and GC floors are core metadata concepts |
+| Workspace-native primitives | Layered on top of the filesystem | Snapshots, typed watch, body descriptors, and GC floors are core metadata concepts |
+| Agent query surface | None | `ls`/`stat`/`catalog`/`find`/`aggregate`/`read`/`grep` with push-down and line-numbered evidence |
 | POSIX completeness | Mature production filesystem | P0 subset implemented; still hardening compatibility gates |
-| Maturity | Production, large deployments | Young Rust implementation; local mode is usable, production HA is still in progress |
+| Maturity | Production, large deployments | Young Rust implementation; single-node local mode is usable, replication is roadmap |
 
-NoKV is currently a usable object-backed filesystem with a local Holt metadata
-mode and an OpenRaft-backed metadata server path. It is not yet a JuiceFS/3FS
-class distributed filesystem.
+NoKV is currently a usable single-node object-backed filesystem with a built-in
+Holt metadata engine behind a long-running metadata server. It is not yet a
+JuiceFS/3FS class distributed filesystem.
 
 ## 🏗️ Architecture
 
@@ -148,7 +199,6 @@ crates/
   nokv-client    Rust SDK over metadata service and object backend
   nokv-fuse      low-level FUSE frontend
   nokv-server    long-running metad process and framed RPC service
-  nokv-cluster   OpenRaft metadata replication boundary
   nokv           CLI binary
 
 bench/             system workload benchmark harness
@@ -215,9 +265,9 @@ cargo run --release -p nokv --bin nokv -- \
   mount /tmp/nokv-mount
 ```
 
-On macOS this requires macFUSE. NoKV passes `noappledouble` and `noapplexattr`
-mount options to avoid Finder/resource-fork AppleDouble sidecars; user xattr
-roundtrip is covered by the FUSE smoke test.
+On macOS this requires macFUSE. NoKV passes the `noappledouble` mount option to
+avoid Finder/resource-fork AppleDouble sidecars; user xattr roundtrip is
+covered by the FUSE smoke test.
 
 ## 🧩 Crates
 
@@ -230,7 +280,6 @@ roundtrip is covered by the FUSE smoke test.
 | [`nokv-client`](https://crates.io/crates/nokv-client) | Rust SDK over the metadata service |
 | [`nokv-fuse`](https://crates.io/crates/nokv-fuse) | Low-level FUSE frontend |
 | [`nokv-server`](https://crates.io/crates/nokv-server) | Long-running metad process and framed RPC |
-| [`nokv-cluster`](https://crates.io/crates/nokv-cluster) | OpenRaft metadata replication boundary |
 | [`nokv`](https://crates.io/crates/nokv) | `nokv` CLI binary |
 
 ## ✅ Current Status
@@ -248,18 +297,19 @@ Implemented today:
 - S3-compatible object backend, with RustFS as the local development default;
 - Rust SDK and `nokv` CLI for namespace operations, artifact publish,
   metadata server access, and object range reads;
+- the seven-verb agent query surface (`ls`/`stat`/`catalog`/`find`/
+  `aggregate`/`read`/`grep`) in the Rust SDK, with LLM-ready tool definitions;
 - long-running `nokv-server` with health, readiness, stats, manual GC, and
   framed binary metadata RPC;
-- OpenRaft metadata group support with explicit voter membership, persistent
-  Raft log storage, follower replay, and a local 3-voter smoke harness;
 - read-only snapshot mounts, snapshot-version reads, typed watch replay, and
   FUSE cache invalidation from watch events;
 - pending-object GC and metadata history GC tied to snapshot retention.
 
 Not implemented yet:
 
-- production-grade distributed metadata operations such as managed membership,
-  checkpoint archive, learner read scaling, and multi-machine deployment;
+- distributed metadata replication and HA — NoKV is single-node today;
+- an MCP server for the agent verbs — in development, tracked in
+  [#354](https://github.com/feichai0017/NoKV/issues/354);
 - Python/fsspec and Kubernetes CSI packages;
 - full POSIX hardening such as ACL enforcement, broad external compatibility
   gate coverage, and mature multi-client cache coherence.
@@ -275,45 +325,26 @@ cargo run --release -p nokv-bench --bin nokv-bench -- \
   --workload all
 ```
 
+Key workloads:
+
 - `mdtest-easy` and `mdtest-hard` metadata smoke workloads;
 - `metadata-negative-lookup`, `artifact-index-lookup`, and
   `metadata-concurrent-read` Holt metadata read-path workloads;
 - `checkpoint-publish` object-backed checkpoint publish/read;
 - `training-read` dataset-shaped object reads;
-- `mlperf-dlio` generated MLPerf Storage/DLIO-style training and checkpoint
-  shape;
-- `metadata-ha-smoke` and `metadata-ha-fault-smoke` OpenRaft metadata HA smoke
-  workloads.
+- `mlperf-dlio` generated MLPerf Storage/DLIO-style I/O shape.
 
-Agent-interface experiments live under `bench/agent-interface/` and run through
+All workloads are single-node service runs; see
+[docs/benchmarks.md](docs/benchmarks.md) for the full workload list, profiles,
+and gates.
+
+The agent-interface benchmark — harness, tasks, judge, report, and the raw
+telemetry behind the numbers above — lives under
+[`bench/agent-interface/`](bench/agent-interface/README.md) and runs through
 the same package:
 
 ```bash
 cargo run --release -p nokv-bench --bin yanex-agent-bench -- list-tasks
-```
-
-For the fast AI-training product gate, run:
-
-```bash
-scripts/run-ai-training-smoke.sh
-```
-
-The default gate covers Holt metadata read concurrency, checkpoint publish,
-DLIO-style object reads/writes, OpenRaft HA, and OpenRaft fault catch-up. Most
-benchmark workloads are still single-node service runs; HA workloads report
-OpenRaft state metrics separately. Training-cluster claims need separate runs
-that report replication, cache, object-store, and durability settings.
-
-Run `scripts/run-ai-training-smoke.sh fuse-smoke` when the local machine has a
-working FUSE installation and you want the mounted POSIX smoke in the same
-workflow. Run `scripts/run-ai-training-smoke.sh metadata-raft-smoke` when you
-want the explicit 3-voter OpenRaft process smoke in the same entrypoint.
-
-The local OpenRaft metadata smoke starts RustFS plus three metadata voters and
-verifies that a leader-published artifact is readable through follower voters:
-
-```bash
-scripts/run-metadata-raft-smoke.sh
 ```
 
 ## 📚 Documentation
@@ -322,7 +353,6 @@ scripts/run-metadata-raft-smoke.sh
 - [Product Design](docs/product-design.md)
 - [Metadata Schema](docs/metadata-schema.md)
 - [Object Layout](docs/object-layout.md)
-- [AI Training](docs/ai-training.md)
 - [Checkpointing](docs/checkpointing.md)
 - [RustFS Backend](docs/rustfs.md)
 - [Benchmarks](docs/benchmarks.md)
