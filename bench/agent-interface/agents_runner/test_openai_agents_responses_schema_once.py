@@ -164,6 +164,7 @@ class OpenAiAgentsVersionTest(unittest.TestCase):
                 field_name="tool_bridge_url",
                 allow_http=True,
             )
+        self.assertFalse(runner.allow_insecure_openai_endpoint())
 
     def test_no_sdk_path_records_real_request_metadata(self) -> None:
         sent_requests = []

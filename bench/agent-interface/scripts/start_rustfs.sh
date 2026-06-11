@@ -2,7 +2,7 @@
 set -euo pipefail
 
 repo_root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
-data_root="${YANEX_BENCH_DATA_ROOT:-${repo_root}/benchmark/data/yanex-demo}"
+data_root="${YANEX_BENCH_DATA_ROOT:-${repo_root}/bench/data/yanex-demo}"
 container="${YANEX_RUSTFS_CONTAINER:-yanex-demo-rustfs}"
 image="${YANEX_RUSTFS_IMAGE:-rustfs/rustfs:latest}"
 host="${YANEX_RUSTFS_HOST:-127.0.0.1}"

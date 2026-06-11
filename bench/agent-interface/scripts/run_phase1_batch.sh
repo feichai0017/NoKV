@@ -11,7 +11,7 @@ Options:
   --output-jsonl PATH           Telemetry JSONL path.
   --arm ARM                     Run one arm. May be repeated.
   --task-id TASK_ID             Run one task. Omit to run all fixed Phase 1 tasks.
-  --base-profile PATH           Runtime profile YAML. Defaults to benchmark/agent-interface-benchmark/base_profile.yaml.
+  --base-profile PATH           Runtime profile YAML. Defaults to bench/agent-interface/base_profile.yaml.
   --api-surface SURFACE         openai_agents_responses_schema_once or openai_chat_completions.
   --repeat N, --repeats N       Repeat count per selected task. Defaults to base profile.
   --model MODEL                 OpenAI model. Defaults to YANEX_BENCH_MODEL, OPENAI_MODEL, or gpt-5.5.
@@ -34,7 +34,7 @@ option_value() {
 }
 
 repo_root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
-data_root="${YANEX_BENCH_DATA_ROOT:-${repo_root}/benchmark/data/yanex-demo}"
+data_root="${YANEX_BENCH_DATA_ROOT:-${repo_root}/bench/data/yanex-demo}"
 run_timestamp="${YANEX_BENCH_TS:-$(date +%Y%m%d-%H%M%S)}"
 if [[ "${run_timestamp}" =~ ^([0-9]{8}) ]]; then
   run_date="${BASH_REMATCH[1]}"
@@ -129,7 +129,7 @@ if [ -n "${repeats}" ] && { ! [[ "${repeats}" =~ ^[0-9]+$ ]] || [ "${repeats}" -
   exit 2
 fi
 
-active_base_profile="${base_profile:-${repo_root}/benchmark/agent-interface-benchmark/base_profile.yaml}"
+active_base_profile="${base_profile:-${repo_root}/bench/agent-interface/base_profile.yaml}"
 if [ ! -f "${active_base_profile}" ]; then
   echo "base profile not found: ${active_base_profile}" >&2
   exit 2
@@ -157,7 +157,7 @@ if ! command -v "${cargo_bin}" >/dev/null 2>&1; then
 fi
 
 default_python_bin="python3"
-local_python_bin="${repo_root}/benchmark/agent-interface-benchmark/.venv/bin/python"
+local_python_bin="${repo_root}/bench/agent-interface/.venv/bin/python"
 if [ -n "${PYTHON:-}" ]; then
   python_bin="${PYTHON}"
 elif [ -x "${local_python_bin}" ]; then
@@ -215,7 +215,7 @@ if not supported:
     sys.exit(1)
 PY
     echo "Install with:" >&2
-    echo "  ${python_bin} -m pip install -r ${repo_root}/benchmark/agent-interface-benchmark/agents_runner/requirements.txt" >&2
+    echo "  ${python_bin} -m pip install -r ${repo_root}/bench/agent-interface/agents_runner/requirements.txt" >&2
     exit 2
   fi
 }
@@ -419,7 +419,7 @@ run_one_batch() {
     optional_args+=(--max-tool-calls "${max_tool_calls}")
   fi
 
-  PYTHON="${python_bin}" "${cargo_bin}" run --manifest-path "${repo_root}/benchmark/agent-interface-benchmark/harness/Cargo.toml" -- run-batch \
+  PYTHON="${python_bin}" "${cargo_bin}" run -p nokv-bench --bin yanex-agent-bench -- run-batch \
     --data-root "${data_root}" \
     ${arm_arg+"${arm_arg[@]}"} \
     ${optional_args+"${optional_args[@]}"} \

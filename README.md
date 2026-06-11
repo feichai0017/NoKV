@@ -257,7 +257,8 @@ Not implemented yet:
 
 ## Benchmarks
 
-The root `bench/` crate contains system workload harnesses:
+The root `bench/` package contains all benchmark entry points. System workload
+runs use `nokv-bench`:
 
 ```bash
 cargo run --release -p nokv-bench --bin nokv-bench -- \
@@ -274,6 +275,13 @@ cargo run --release -p nokv-bench --bin nokv-bench -- \
   shape;
 - `metadata-ha-smoke` and `metadata-ha-fault-smoke` OpenRaft metadata HA smoke
   workloads.
+
+Agent-interface experiments live under `bench/agent-interface/` and run through
+the same package:
+
+```bash
+cargo run --release -p nokv-bench --bin yanex-agent-bench -- list-tasks
+```
 
 For the fast AI-training product gate, run:
 

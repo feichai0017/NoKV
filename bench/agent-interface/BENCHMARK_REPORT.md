@@ -161,26 +161,26 @@ with where agent workloads are actually heading.
 ## Reproduction
 
 ```bash
-./benchmark/agent-interface-benchmark/scripts/start_rustfs.sh
-cargo run --manifest-path benchmark/agent-interface-benchmark/harness/Cargo.toml -- prepare \
-  --archive /path/to/corpus.tar.gz --data-root benchmark/data/yanex-demo --reset
-cargo run --manifest-path benchmark/agent-interface-benchmark/harness/Cargo.toml -- verify \
-  --data-root benchmark/data/yanex-demo
+./bench/agent-interface/scripts/start_rustfs.sh
+cargo run -p nokv-bench --bin yanex-agent-bench -- prepare \
+  --archive /path/to/corpus.tar.gz --data-root bench/data/yanex-demo --reset
+cargo run -p nokv-bench --bin yanex-agent-bench -- verify \
+  --data-root bench/data/yanex-demo
 
 export OPENAI_API_KEY=...
 export OPENAI_INPUT_USD_PER_1M_TOKENS=0.75
 export OPENAI_CACHED_INPUT_USD_PER_1M_TOKENS=0.075
 export OPENAI_OUTPUT_USD_PER_1M_TOKENS=4.50
-./benchmark/agent-interface-benchmark/scripts/run_phase1_batch.sh \
+./bench/agent-interface/scripts/run_phase1_batch.sh \
   --arm sqlite_raw_v1 --arm nokv_native_v1 \
   --repeats 5 --model gpt-5.4-mini \
-  --output-jsonl benchmark/data/yanex-demo/results/run1.jsonl
+  --output-jsonl bench/data/yanex-demo/results/run1.jsonl
 ```
 
 Result telemetry for the published numbers is committed at
-`benchmark/agent-interface-benchmark/results/gpt-5.4-mini-5repeats-run1.jsonl`
+`bench/agent-interface/results/gpt-5.4-mini-5repeats-run1.jsonl`
 and `.../gpt-5.4-mini-5repeats-run2.jsonl` (two 5-repeat batches, 100 runs).
-Locally produced result files under `benchmark/data/` stay uncommitted.
+Locally produced result files under `bench/data/` stay uncommitted.
 
 ## Limitations
 

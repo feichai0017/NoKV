@@ -9,9 +9,9 @@ SPDX-License-Identifier: Apache-2.0
 
 # Benchmarks
 
-NoKV keeps product microbenchmarks inside the product crates and puts
-system-level workload runs in the root-level `bench/` crate. The benchmark harness is
-for metadata smoke, MLPerf Storage/DLIO-style generated training reads, and
+NoKV keeps product microbenchmarks inside the product crates and puts benchmark
+entry points in the root-level `bench/` package. The `nokv-bench` binary covers
+metadata smoke, MLPerf Storage/DLIO-style generated training reads, and
 checkpoint publish/read paths:
 
 ```bash
@@ -24,6 +24,14 @@ The default object backend is a local RustFS endpoint at
 `http://127.0.0.1:9000`, bucket `nokv`, with the standard local RustFS
 development credentials. Start RustFS first when running object-backed
 workloads.
+
+The Yanex agent-interface benchmark is a second binary in the same package, with
+assets and published telemetry under `bench/agent-interface/`:
+
+```bash
+cargo run --release -p nokv-bench --bin yanex-agent-bench -- list-tasks
+bench/agent-interface/scripts/run_phase1_batch.sh --help
+```
 
 For a disposable local RustFS-backed end-to-end run, use the repository script:
 

@@ -43,6 +43,10 @@ def assert_http_url(url: str, *, field_name: str, allow_http: bool) -> None:
         raise RunnerContractError(f"{field_name} must be a valid {allowed_text} URL")
 
 
+def allow_insecure_openai_endpoint() -> bool:
+    return os.getenv("YANEX_BENCH_ALLOW_INSECURE_OPENAI_ENDPOINT") == "1"
+
+
 def openai_agents_version_supported(version: str) -> bool:
     match = re.match(r"^(\d+)\.(\d+)\.(\d+)", version)
     if match is None:
@@ -165,7 +169,11 @@ class SchemaOnceResponsesModel(AgentsModelBase):
         return request
 
     def send_request(self, request: dict[str, Any]) -> tuple[dict[str, Any], str | None, int, int]:
-        assert_http_url(self.endpoint, field_name="endpoint", allow_http=False)
+        assert_http_url(
+            self.endpoint,
+            field_name="endpoint",
+            allow_http=allow_insecure_openai_endpoint(),
+        )
         started = now_ms()
         body = json.dumps(request, separators=(",", ":")).encode("utf-8")
         http_request = urllib.request.Request(
@@ -446,7 +454,7 @@ async def run_with_agents_sdk(config: dict[str, Any], harness_bin: str, arm: str
             f"{OPENAI_AGENTS_REQUIREMENT} is required for "
             "openai_agents_responses_schema_once; install with "
             "python3 -m pip install -r "
-            "benchmark/agent-interface-benchmark/agents_runner/requirements.txt"
+            "bench/agent-interface/agents_runner/requirements.txt"
         ) from exc
 
     set_tracing_disabled(True)
@@ -543,7 +551,11 @@ def run_live_probe(config: dict[str, Any]) -> None:
 
 
 def send_probe_request(endpoint: str, api_key: str, request_body: dict[str, Any]) -> dict[str, Any]:
-    assert_http_url(endpoint, field_name="endpoint", allow_http=False)
+    assert_http_url(
+        endpoint,
+        field_name="endpoint",
+        allow_http=allow_insecure_openai_endpoint(),
+    )
     body = json.dumps(request_body, separators=(",", ":")).encode("utf-8")
     request = urllib.request.Request(
         endpoint,

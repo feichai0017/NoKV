@@ -7,17 +7,16 @@ tmp_dir="$(mktemp -d)"
 trap 'rm -rf "${tmp_dir}"' EXIT
 
 repo_root="${tmp_dir}/repo"
-mkdir -p "${repo_root}/benchmark/agent-interface-benchmark/.venv/bin"
-mkdir -p "${repo_root}/benchmark/agent-interface-benchmark/harness"
+mkdir -p "${repo_root}/bench/agent-interface/.venv/bin"
 mkdir -p "${repo_root}/data"
 
-cat >"${repo_root}/benchmark/agent-interface-benchmark/base_profile.yaml" <<'YAML'
+cat >"${repo_root}/bench/agent-interface/base_profile.yaml" <<'YAML'
 api_surface: openai_agents_responses_schema_once
 run_policy:
   repeats_per_arm_task: 1
 YAML
 
-fake_python="${repo_root}/benchmark/agent-interface-benchmark/.venv/bin/python"
+fake_python="${repo_root}/bench/agent-interface/.venv/bin/python"
 cat >"${fake_python}" <<'SH'
 #!/usr/bin/env bash
 if [ "${1:-}" = "-u" ]; then
