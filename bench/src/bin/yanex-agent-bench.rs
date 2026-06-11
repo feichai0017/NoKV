@@ -65,13 +65,13 @@ const TOOL_CALL_TIMEOUT_MS: u64 = 30_000;
 const SQLITE_PROGRESS_OPS: i32 = 1_000;
 const RESPONSE_MAX_ATTEMPTS: usize = 10;
 #[cfg(test)]
-const BASE_PROFILE_YAML: &str = include_str!("../../base_profile.yaml");
+const BASE_PROFILE_YAML: &str = include_str!("../../agent-interface/base_profile.yaml");
 
 fn main() {
     if let Err(err) = run(env::args().skip(1).collect()) {
         eprintln!("error: {err}");
         eprintln!(
-            "\nUsage:\n  harness prepare --archive PATH --data-root PATH [--reset] [s3 options]\n  harness nokv-register-indexes --data-root PATH [s3 options]\n  harness verify --data-root PATH [--run-id ID] [s3 options]\n  harness tools --arm ARM\n  harness list-tasks\n  harness show-task --task-id ID\n  harness gold --data-root PATH --task-id ID\n  harness judge --data-root PATH --arm ARM --task-id ID --answer-json PATH\n  harness run-task --data-root PATH --arm ARM --task-id ID --output-jsonl PATH [--base-profile PATH] [--api-surface SURFACE] [--model MODEL] [--max-completion-tokens N]\n  harness run-batch --data-root PATH --output-jsonl PATH [--base-profile PATH] [--api-surface SURFACE] [--repeats N|--repeat N] [--arm ARM] [--task-id ID]\n  harness sqlite-show-schema --db PATH\n  harness sqlite-query --db PATH --sql SQL\n  harness sqlite-read-blob --db PATH --blob-ref REF --offset N --limit N\n  harness nokv-list|nokv-stat|nokv-read --data-root PATH --path PATH [...]\n"
+            "\nUsage:\n  yanex-agent-bench prepare --archive PATH --data-root PATH [--reset] [s3 options]\n  yanex-agent-bench nokv-register-indexes --data-root PATH [s3 options]\n  yanex-agent-bench verify --data-root PATH [--run-id ID] [s3 options]\n  yanex-agent-bench tools --arm ARM\n  yanex-agent-bench list-tasks\n  yanex-agent-bench show-task --task-id ID\n  yanex-agent-bench gold --data-root PATH --task-id ID\n  yanex-agent-bench judge --data-root PATH --arm ARM --task-id ID --answer-json PATH\n  yanex-agent-bench run-task --data-root PATH --arm ARM --task-id ID --output-jsonl PATH [--base-profile PATH] [--api-surface SURFACE] [--model MODEL] [--max-completion-tokens N]\n  yanex-agent-bench run-batch --data-root PATH --output-jsonl PATH [--base-profile PATH] [--api-surface SURFACE] [--repeats N|--repeat N] [--arm ARM] [--task-id ID]\n  yanex-agent-bench sqlite-show-schema --db PATH\n  yanex-agent-bench sqlite-query --db PATH --sql SQL\n  yanex-agent-bench sqlite-read-blob --db PATH --blob-ref REF --offset N --limit N\n  yanex-agent-bench nokv-list|nokv-stat|nokv-read --data-root PATH --path PATH [...]\n"
         );
         std::process::exit(2);
     }
@@ -1067,7 +1067,7 @@ fn parse_base_profile_yaml(yaml: &str) -> Result<BaseProfile, HarnessError> {
 }
 
 fn default_base_profile_path() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../base_profile.yaml")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("agent-interface/base_profile.yaml")
 }
 
 fn repeat_count_from_options(options: &Options, profile: &BaseProfile) -> usize {
@@ -1700,8 +1700,10 @@ fn tool_registry_for_arm(arm: &str) -> Result<Vec<ToolDefinition>, HarnessError>
 }
 
 fn phase1_task_set() -> Result<BenchmarkTaskSet, HarnessError> {
-    serde_yaml::from_str(include_str!("../../tasks/phase1_readonly.yaml"))
-        .map_err(|err| HarnessError::Yaml(err.to_string()))
+    serde_yaml::from_str(include_str!(
+        "../../agent-interface/tasks/phase1_readonly.yaml"
+    ))
+    .map_err(|err| HarnessError::Yaml(err.to_string()))
 }
 
 fn benchmark_arm_ids() -> &'static [&'static str] {
@@ -2454,7 +2456,7 @@ fn agent_runner_script_path() -> PathBuf {
         .map(PathBuf::from)
         .unwrap_or_else(|_| {
             PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join("../agents_runner/openai_agents_responses_schema_once.py")
+                .join("agent-interface/agents_runner/openai_agents_responses_schema_once.py")
         })
 }
 
@@ -2562,8 +2564,8 @@ fn benchmark_messages(
 
 fn arm_card_yaml(arm: &str) -> Result<&'static str, HarnessError> {
     match arm {
-        "sqlite_raw_v1" => Ok(include_str!("../../arms/sqlite_raw.yaml")),
-        "nokv_native_v1" => Ok(include_str!("../../arms/nokv_native.yaml")),
+        "sqlite_raw_v1" => Ok(include_str!("../../agent-interface/arms/sqlite_raw.yaml")),
+        "nokv_native_v1" => Ok(include_str!("../../agent-interface/arms/nokv_native.yaml")),
         other => Err(HarnessError::Corpus(format!(
             "unknown benchmark arm {other}"
         ))),
@@ -3276,7 +3278,9 @@ fn execute_sqlite_raw_tool(
             let blob_ref = required_string_arg(args, "blob_ref")?;
             let pattern = required_string_arg(args, "pattern")?;
             let cursor = optional_string_arg(args, "cursor");
-            let limit = optional_usize_arg(args, "limit")?.unwrap_or(100).clamp(1, 100);
+            let limit = optional_usize_arg(args, "limit")?
+                .unwrap_or(100)
+                .clamp(1, 100);
             grep_blob_tool(conn, &blob_ref, &pattern, cursor.as_deref(), limit)
         }
         other => Err(HarnessError::Corpus(format!(
@@ -3365,9 +3369,9 @@ fn grep_blob_tool(
         )));
     }
     let start_line = match cursor {
-        Some(cursor) => cursor.parse::<usize>().map_err(|_| {
-            HarnessError::Corpus(format!("invalid grep_blob cursor {cursor}"))
-        })?,
+        Some(cursor) => cursor
+            .parse::<usize>()
+            .map_err(|_| HarnessError::Corpus(format!("invalid grep_blob cursor {cursor}")))?,
         None => 0,
     };
     let pattern_lower = pattern.to_lowercase();
@@ -4522,9 +4526,9 @@ where
     for field in &expected {
         report.agent_catalog_fields_checked += 1;
         if !actual.contains(field) {
-            report
-                .mismatches
-                .push(format!("agent catalog misses registered index field {field}"));
+            report.mismatches.push(format!(
+                "agent catalog misses registered index field {field}"
+            ));
         }
     }
     for field in &actual {
@@ -5957,7 +5961,9 @@ where
     O: ObjectStore,
 {
     fn lookup_path(&self, absolute_path: &str) -> Result<Option<DentryWithAttr>, ClientError> {
-        self.service.lookup_path(absolute_path).map_err(ClientError::from)
+        self.service
+            .lookup_path(absolute_path)
+            .map_err(ClientError::from)
     }
 
     fn list_path(&self, absolute_path: &str) -> Result<Vec<DentryWithAttr>, ClientError> {
@@ -6038,7 +6044,9 @@ where
             return Err(ClientError::Metadata(MetadError::NotFile));
         }
         let len = usize::try_from(entry.attr.size).map_err(|_| {
-            ClientError::Protocol(format!("artifact {absolute_path} size exceeds platform limit"))
+            ClientError::Protocol(format!(
+                "artifact {absolute_path} size exceeds platform limit"
+            ))
         })?;
         self.service
             .read_file(entry.attr.inode, 0, len)
@@ -6583,7 +6591,8 @@ fn agent_tool_debug(options: Options) -> Result<(), HarnessError> {
             execute_nokv_tool(service.as_ref(), &tool_name, &args)?
         }
     };
-    let compact = serde_json::to_string(&result).map_err(|err| HarnessError::Json(err.to_string()))?;
+    let compact =
+        serde_json::to_string(&result).map_err(|err| HarnessError::Json(err.to_string()))?;
     eprintln!(
         "tool={tool_name} arm={arm} result_bytes={} approx_tokens={}",
         compact.len(),
@@ -7581,7 +7590,7 @@ mod tests {
         );
         service.bootstrap_root(0o755, 1000, 1000).unwrap();
         let runs = service.create_dir_path("/runs", 0o755, 1000, 1000).unwrap();
-        let published = service
+        service
             .publish_artifact(nokv_meta::PublishArtifact {
                 parent: runs.attr.inode,
                 name: nokv_types::DentryName::new(b"stdout.txt".to_vec()).unwrap(),
@@ -7608,17 +7617,12 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(result["tool"], "grep");
         assert_eq!(result["path"], "/runs");
         assert_eq!(result["matches"][0]["path"], "/runs/stdout.txt");
         assert_eq!(result["matches"][0]["line_number"], 2);
-        assert_eq!(
-            result["matches"][0]["evidence"],
-            format!(
-                "nokv-native:///runs/stdout.txt@generation:{}#L2",
-                published.attr.generation
-            )
-        );
+        assert_eq!(result["matches"][0]["snippet"], "needle hit");
+        assert!(result.get("tool").is_none());
+        assert!(result["matches"][0].get("evidence").is_none());
     }
 
     #[test]
@@ -7626,9 +7630,12 @@ mod tests {
         for (arm, card_text) in [
             (
                 "nokv_native_v1",
-                include_str!("../../arms/nokv_native.yaml"),
+                include_str!("../../agent-interface/arms/nokv_native.yaml"),
             ),
-            ("sqlite_raw_v1", include_str!("../../arms/sqlite_raw.yaml")),
+            (
+                "sqlite_raw_v1",
+                include_str!("../../agent-interface/arms/sqlite_raw.yaml"),
+            ),
         ] {
             let card: serde_yaml::Value = serde_yaml::from_str(card_text).unwrap();
             assert!(
@@ -7706,7 +7713,7 @@ mod tests {
 
     #[test]
     fn nokv_native_arm_card_does_not_embed_phase1_task_recipes() {
-        let card = include_str!("../../arms/nokv_native.yaml");
+        let card = include_str!("../../agent-interface/arms/nokv_native.yaml");
         let forbidden_snippets = [
             "train.py",
             "eval.py",
@@ -7806,7 +7813,7 @@ mod tests {
 
     #[test]
     fn readme_documents_one_core_valid_ab_comparison() {
-        let readme = include_str!("../../README.md");
+        let readme = include_str!("../../agent-interface/README.md");
 
         assert!(readme.contains("## Valid Comparisons"));
         assert!(readme.contains("one core A/B comparison"));
@@ -7815,8 +7822,10 @@ mod tests {
 
     #[test]
     fn phase1_rubric_primary_metrics_match_summary_columns() {
-        let rubric: serde_yaml::Value =
-            serde_yaml::from_str(include_str!("../../rubric/phase1_readonly.yaml")).unwrap();
+        let rubric: serde_yaml::Value = serde_yaml::from_str(include_str!(
+            "../../agent-interface/rubric/phase1_readonly.yaml"
+        ))
+        .unwrap();
         let primary_metrics = rubric
             .get("primary_metrics")
             .and_then(serde_yaml::Value::as_sequence)
@@ -8205,6 +8214,7 @@ mod tests {
         let _api_key = TestEnvVar::set("OPENAI_API_KEY", "unit-api-key");
         let _endpoint = TestEnvVar::set("OPENAI_RESPONSES_URL", &endpoint);
         let _no_sdk = TestEnvVar::set("YANEX_BENCH_AGENT_SDK_TEST_NO_SDK", "1");
+        let _allow_http = TestEnvVar::set("YANEX_BENCH_ALLOW_INSECURE_OPENAI_ENDPOINT", "1");
         let options = Options::parse(&[
             "--data-root".to_owned(),
             data_root.display().to_string(),
@@ -8311,6 +8321,7 @@ mod tests {
         let _api_key = TestEnvVar::set("OPENAI_API_KEY", "unit-api-key");
         let _endpoint = TestEnvVar::set("OPENAI_RESPONSES_URL", &endpoint);
         let _no_sdk = TestEnvVar::set("YANEX_BENCH_AGENT_SDK_TEST_NO_SDK", "1");
+        let _allow_http = TestEnvVar::set("YANEX_BENCH_ALLOW_INSECURE_OPENAI_ENDPOINT", "1");
         let options = Options::parse(&[
             "--data-root".to_owned(),
             data_root.display().to_string(),

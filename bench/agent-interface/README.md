@@ -58,13 +58,13 @@ state includes:
 Default local data root:
 
 ```text
-benchmark/data/yanex-demo
+bench/data/yanex-demo
 ```
 
 Expected local layout after preparation:
 
 ```text
-benchmark/data/yanex-demo/
+bench/data/yanex-demo/
   corpus/
   sqlite/yanex.db
   nokv/meta
@@ -158,7 +158,7 @@ typed index namespaces or future derived metric/set-pipeline APIs.
 Start RustFS:
 
 ```bash
-./benchmark/agent-interface-benchmark/scripts/start_rustfs.sh
+./bench/agent-interface/scripts/start_rustfs.sh
 ```
 
 Always prepare from a clean slate with `--reset` before measuring; `verify`
@@ -168,17 +168,17 @@ fields and fails on stale fields from older encoders.
 Prepare the fixed corpus:
 
 ```bash
-cargo run --manifest-path benchmark/agent-interface-benchmark/harness/Cargo.toml -- prepare \
+cargo run -p nokv-bench --bin yanex-agent-bench -- prepare \
   --archive /path/to/yanex-experiment-metadata-origami-data-gen-project.tar.gz \
-  --data-root benchmark/data/yanex-demo \
+  --data-root bench/data/yanex-demo \
   --reset
 ```
 
 Verify materialization:
 
 ```bash
-cargo run --manifest-path benchmark/agent-interface-benchmark/harness/Cargo.toml -- verify \
-  --data-root benchmark/data/yanex-demo
+cargo run -p nokv-bench --bin yanex-agent-bench -- verify \
+  --data-root bench/data/yanex-demo
 ```
 
 ## Run Phase 1
@@ -193,19 +193,19 @@ export OPENAI_MODEL=gpt-5.5
 Run one task for one arm:
 
 ```bash
-./benchmark/agent-interface-benchmark/scripts/run_phase1_batch.sh \
+./bench/agent-interface/scripts/run_phase1_batch.sh \
   --arm nokv_native_v1 \
   --task-id cancelled_train_interrupt_triage \
   --repeats 1 \
-  --output-jsonl benchmark/data/yanex-demo/results/phase1.jsonl
+  --output-jsonl bench/data/yanex-demo/results/phase1.jsonl
 ```
 
 Install runner dependencies in the local benchmark virtual environment. The
 wrapper automatically uses this environment when `PYTHON` is not set:
 
 ```bash
-python3.12 -m venv benchmark/agent-interface-benchmark/.venv
-benchmark/agent-interface-benchmark/.venv/bin/python -m pip install -r benchmark/agent-interface-benchmark/agents_runner/requirements.txt
+python3.12 -m venv bench/agent-interface/.venv
+bench/agent-interface/.venv/bin/python -m pip install -r bench/agent-interface/agents_runner/requirements.txt
 ```
 
 Set `YANEX_BENCH_AGENT_SDK_LIVE_PROBE=1` to make the Agent SDK runner perform a
@@ -215,9 +215,9 @@ run failure.
 Run all fixed Phase 1 tasks for all arms:
 
 ```bash
-./benchmark/agent-interface-benchmark/scripts/run_phase1_batch.sh \
+./bench/agent-interface/scripts/run_phase1_batch.sh \
   --repeats 10 \
-  --output-jsonl benchmark/data/yanex-demo/results/phase1.jsonl
+  --output-jsonl bench/data/yanex-demo/results/phase1.jsonl
 ```
 
 ## Direct Tool Checks
@@ -225,15 +225,15 @@ Run all fixed Phase 1 tasks for all arms:
 Inspect the tool registry:
 
 ```bash
-cargo run --manifest-path benchmark/agent-interface-benchmark/harness/Cargo.toml -- tools \
+cargo run -p nokv-bench --bin yanex-agent-bench -- tools \
   --arm nokv_native_v1
 ```
 
 Inspect a NoKV raw namespace path:
 
 ```bash
-cargo run --manifest-path benchmark/agent-interface-benchmark/harness/Cargo.toml -- nokv-stat \
-  --data-root benchmark/data/yanex-demo \
+cargo run -p nokv-bench --bin yanex-agent-bench -- nokv-stat \
+  --data-root bench/data/yanex-demo \
   --path /yanex/runs/00023013/metadata.json
 ```
 
@@ -245,8 +245,8 @@ without owning any namespace semantics.
 Inspect SQLite schema:
 
 ```bash
-cargo run --manifest-path benchmark/agent-interface-benchmark/harness/Cargo.toml -- sqlite-show-schema \
-  --db benchmark/data/yanex-demo/sqlite/yanex.db
+cargo run -p nokv-bench --bin yanex-agent-bench -- sqlite-show-schema \
+  --db bench/data/yanex-demo/sqlite/yanex.db
 ```
 
 ## Cost Accounting
@@ -273,5 +273,5 @@ the input rate; completion tokens at the output rate.
   shortcuts; the harness stays a thin adapter over `nokv-client` and
   `nokv-meta`, and the raw SQLite arm keeps line-oriented `grep_blob`
   parity for body search.
-- The published benchmark report lives at `benchmark/AGENT_INTERFACE_BENCHMARK_REPORT.md`;
-  its raw telemetry is committed under `benchmark/agent-interface-benchmark/results/`.
+- The published benchmark report lives at `bench/agent-interface/BENCHMARK_REPORT.md`;
+  its raw telemetry is committed under `bench/agent-interface/results/`.

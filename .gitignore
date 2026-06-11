@@ -27,11 +27,11 @@ coverage.out
 *.pprof
 
 # Local benchmark corpus materializations and run results (never commit)
-benchmark/data/
+bench/data/
 *.jsonl
 
 # Published benchmark result telemetry (committed deliberately)
-!benchmark/agent-interface-benchmark/results/*.jsonl
+!bench/agent-interface/results/*.jsonl
 third_party/
 
 # Benchmark run output

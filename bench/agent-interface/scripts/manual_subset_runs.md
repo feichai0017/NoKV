@@ -12,7 +12,7 @@ All commands assume the repository root is the current directory.
 export OPENAI_API_KEY=...
 export OPENAI_MODEL=gpt-5.5
 
-export DATA_ROOT=/Users/wangchanghao/NoKV/benchmark/data/yanex-demo
+export DATA_ROOT=/Users/wangchanghao/NoKV/bench/data/yanex-demo
 ```
 
 The wrapper script owns model selection. It uses `--model MODEL` when provided,
@@ -25,8 +25,8 @@ dependency in the local benchmark virtual environment. The wrapper
 automatically uses this environment when `PYTHON` is not set:
 
 ```bash
-python3.12 -m venv benchmark/agent-interface-benchmark/.venv
-benchmark/agent-interface-benchmark/.venv/bin/python -m pip install -r benchmark/agent-interface-benchmark/agents_runner/requirements.txt
+python3.12 -m venv bench/agent-interface/.venv
+bench/agent-interface/.venv/bin/python -m pip install -r bench/agent-interface/agents_runner/requirements.txt
 ```
 
 If `cargo` is not on `PATH`, load the Rust environment first:
@@ -38,25 +38,25 @@ source "${HOME}/.cargo/env"
 Verify the prepared data root before spending model calls:
 
 ```bash
-cargo run --manifest-path benchmark/agent-interface-benchmark/harness/Cargo.toml -- verify \
+cargo run -p nokv-bench --bin yanex-agent-bench -- verify \
   --data-root "${DATA_ROOT}"
 ```
 
 Inspect available tasks and arm tool surfaces:
 
 ```bash
-cargo run --manifest-path benchmark/agent-interface-benchmark/harness/Cargo.toml -- list-tasks
+cargo run -p nokv-bench --bin yanex-agent-bench -- list-tasks
 
-cargo run --manifest-path benchmark/agent-interface-benchmark/harness/Cargo.toml -- tools \
+cargo run -p nokv-bench --bin yanex-agent-bench -- tools \
   --arm sqlite_raw_v1
 
-cargo run --manifest-path benchmark/agent-interface-benchmark/harness/Cargo.toml -- tools \
+cargo run -p nokv-bench --bin yanex-agent-bench -- tools \
   --arm nokv_native_v1
 ```
 
 ## Control Model
 
-Use `benchmark/agent-interface-benchmark/scripts/run_phase1_batch.sh` as the
+Use `bench/agent-interface/scripts/run_phase1_batch.sh` as the
 normal entry point. It forwards to the harness `run-batch` command.
 
 The benchmark is controlled by these axes:
@@ -81,7 +81,7 @@ is needed, run the same command once per task with the same output JSONL.
 
 ## Runtime Profile
 
-`benchmark/agent-interface-benchmark/base_profile.yaml` is the default runtime
+`bench/agent-interface/base_profile.yaml` is the default runtime
 profile. The harness reads this file at runtime. Pass `--base-profile PATH` to
 use a different profile.
 
@@ -126,7 +126,7 @@ the returned reasoning token counts.
 Disable live logs when needed:
 
 ```bash
-./benchmark/agent-interface-benchmark/scripts/run_phase1_batch.sh \
+./bench/agent-interface/scripts/run_phase1_batch.sh \
   --data-root "${DATA_ROOT}" \
   --arm nokv_native_v1 \
   --task-id train_top_configs_report \
@@ -139,7 +139,7 @@ Disable live logs when needed:
 Run one task on one arm:
 
 ```bash
-./benchmark/agent-interface-benchmark/scripts/run_phase1_batch.sh \
+./bench/agent-interface/scripts/run_phase1_batch.sh \
   --data-root "${DATA_ROOT}" \
   --arm nokv_native_v1 \
   --task-id train_top_configs_report \
@@ -149,7 +149,7 @@ Run one task on one arm:
 Run one task on two arms:
 
 ```bash
-./benchmark/agent-interface-benchmark/scripts/run_phase1_batch.sh \
+./bench/agent-interface/scripts/run_phase1_batch.sh \
   --data-root "${DATA_ROOT}" \
   --arm sqlite_raw_v1 \
   --arm nokv_native_v1 \
@@ -160,7 +160,7 @@ Run one task on two arms:
 Run all fixed Phase 1 tasks on one arm:
 
 ```bash
-./benchmark/agent-interface-benchmark/scripts/run_phase1_batch.sh \
+./bench/agent-interface/scripts/run_phase1_batch.sh \
   --data-root "${DATA_ROOT}" \
   --arm nokv_native_v1 \
   --repeats 1
@@ -169,7 +169,7 @@ Run all fixed Phase 1 tasks on one arm:
 Run all fixed Phase 1 tasks on two arms:
 
 ```bash
-./benchmark/agent-interface-benchmark/scripts/run_phase1_batch.sh \
+./bench/agent-interface/scripts/run_phase1_batch.sh \
   --data-root "${DATA_ROOT}" \
   --arm sqlite_raw_v1 \
   --arm nokv_native_v1 \
@@ -179,7 +179,7 @@ Run all fixed Phase 1 tasks on two arms:
 Run with explicit runtime overrides:
 
 ```bash
-./benchmark/agent-interface-benchmark/scripts/run_phase1_batch.sh \
+./bench/agent-interface/scripts/run_phase1_batch.sh \
   --data-root "${DATA_ROOT}" \
   --arm nokv_native_v1 \
   --task-id train_top_configs_report \
@@ -193,7 +193,7 @@ Run with explicit runtime overrides:
 Run with an alternate profile:
 
 ```bash
-./benchmark/agent-interface-benchmark/scripts/run_phase1_batch.sh \
+./bench/agent-interface/scripts/run_phase1_batch.sh \
   --data-root "${DATA_ROOT}" \
   --base-profile /path/to/base_profile.yaml \
   --arm nokv_native_v1 \
@@ -206,7 +206,7 @@ Keep runtime-sensitivity outputs separate from primary comparison outputs. For
 example, a completion-budget sensitivity run should use its own JSONL:
 
 ```bash
-./benchmark/agent-interface-benchmark/scripts/run_phase1_batch.sh \
+./bench/agent-interface/scripts/run_phase1_batch.sh \
   --data-root "${DATA_ROOT}" \
   --arm nokv_native_v1 \
   --task-id train_top_configs_report \
