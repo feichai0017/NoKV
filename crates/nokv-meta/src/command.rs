@@ -8,6 +8,8 @@ use std::fmt;
 
 use nokv_types::RecordFamily;
 
+const DEFAULT_DELIMITED_SCAN_CHUNK_LIMIT: usize = 1024;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Version(u64);
 
@@ -50,6 +52,7 @@ pub enum CommandKind {
     RenewSnapshot,
     WatchSubtree,
     CleanupObjects,
+    RegisterNamespaceIndex,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -239,21 +242,33 @@ pub trait MetadataStore {
         let limit = scan_limit(request.limit);
         let mut out = Vec::new();
         let start_after = request.start_after.as_deref();
-        for item in self.scan(ScanRequest {
-            family: request.family,
-            prefix: request.prefix.clone(),
-            start_after: request.start_after.clone(),
-            version: request.version,
-            limit: 0,
-            purpose: request.purpose,
-        })? {
-            let collapsed = collapse_delimited_scan_item(item, &request.prefix, request.delimiter);
-            if item_after_marker(&collapsed, start_after) {
-                if out.last() != Some(&collapsed) {
+        let chunk_limit = if request.limit == 0 {
+            DEFAULT_DELIMITED_SCAN_CHUNK_LIMIT
+        } else {
+            request.limit.min(DEFAULT_DELIMITED_SCAN_CHUNK_LIMIT)
+        };
+        let mut raw_start_after = request.start_after.clone();
+        loop {
+            let page = self.scan(ScanRequest {
+                family: request.family,
+                prefix: request.prefix.clone(),
+                start_after: raw_start_after.clone(),
+                version: request.version,
+                limit: chunk_limit,
+                purpose: request.purpose,
+            })?;
+            if page.is_empty() {
+                break;
+            }
+            for item in page {
+                raw_start_after = Some(item.key.clone());
+                let collapsed =
+                    collapse_delimited_scan_item(item, &request.prefix, request.delimiter);
+                if item_after_marker(&collapsed, start_after) && out.last() != Some(&collapsed) {
                     out.push(collapsed);
-                }
-                if out.len() >= limit {
-                    break;
+                    if out.len() >= limit {
+                        return Ok(out);
+                    }
                 }
             }
         }
@@ -441,6 +456,7 @@ impl std::error::Error for MetadataError {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::RefCell;
 
     fn version(raw: u64) -> Version {
         Version::new(raw).unwrap()
@@ -499,5 +515,88 @@ mod tests {
         let mut cmd = command();
         cmd.mutations[0].op = MutationOp::Delete;
         assert_eq!(cmd.validate(), Err(MetadataError::DeleteWithValue));
+    }
+
+    struct PagingStore {
+        items: Vec<ScanItem>,
+        scan_limits: RefCell<Vec<usize>>,
+    }
+
+    impl MetadataStore for PagingStore {
+        fn get_versioned(
+            &self,
+            _family: RecordFamily,
+            _key: &[u8],
+            _version: Version,
+            _purpose: ReadPurpose,
+        ) -> Result<Option<ReadItem>, MetadataError> {
+            Ok(None)
+        }
+
+        fn scan(&self, request: ScanRequest) -> Result<Vec<ScanItem>, MetadataError> {
+            assert_ne!(request.limit, 0, "default scan_delimited must page scans");
+            self.scan_limits.borrow_mut().push(request.limit);
+            Ok(self
+                .items
+                .iter()
+                .filter(|item| item.key.starts_with(&request.prefix))
+                .filter(|item| {
+                    request
+                        .start_after
+                        .as_ref()
+                        .is_none_or(|marker| item.key.as_slice() > marker.as_slice())
+                })
+                .take(request.limit)
+                .cloned()
+                .collect())
+        }
+
+        fn commit_metadata(
+            &self,
+            _command: MetadataCommand,
+        ) -> Result<CommitResult, MetadataError> {
+            unimplemented!("not needed by scan_delimited tests")
+        }
+
+        fn prune_history(
+            &self,
+            _request: HistoryPruneRequest,
+        ) -> Result<HistoryPruneOutcome, MetadataError> {
+            Ok(HistoryPruneOutcome::default())
+        }
+    }
+
+    #[test]
+    fn default_scan_delimited_pages_underlying_scans() {
+        let items = (0..(DEFAULT_DELIMITED_SCAN_CHUNK_LIMIT + 3))
+            .map(|index| ScanItem {
+                key: format!("dir/{index:04}").into_bytes(),
+                value: Value(b"value".to_vec()),
+                version: version(1),
+            })
+            .collect::<Vec<_>>();
+        let store = PagingStore {
+            items,
+            scan_limits: RefCell::new(Vec::new()),
+        };
+
+        let out = store
+            .scan_delimited(DelimitedScanRequest {
+                family: RecordFamily::Dentry,
+                prefix: b"dir/".to_vec(),
+                start_after: None,
+                delimiter: b'/',
+                version: version(1),
+                limit: 0,
+                purpose: ReadPurpose::UserStrong,
+            })
+            .unwrap();
+
+        assert_eq!(out.len(), DEFAULT_DELIMITED_SCAN_CHUNK_LIMIT + 3);
+        let scan_limits = store.scan_limits.borrow();
+        assert!(scan_limits.len() > 1);
+        assert!(scan_limits
+            .iter()
+            .all(|limit| *limit == DEFAULT_DELIMITED_SCAN_CHUNK_LIMIT));
     }
 }

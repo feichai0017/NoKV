@@ -9,6 +9,12 @@
 target/
 **/target/
 
+# Python cache output
+__pycache__/
+*.pyc
+.venv/
+**/.venv/
+
 # Docs
 docs/node_modules/
 docs/.vitepress/dist/
@@ -19,11 +25,14 @@ work_test/
 testdata/
 coverage.out
 *.pprof
-third_party/
 
-# Python (benchmark drivers)
-__pycache__/
-*.pyc
+# Local benchmark corpus materializations and run results (never commit)
+benchmark/data/
+*.jsonl
+
+# Published benchmark result telemetry (committed deliberately)
+!benchmark/agent-interface-benchmark/results/*.jsonl
+third_party/
 
 # Benchmark run output
 bench/results/
