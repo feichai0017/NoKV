@@ -153,7 +153,6 @@ crates/
 
 bench/             system workload benchmark harness
 docs/              product, architecture, layout, RustFS, and benchmark docs
-examples/          PyTorch and Kubernetes examples
 ```
 
 For artifact and checkpoint publish, object bytes are uploaded first, then the
