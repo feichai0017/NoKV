@@ -141,6 +141,30 @@ class OpenAiAgentsVersionTest(unittest.TestCase):
         self.assertIn("/yanex/runs/02b8a944/artifacts/git_diff.patch", message)
         self.assertIn("Connection reset by peer", message)
 
+    def test_url_validator_rejects_non_http_schemes(self) -> None:
+        runner.assert_http_url(
+            "https://api.openai.test/v1/responses",
+            field_name="endpoint",
+            allow_http=False,
+        )
+        runner.assert_http_url(
+            "http://127.0.0.1:12345",
+            field_name="tool_bridge_url",
+            allow_http=True,
+        )
+        with self.assertRaises(runner.RunnerContractError):
+            runner.assert_http_url(
+                "http://api.openai.test/v1/responses",
+                field_name="endpoint",
+                allow_http=False,
+            )
+        with self.assertRaises(runner.RunnerContractError):
+            runner.assert_http_url(
+                "file:///tmp/token",
+                field_name="tool_bridge_url",
+                allow_http=True,
+            )
+
     def test_no_sdk_path_records_real_request_metadata(self) -> None:
         sent_requests = []
 

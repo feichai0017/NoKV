@@ -14,6 +14,7 @@ import sys
 import time
 import http.client
 import urllib.error
+import urllib.parse
 import urllib.request
 from dataclasses import dataclass, field
 from typing import Any
@@ -32,6 +33,14 @@ class RunnerContractError(RuntimeError):
 OPENAI_AGENTS_REQUIREMENT = "openai-agents>=0.7.0,<0.8.0"
 TOOL_BRIDGE_ATTEMPTS = 3
 TOOL_BRIDGE_RETRY_SLEEP_SECONDS = 0.05
+
+
+def assert_http_url(url: str, *, field_name: str, allow_http: bool) -> None:
+    parsed = urllib.parse.urlparse(url)
+    allowed = {"https", "http"} if allow_http else {"https"}
+    if parsed.scheme not in allowed or not parsed.netloc:
+        allowed_text = "/".join(sorted(allowed))
+        raise RunnerContractError(f"{field_name} must be a valid {allowed_text} URL")
 
 
 def openai_agents_version_supported(version: str) -> bool:
@@ -156,6 +165,7 @@ class SchemaOnceResponsesModel(AgentsModelBase):
         return request
 
     def send_request(self, request: dict[str, Any]) -> tuple[dict[str, Any], str | None, int, int]:
+        assert_http_url(self.endpoint, field_name="endpoint", allow_http=False)
         started = now_ms()
         body = json.dumps(request, separators=(",", ":")).encode("utf-8")
         http_request = urllib.request.Request(
@@ -377,6 +387,7 @@ def post_tool_bridge(
     attempts: int = TOOL_BRIDGE_ATTEMPTS,
     retry_sleep_seconds: float = TOOL_BRIDGE_RETRY_SLEEP_SECONDS,
 ) -> dict[str, Any]:
+    assert_http_url(tool_bridge_url, field_name="tool_bridge_url", allow_http=True)
     payload = json.dumps(
         {"run_id": run_id, "tool_name": tool_name, "arguments": arguments},
         separators=(",", ":"),
@@ -532,6 +543,7 @@ def run_live_probe(config: dict[str, Any]) -> None:
 
 
 def send_probe_request(endpoint: str, api_key: str, request_body: dict[str, Any]) -> dict[str, Any]:
+    assert_http_url(endpoint, field_name="endpoint", allow_http=False)
     body = json.dumps(request_body, separators=(",", ":")).encode("utf-8")
     request = urllib.request.Request(
         endpoint,
