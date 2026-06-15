@@ -69,7 +69,7 @@ impl Default for ObjectPrefetchOptions {
     fn default() -> Self {
         Self {
             queue_capacity: 64,
-            workers: 1,
+            workers: 2,
         }
     }
 }

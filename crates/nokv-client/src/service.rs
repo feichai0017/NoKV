@@ -1,9 +1,10 @@
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
+use nokv_control::{ControlStore, ShardId, ShardRecord};
 use nokv_meta::{
     DentryWithAttr, NamespaceAggregateGroup, NamespaceAggregateMeasure, NamespaceAggregateOp,
     NamespaceAggregateOutputMeasure, NamespaceAggregateRequest, NamespaceAggregateResult,
@@ -22,25 +23,26 @@ use nokv_meta::{
 use nokv_object::ObjectReadPlan;
 use nokv_protocol::{
     decode_envelope, decode_name_cursor, decode_xattr_name, encode_advisory_lock_kind,
-    encode_file_type, encode_name_cursor, encode_request, encode_xattr_name, MetadataRpcRequest,
-    MetadataRpcResult, WireNamespaceAggregateGroup, WireNamespaceAggregateMeasure,
-    WireNamespaceAggregateOp, WireNamespaceAggregateOutputMeasure, WireNamespaceAggregateRequest,
-    WireNamespaceAggregateResult, WireNamespaceAggregateSample, WireNamespaceAggregateSort,
-    WireNamespaceAggregateValue, WireNamespaceCard, WireNamespaceCardKind,
-    WireNamespaceFacetSummary, WireNamespaceFacetValue, WireNamespaceFieldSource,
-    WireNamespaceFieldSourceKind, WireNamespaceFieldValue, WireNamespaceFilterCapability,
-    WireNamespaceFindField, WireNamespaceFindRequest, WireNamespaceFindResult,
-    WireNamespaceGrepMatch, WireNamespaceGrepRequest, WireNamespaceGrepResult,
-    WireNamespaceInclude, WireNamespaceIndexValue, WireNamespaceListPage, WireNamespacePredicate,
-    WireNamespacePredicateOp, WireNamespacePredicateValue, WireNamespaceQueryCatalog,
-    WireNamespaceReadFormat, WireNamespaceReadItem, WireNamespaceReadOptions,
-    WireNamespaceReadPage, WireNamespaceRecordCount, WireNamespaceRecordType, WireNamespaceSchema,
-    WireNamespaceSort, WireNamespaceSortDirection, WireNamespaceSortField,
-    WireRecordCountProvenance,
+    encode_file_type, encode_name_cursor, encode_request, encode_xattr_name, request_routing_key,
+    MetadataRpcRequest, MetadataRpcResult, RoutingKey, WireNamespaceAggregateGroup,
+    WireNamespaceAggregateMeasure, WireNamespaceAggregateOp, WireNamespaceAggregateOutputMeasure,
+    WireNamespaceAggregateRequest, WireNamespaceAggregateResult, WireNamespaceAggregateSample,
+    WireNamespaceAggregateSort, WireNamespaceAggregateValue, WireNamespaceCard,
+    WireNamespaceCardKind, WireNamespaceFacetSummary, WireNamespaceFacetValue,
+    WireNamespaceFieldSource, WireNamespaceFieldSourceKind, WireNamespaceFieldValue,
+    WireNamespaceFilterCapability, WireNamespaceFindField, WireNamespaceFindRequest,
+    WireNamespaceFindResult, WireNamespaceGrepMatch, WireNamespaceGrepRequest,
+    WireNamespaceGrepResult, WireNamespaceInclude, WireNamespaceIndexValue, WireNamespaceListPage,
+    WireNamespacePredicate, WireNamespacePredicateOp, WireNamespacePredicateValue,
+    WireNamespaceQueryCatalog, WireNamespaceReadFormat, WireNamespaceReadItem,
+    WireNamespaceReadOptions, WireNamespaceReadPage, WireNamespaceRecordCount,
+    WireNamespaceRecordType, WireNamespaceSchema, WireNamespaceSort, WireNamespaceSortDirection,
+    WireNamespaceSortField, WireOpenPathReadPlanRequest, WireRecordCountProvenance,
 };
 use nokv_types::{
-    AdvisoryLock, AdvisoryLockRequest, BodyDescriptor, ChunkManifest, DentryName, InodeAttr,
-    InodeId, PathMetadata, ReadLease, SnapshotPin, SpecialNodeSpec,
+    AdvisoryLock, AdvisoryLockRequest, BodyDescriptor, ChunkManifest, DentryName, FileType,
+    InodeAttr, InodeId, MountId, PathMetadata, ReadLease, ShardMap, ShardPrefix, ShardRoute,
+    SnapshotPin, SpecialNodeSpec, DEFAULT_SHARD_INDEX,
 };
 
 use crate::ClientError;
@@ -53,14 +55,43 @@ use crate::wire::*;
 const DEFAULT_RPC_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_BATCH_RPC_REQUESTS: usize = 128;
 
+/// Bound for re-resolve+retry in fleet mode: enough attempts to ride out a
+/// single owner handoff (old owner -> control update -> new owner) without
+/// retrying forever against a permanently-missing shard.
+const FLEET_MAX_ATTEMPTS: usize = 3;
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MetadataClientOptions {
     pub address: SocketAddr,
     pub timeout: Duration,
 }
 
+/// How a [`MetadataClient`] picks the target endpoint for each RPC.
+///
+/// `SingleShard` pins every request to one address (the legacy behavior, used by
+/// `connect`/`single_shard`). `Fleet` resolves the owning shard per-request from
+/// a control-plane-derived routing map and endpoint table, refreshing both on a
+/// `NotOwner`/stale-owner handoff. All routing lives here so the ~60 typed RPC
+/// methods stay routing-agnostic — they just call [`MetadataClient::call`].
+enum RoutingMode {
+    SingleShard { address: SocketAddr },
+    Fleet(FleetRouter),
+}
+
+/// Fleet-mode routing state: the control store (source of truth), the mount this
+/// client serves, and the locally-cached `(shard_map, endpoints)` rebuilt from
+/// `control.list_shards()`. The two caches are refreshed together so a request
+/// never resolves a shard index the endpoint table can't map.
+struct FleetRouter {
+    control: Arc<dyn ControlStore>,
+    mount: MountId,
+    shard_map: RwLock<ShardMap>,
+    endpoints: RwLock<HashMap<u16, SocketAddr>>,
+}
+
 pub struct MetadataClient {
-    options: MetadataClientOptions,
+    mode: RoutingMode,
+    timeout: Duration,
     next_request_id: AtomicU64,
     connections: Mutex<HashMap<SocketAddr, Arc<PipelinedConnection>>>,
 }
@@ -99,6 +130,14 @@ pub struct PathLayoutOpen {
     pub plan: ObjectReadPlan,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PathLayoutOpenRequest {
+    pub path: String,
+    pub offset: u64,
+    pub len: usize,
+    pub expected_generation: Option<u64>,
+}
+
 /// Result of a copy-on-write subtree clone: the fork's namespace root inode and the
 /// retained snapshot pin that protects the shared base blocks.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -126,17 +165,82 @@ impl MetadataClientOptions {
     }
 }
 
+impl PathLayoutOpenRequest {
+    pub fn new(path: impl Into<String>, offset: u64, len: usize) -> Self {
+        Self {
+            path: path.into(),
+            offset,
+            len,
+            expected_generation: None,
+        }
+    }
+
+    pub fn with_expected_generation(mut self, generation: u64) -> Self {
+        self.expected_generation = Some(generation);
+        self
+    }
+}
+
 impl MetadataClient {
+    /// Build a single-shard client from explicit options. Every request targets
+    /// `options.address`.
     pub fn new(options: MetadataClientOptions) -> Self {
         Self {
-            options,
+            mode: RoutingMode::SingleShard {
+                address: options.address,
+            },
+            timeout: options.timeout,
             next_request_id: AtomicU64::new(1),
             connections: Mutex::new(HashMap::new()),
         }
     }
 
-    pub fn connect(address: SocketAddr) -> Self {
+    /// Single-shard client: every request goes to `address`. Equivalent to
+    /// [`MetadataClient::connect`]; named to contrast with [`fleet`].
+    ///
+    /// [`fleet`]: MetadataClient::fleet
+    pub fn single_shard(address: SocketAddr) -> Self {
         Self::new(MetadataClientOptions::new(address))
+    }
+
+    pub fn connect(address: SocketAddr) -> Self {
+        Self::single_shard(address)
+    }
+
+    /// Build a fleet client that routes each request to the owning shard's
+    /// endpoint, resolved from `control`. Performs the initial `list_shards`
+    /// build of the routing map + endpoint table; later handoffs are picked up by
+    /// the re-resolve+retry path in [`call`].
+    ///
+    /// [`call`]: MetadataClient::call
+    pub fn fleet(control: Arc<dyn ControlStore>, mount: MountId) -> Result<Self, ClientError> {
+        let (shard_map, endpoints) = resolve_fleet_routes(control.as_ref(), mount)?;
+        Ok(Self {
+            mode: RoutingMode::Fleet(FleetRouter {
+                control,
+                mount,
+                shard_map: RwLock::new(shard_map),
+                endpoints: RwLock::new(endpoints),
+            }),
+            timeout: DEFAULT_RPC_TIMEOUT,
+            next_request_id: AtomicU64::new(1),
+            connections: Mutex::new(HashMap::new()),
+        })
+    }
+
+    /// Resolve, without sending, the endpoint a request would target in fleet
+    /// mode against the currently cached routing map (no control refresh). This
+    /// is the same `route` + `endpoint` resolution `call` performs, exposed for
+    /// deterministic unit tests of the address router.
+    #[cfg(test)]
+    fn resolve_target_for_test(
+        &self,
+        request: &MetadataRpcRequest,
+    ) -> Result<Option<SocketAddr>, ClientError> {
+        match &self.mode {
+            RoutingMode::SingleShard { address } => Ok(Some(*address)),
+            RoutingMode::Fleet(router) => Ok(router.endpoint(router.route(request)?)),
+        }
     }
 
     pub fn bootstrap_root(&self, mode: u32, uid: u32, gid: u32) -> Result<(), ClientError> {
@@ -280,6 +384,53 @@ impl MetadataClient {
             gid,
         })? {
             MetadataRpcResult::Dentry { entry: Some(entry) } => wire_dentry(*entry),
+            other => Err(unexpected_result(other)),
+        }
+    }
+
+    /// Write the parent-shard half of a cross-shard graft: a dentry `name` under
+    /// `parent` pointing at `target_inode` (owned by another shard). Routes by
+    /// `parent` to the parent shard. See [`Self::register_graft`] for the
+    /// end-to-end orchestration that also creates the subtree dir.
+    pub fn create_graft(
+        &self,
+        parent: InodeId,
+        name: DentryName,
+        target_inode: InodeId,
+        mode: u32,
+        uid: u32,
+        gid: u32,
+    ) -> Result<DentryWithAttr, ClientError> {
+        match self.call(MetadataRpcRequest::CreateGraft {
+            parent: parent.get(),
+            name: rpc_name(&name)?,
+            target_inode: target_inode.get(),
+            mode,
+            uid,
+            gid,
+        })? {
+            MetadataRpcResult::Dentry { entry: Some(entry) } => wire_dentry(*entry),
+            other => Err(unexpected_result(other)),
+        }
+    }
+
+    /// Remove the parent-shard half of a cross-shard graft: the dentry `name`
+    /// under `parent`. Routes by `parent` to the parent shard. Idempotent — a
+    /// `None` result means the dentry was already gone. See
+    /// [`Self::unregister_graft`] for the end-to-end teardown that also reaps the
+    /// child subtree and clears the control-plane record.
+    pub fn remove_graft(
+        &self,
+        parent: InodeId,
+        name: DentryName,
+    ) -> Result<Option<DentryWithAttr>, ClientError> {
+        match self.call(MetadataRpcRequest::RemoveGraft {
+            parent: parent.get(),
+            name: rpc_name(&name)?,
+        })? {
+            MetadataRpcResult::Dentry { entry } => {
+                entry.map(|entry| wire_dentry(*entry)).transpose()
+            }
             other => Err(unexpected_result(other)),
         }
     }
@@ -494,6 +645,291 @@ impl MetadataClient {
             MetadataRpcResult::Dentry { entry: Some(entry) } => wire_dentry(*entry),
             other => Err(unexpected_result(other)),
         }
+    }
+
+    /// The fleet control store, or a clear error in single-shard mode. Graft
+    /// lifecycle (register/reconcile/unregister) is a fleet-only concern: in
+    /// single-shard mode every inode is local and there are no cross-shard grafts.
+    fn fleet_control(&self) -> Result<&Arc<dyn ControlStore>, ClientError> {
+        match &self.mode {
+            RoutingMode::Fleet(router) => Ok(&router.control),
+            RoutingMode::SingleShard { .. } => Err(ClientError::Protocol(
+                "graft lifecycle requires fleet (multi-shard) mode".to_owned(),
+            )),
+        }
+    }
+
+    /// Resolve the `ShardId` of the shard whose stable index is `shard_index`,
+    /// from the control plane's durable shard list.
+    fn shard_id_for_index(&self, shard_index: u16) -> Result<ShardId, ClientError> {
+        let control = self.fleet_control()?;
+        let records = control
+            .list_shards()
+            .map_err(|err| ClientError::Protocol(format!("control list_shards failed: {err}")))?;
+        records
+            .into_iter()
+            .find(|record| record.shard_index == shard_index)
+            .map(|record| record.shard_id)
+            .ok_or_else(|| {
+                ClientError::Protocol(format!(
+                    "no control-plane shard record for shard index {shard_index}"
+                ))
+            })
+    }
+
+    /// Resolve the parent inode for a graft `prefix_path` on the PARENT shard,
+    /// plus the basename. Root-level prefixes (e.g. `/dataset`) have the global
+    /// root inode as parent.
+    fn graft_parent_inode_and_name(
+        &self,
+        prefix_path: &str,
+    ) -> Result<(InodeId, DentryName), ClientError> {
+        let (parent_path, basename) = rpc_parent_and_name(prefix_path)?;
+        let name = DentryName::new(basename.into_bytes())
+            .map_err(|err| ClientError::InvalidName(err.to_string()))?;
+        let parent_inode = if parent_path == "/" {
+            InodeId::root()
+        } else {
+            self.lookup(&parent_path)?
+                .ok_or_else(|| {
+                    ClientError::Protocol(format!(
+                        "graft parent directory {parent_path} does not exist"
+                    ))
+                })?
+                .attr
+                .inode
+        };
+        Ok((parent_inode, name))
+    }
+
+    /// Register a cross-shard graft for `prefix_path` so multi-shard FUSE
+    /// traversal can cross from the parent shard into the subtree shard.
+    ///
+    /// `prefix_path` (e.g. `/dataset`) routes by prefix to its OWNING (subtree)
+    /// shard, where the directory is created with a real inode. The parent path
+    /// routes to the PARENT shard, whose own root has no dentry for the subtree —
+    /// so a FUSE `lookup(parent_ino, basename)` would ENOENT. This installs that
+    /// missing dentry: a graft under the parent inode pointing at the subtree
+    /// dir's (foreign) inode.
+    ///
+    /// Crash-safe registration: the child subtree dir is created, then its inode
+    /// is recorded DURABLY in the control plane (`subtree_root_inode`) as the
+    /// single atomic registration point, and only then is the (reconcilable)
+    /// parent graft dentry written. If the parent-dentry write is lost after the
+    /// control record lands, [`Self::reconcile_grafts`] re-creates it.
+    ///
+    /// Idempotent: re-running tolerates both the subtree dir and the graft dentry
+    /// already existing, returning the existing graft dentry. Returns the graft
+    /// dentry as seen from the parent shard (its `attr.inode` is the foreign
+    /// subtree inode).
+    pub fn register_graft(
+        &self,
+        prefix_path: &str,
+        mode: u32,
+        uid: u32,
+        gid: u32,
+    ) -> Result<DentryWithAttr, ClientError> {
+        // Graft lifecycle is fleet-only; fail fast (and clearly) otherwise.
+        let _ = self.fleet_control()?;
+
+        // 1. Ensure the subtree directory exists on its owning shard and learn
+        //    its inode. Tolerate a prior run having created it.
+        let child_inode = match self.mkdir(prefix_path, mode, uid, gid) {
+            Ok(entry) => entry.attr.inode,
+            Err(err) if crate::is_metadata_predicate_failed(&err) => {
+                self.lookup(prefix_path)?
+                    .ok_or_else(|| {
+                        ClientError::Protocol(format!(
+                        "graft subtree {prefix_path} reported existing but lookup found nothing"
+                    ))
+                    })?
+                    .attr
+                    .inode
+            }
+            Err(err) => return Err(err),
+        };
+
+        // 2. ATOMIC REGISTRATION POINT: record the subtree-root inode durably in
+        //    the control plane, on the owning (subtree) shard's record. After
+        //    this single write the graft is durably "registered"; the parent
+        //    graft dentry below is reconcilable from it. The subtree shard is the
+        //    one whose stable index is encoded in the child inode's high bits.
+        let subtree_shard_id = self.shard_id_for_index(child_inode.shard_index())?;
+        self.fleet_control()?
+            .set_subtree_root_inode(&subtree_shard_id, Some(child_inode.get()))
+            .map_err(|err| {
+                ClientError::Protocol(format!("control set_subtree_root_inode failed: {err}"))
+            })?;
+
+        // 3. Resolve the parent inode + basename on the PARENT shard.
+        let (parent_inode, name) = self.graft_parent_inode_and_name(prefix_path)?;
+
+        // 4. Write the graft dentry under the parent inode (routes to the parent
+        //    shard). Tolerate a prior run having installed it.
+        match self.create_graft(parent_inode, name.clone(), child_inode, mode, uid, gid) {
+            Ok(entry) => Ok(entry),
+            Err(err) if crate::is_metadata_predicate_failed(&err) => {
+                self.lookup_plus(parent_inode, name)?.ok_or_else(|| {
+                    ClientError::Protocol(format!(
+                        "graft {prefix_path} reported existing but lookup found nothing"
+                    ))
+                })
+            }
+            Err(err) => Err(err),
+        }
+    }
+
+    /// Reconcile every cross-shard graft dentry against the control plane, which
+    /// is the source of truth. Reads `list_shards` and, for each non-default
+    /// subtree shard, drives the parent graft dentry to match the shard's durable
+    /// `subtree_root_inode`:
+    ///
+    ///   * `Some(inode)` (registered): idempotently ensure the parent graft
+    ///     dentry is PRESENT — heals a `register_graft` whose parent-dentry write
+    ///     was lost after the control record landed.
+    ///   * `None` (de-registered): idempotently ensure any stale parent graft
+    ///     dentry into this shard is REMOVED — heals an `unregister_graft` that
+    ///     crashed after the child `rmdir` but before `remove_graft`, which would
+    ///     otherwise leave an orphan parent dentry pointing at a reaped subtree.
+    ///
+    /// Both directions are idempotent, so this is safe to run on a parent shard's
+    /// startup. It closes the documented crash gap; it is not a cross-shard 2PC.
+    ///
+    /// Returns the prefixes whose graft dentry was changed (created or removed).
+    pub fn reconcile_grafts(&self) -> Result<Vec<String>, ClientError> {
+        let control = self.fleet_control()?;
+        let records = control
+            .list_shards()
+            .map_err(|err| ClientError::Protocol(format!("control list_shards failed: {err}")))?;
+        let mut reconciled = Vec::new();
+        for record in records {
+            // The default/root shard is never a graft child.
+            if record.shard_index == DEFAULT_SHARD_INDEX {
+                continue;
+            }
+            let prefix_path = record.prefix.clone();
+            match record.subtree_root_inode {
+                Some(subtree_root_raw) => {
+                    let child_inode = InodeId::new(subtree_root_raw)
+                        .map_err(|err| ClientError::Protocol(err.to_string()))?;
+                    let (parent_inode, name) = self.graft_parent_inode_and_name(&prefix_path)?;
+                    // Idempotent: present already -> nothing to do; absent ->
+                    // (re)create. `create_graft` surfaces an existing dentry as
+                    // PredicateFailed. The graft dentry is a stub projection; on
+                    // traversal the real subtree-dir attrs are served from the
+                    // owning shard, so these stub mode/owner bits are cosmetic.
+                    match self.create_graft(parent_inode, name, child_inode, 0o755, 0, 0) {
+                        Ok(_) => reconciled.push(prefix_path),
+                        Err(err) if crate::is_metadata_predicate_failed(&err) => {}
+                        Err(err) => return Err(err),
+                    }
+                }
+                None => {
+                    if self.reconcile_remove_stale_graft(&record)? {
+                        reconciled.push(prefix_path);
+                    }
+                }
+            }
+        }
+        Ok(reconciled)
+    }
+
+    /// De-registration side of [`Self::reconcile_grafts`]: remove a parent graft
+    /// dentry left behind by an `unregister_graft` that crashed after the child
+    /// `rmdir` but before `remove_graft`. Conservative — it only removes a dentry
+    /// that still resolves AND is a graft into THIS subtree shard, so it never
+    /// touches a live local entry or a graft owned by another shard. Idempotent:
+    /// returns `false` (nothing changed) when there is no stale dentry to heal.
+    fn reconcile_remove_stale_graft(&self, record: &ShardRecord) -> Result<bool, ClientError> {
+        let prefix_path = record.prefix.clone();
+        // If the parent directory itself is gone there is nothing to heal.
+        let (parent_inode, name) = match self.graft_parent_inode_and_name(&prefix_path) {
+            Ok(resolved) => resolved,
+            Err(_) => return Ok(false),
+        };
+        let Some(entry) = self.lookup_plus(parent_inode, name.clone())? else {
+            return Ok(false);
+        };
+        // Only a directory dentry pointing INTO this subtree shard is a stale
+        // graft for this record. A non-graft local dentry, or a graft into a
+        // different shard, is left untouched (the latter is healed by that
+        // shard's own record).
+        if entry.dentry.child_type != FileType::Directory
+            || entry.dentry.child.shard_index() != record.shard_index
+        {
+            return Ok(false);
+        }
+        // `remove_graft` is idempotent (Ok(None) if already gone) and refuses a
+        // same-shard/non-graft dentry, so this can only drop a genuine orphan.
+        self.remove_graft(parent_inode, name)?;
+        Ok(true)
+    }
+
+    /// Tear down a cross-shard graft for `prefix_path`: remove the parent graft
+    /// dentry AND reap the (empty) child subtree, then clear the control-plane
+    /// registration. Idempotent and crash-safe.
+    ///
+    /// Ordering (control record = source of truth):
+    ///   1. Clear `subtree_root_inode` in the control plane FIRST, so a
+    ///      concurrent/subsequent `reconcile_grafts` can never re-create this
+    ///      graft. This is the atomic DE-registration point.
+    ///   2. `rmdir` the child subtree root ON THE CHILD SHARD (routed by the
+    ///      prefix path, where the contents actually live). This is the atomic
+    ///      emptiness gate: a non-empty subtree fails with `DirectoryNotEmpty`,
+    ///      in which case the control record is RESTORED and the parent dentry is
+    ///      left untouched — the graft stays fully registered (a clean no-op).
+    ///   3. Remove the parent graft dentry via the dedicated `remove_graft` path.
+    ///
+    /// Recursive subtree deletion is OUT OF SCOPE: a non-empty child subtree
+    /// returns `DirectoryNotEmpty`; the caller must empty it first.
+    pub fn unregister_graft(&self, prefix_path: &str) -> Result<(), ClientError> {
+        let control = self.fleet_control()?.clone();
+        let (parent_inode, name) = self.graft_parent_inode_and_name(prefix_path)?;
+
+        // Find the subtree shard record (by prefix) so we can clear/restore its
+        // durable graft target. If there is no such record, the graft was never
+        // registered through this path; fall through to a best-effort dentry
+        // removal so the op stays idempotent.
+        let records = control
+            .list_shards()
+            .map_err(|err| ClientError::Protocol(format!("control list_shards failed: {err}")))?;
+        let subtree_record: Option<ShardRecord> = records.into_iter().find(|record| {
+            record.shard_index != DEFAULT_SHARD_INDEX && record.prefix == prefix_path
+        });
+
+        // 1. De-register first: reconcile must never resurrect this graft.
+        if let Some(record) = &subtree_record {
+            control
+                .set_subtree_root_inode(&record.shard_id, None)
+                .map_err(|err| {
+                    ClientError::Protocol(format!("control clear subtree_root_inode failed: {err}"))
+                })?;
+        }
+
+        // 2. Reap the child subtree root on the CHILD shard (path-routed). The
+        //    emptiness check happens here, where the contents live.
+        match self.rmdir(prefix_path) {
+            Ok(_) => {}
+            // Already gone (idempotent re-run, or never created): fine.
+            Err(err) if crate::is_not_found(&err) => {}
+            // ANY other child-removal failure (non-empty, transport, fence, ...)
+            // means the subtree still exists, so the graft must stay registered:
+            // restore the durable target we cleared in step 1 and surface the
+            // error with the graft fully intact. Otherwise we would leave the
+            // control plane de-registered while the child subtree is still live,
+            // and a later reconcile could not heal it (no target to rebuild from).
+            Err(err) => {
+                if let Some(record) = &subtree_record {
+                    let _ =
+                        control.set_subtree_root_inode(&record.shard_id, record.subtree_root_inode);
+                }
+                return Err(err);
+            }
+        }
+
+        // 3. Remove the parent graft dentry (idempotent: None when already gone).
+        self.remove_graft(parent_inode, name)?;
+        Ok(())
     }
 
     pub fn mkdirs(
@@ -912,6 +1348,7 @@ impl MetadataClient {
     }
 
     pub fn rename(&self, source: &str, destination: &str) -> Result<DentryWithAttr, ClientError> {
+        self.ensure_same_shard_paths(source, destination)?;
         match self.call(MetadataRpcRequest::RenamePath {
             source: source.to_owned(),
             destination: destination.to_owned(),
@@ -944,6 +1381,7 @@ impl MetadataClient {
         source: &str,
         destination: &str,
     ) -> Result<RenameReplaceResult, ClientError> {
+        self.ensure_same_shard_paths(source, destination)?;
         match self.call(MetadataRpcRequest::RenameReplacePath {
             source: source.to_owned(),
             destination: destination.to_owned(),
@@ -987,6 +1425,7 @@ impl MetadataClient {
     }
 
     pub fn clone_subtree_path(&self, src: &str, dst: &str) -> Result<CloneOutcome, ClientError> {
+        self.ensure_same_shard_paths(src, dst)?;
         match self.call(MetadataRpcRequest::CloneSubtreePath {
             src_path: src.to_owned(),
             dst_path: dst.to_owned(),
@@ -1000,6 +1439,7 @@ impl MetadataClient {
     }
 
     pub fn diff_subtrees(&self, a: &str, b: &str) -> Result<Vec<SubtreeDelta>, ClientError> {
+        self.ensure_same_shard_paths(a, b)?;
         match self.call(MetadataRpcRequest::DiffSubtrees {
             a_path: a.to_owned(),
             b_path: b.to_owned(),
@@ -1108,6 +1548,148 @@ impl MetadataClient {
                 lease: wire_read_lease(lease)?,
                 plan: wire_body_read_plan(plan)?,
             }),
+            other => Err(unexpected_result(other)),
+        }
+    }
+
+    /// Open read plans for a batch of paths, returning plans in the SAME order as
+    /// `requests` (callers rely on positional `plans[i] ↔ requests[i]`).
+    ///
+    /// In single-shard mode this is one contiguous-chunked batch RPC. In fleet
+    /// mode the requests may target different shards, so they are grouped by their
+    /// owning shard (each batch RPC must be single-shard — the server routes a
+    /// batch by its first entry's path), one chunked batch is sent per shard, and
+    /// the returned plans are re-scattered back into the original input order.
+    ///
+    /// Generation pinning: a single file's windows can span more than one internal
+    /// chunk (`> MAX_BATCH_RPC_REQUESTS`), and each chunk is a separate RPC at its
+    /// own read version. To avoid a torn read spliced across two generations, the
+    /// generation observed for a path in its first chunk is pinned as the
+    /// `expected_generation` of that path's later chunks (when the caller did not
+    /// already pin one). A concurrent rewrite between chunks then surfaces a clean
+    /// `StaleBodyGeneration` instead of mixed bytes. (The single-file
+    /// `read_path_ranges` applies the same discipline window-to-window.)
+    pub fn open_path_read_plan_batch(
+        &self,
+        requests: &[PathLayoutOpenRequest],
+    ) -> Result<Vec<PathLayoutOpen>, ClientError> {
+        if requests.is_empty() {
+            return Ok(Vec::new());
+        }
+        // Generation pinned per path from its first opened chunk, applied to that
+        // path's later chunks so all of a file's windows resolve at one generation.
+        let mut pinned: HashMap<String, u64> = HashMap::new();
+        match &self.mode {
+            RoutingMode::SingleShard { .. } => {
+                // Every request shares the one endpoint: send contiguous chunks in
+                // input order and collect the plans as they arrive.
+                let mut opens = Vec::with_capacity(requests.len());
+                for chunk in requests.chunks(MAX_BATCH_RPC_REQUESTS) {
+                    self.send_open_path_read_plan_chunk(
+                        chunk.to_vec(),
+                        &mut pinned,
+                        &mut |open| {
+                            opens.push(open);
+                            Ok(())
+                        },
+                    )?;
+                }
+                Ok(opens)
+            }
+            RoutingMode::Fleet(router) => {
+                // Group the input indices by owning shard so each batch RPC stays
+                // single-shard, then re-scatter the per-shard results back into the
+                // caller's order.
+                let mut by_shard: HashMap<u16, Vec<usize>> = HashMap::new();
+                for (index, request) in requests.iter().enumerate() {
+                    let shard = router.route_path(&request.path);
+                    by_shard.entry(shard).or_default().push(index);
+                }
+                let mut opens: Vec<Option<PathLayoutOpen>> =
+                    (0..requests.len()).map(|_| None).collect::<Vec<_>>();
+                for indices in by_shard.values() {
+                    for chunk_indices in indices.chunks(MAX_BATCH_RPC_REQUESTS) {
+                        let chunk = chunk_indices
+                            .iter()
+                            .map(|&index| requests[index].clone())
+                            .collect::<Vec<_>>();
+                        let mut targets = chunk_indices.iter();
+                        self.send_open_path_read_plan_chunk(chunk, &mut pinned, &mut |open| {
+                            let target = *targets.next().ok_or_else(|| {
+                                ClientError::Protocol(
+                                    "fleet batch returned more plans than requested".to_owned(),
+                                )
+                            })?;
+                            opens[target] = Some(open);
+                            Ok(())
+                        })?;
+                    }
+                }
+                opens
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, open)| {
+                        open.ok_or_else(|| {
+                            ClientError::Protocol(format!(
+                                "fleet batch read plan missing for request {index}"
+                            ))
+                        })
+                    })
+                    .collect()
+            }
+        }
+    }
+
+    /// Send one single-shard chunk of layout-open requests and hand each decoded
+    /// plan to `place` in chunk order. The chunk must be non-empty and
+    /// single-shard; `self.call` routes it by its first entry's path (with
+    /// fleet-mode refresh+retry on an owner handoff).
+    ///
+    /// `pinned` carries the generation observed for each path across chunks: an
+    /// entry without a caller-supplied `expected_generation` inherits its path's
+    /// pinned generation (if any), and every returned plan records its path's
+    /// generation back into the map for the path's subsequent chunks.
+    fn send_open_path_read_plan_chunk(
+        &self,
+        mut chunk: Vec<PathLayoutOpenRequest>,
+        pinned: &mut HashMap<String, u64>,
+        place: &mut dyn FnMut(PathLayoutOpen) -> Result<(), ClientError>,
+    ) -> Result<(), ClientError> {
+        for request in &mut chunk {
+            if request.expected_generation.is_none() {
+                request.expected_generation = pinned.get(&request.path).copied();
+            }
+        }
+        let wire_requests = chunk
+            .iter()
+            .map(wire_open_path_read_plan_request)
+            .collect::<Result<Vec<_>, ClientError>>()?;
+        match self.call(MetadataRpcRequest::OpenPathReadPlanBatch {
+            requests: wire_requests,
+        })? {
+            MetadataRpcResult::OpenPathReadPlanBatch { plans } => {
+                if plans.len() != chunk.len() {
+                    return Err(ClientError::Protocol(format!(
+                        "metadata returned {} batch read plans for {} requests",
+                        plans.len(),
+                        chunk.len()
+                    )));
+                }
+                for (open, request) in plans.into_iter().zip(&chunk) {
+                    let open = PathLayoutOpen {
+                        metadata: wire_path_metadata(open.metadata)?,
+                        lease: wire_read_lease(open.lease)?,
+                        plan: wire_body_read_plan(open.plan)?,
+                    };
+                    // Pin this path's generation for its later chunks so a file's
+                    // windows never splice two generations together.
+                    pinned
+                        .entry(request.path.clone())
+                        .or_insert(open.lease.generation);
+                    place(open)?;
+                }
+                Ok(())
+            }
             other => Err(unexpected_result(other)),
         }
     }
@@ -1268,13 +1850,97 @@ impl MetadataClient {
         }
     }
 
+    /// The single chokepoint every typed RPC flows through. Resolves the target
+    /// shard endpoint, sends the request, and — in fleet mode — re-resolves the
+    /// routing map and retries on an owner handoff (`NotOwner`/stale owner).
     fn call(&self, request: MetadataRpcRequest) -> Result<MetadataRpcResult, ClientError> {
-        let address = self.options.address;
         let body =
             encode_request(&request).map_err(|err| ClientError::Protocol(err.to_string()))?;
+        match &self.mode {
+            RoutingMode::SingleShard { address } => self.call_endpoint(*address, &body),
+            RoutingMode::Fleet(router) => self.call_fleet(router, &request, &body),
+        }
+    }
+
+    /// Primary cross-shard fence for path-pair ops (rename, clone, diff). A
+    /// dual-path op routes on its *source* path, so the server resolves the
+    /// destination inside the source shard's namespace and a cross-shard
+    /// destination would surface as a misleading `NotFound`. Resolving both paths
+    /// to their owning shard with the same longest-prefix router and rejecting a
+    /// mismatch here gives the correct `EXDEV` (and skips the RPC entirely).
+    ///
+    /// SingleShard mode has exactly one shard, so this can never trip — skip it.
+    fn ensure_same_shard_paths(&self, source: &str, destination: &str) -> Result<(), ClientError> {
+        if let RoutingMode::Fleet(router) = &self.mode {
+            let source_shard = router.route_path(source);
+            let dest_shard = router.route_path(destination);
+            if source_shard != dest_shard {
+                return Err(ClientError::Metadata(nokv_meta::MetadError::CrossShard {
+                    source_shard,
+                    dest_shard,
+                }));
+            }
+        }
+        Ok(())
+    }
+
+    /// Fleet-mode dispatch: route the request to the owning shard's endpoint and
+    /// retry on a handoff. Each retry first refreshes the routing map+endpoints
+    /// from the control plane, then re-resolves, bounded by [`FLEET_MAX_ATTEMPTS`]
+    /// so a permanently-missing shard fails fast instead of looping.
+    fn call_fleet(
+        &self,
+        router: &FleetRouter,
+        request: &MetadataRpcRequest,
+        body: &[u8],
+    ) -> Result<MetadataRpcResult, ClientError> {
+        let mut last_resolve_err: Option<ClientError> = None;
+        for attempt in 0..FLEET_MAX_ATTEMPTS {
+            // On every attempt after the first, the previous one hit a handoff (or
+            // an unresolved index): refresh both caches before re-resolving.
+            if attempt > 0 {
+                router.refresh(self)?;
+            }
+            let shard_index = router.route(request)?;
+            let address = match router.endpoint(shard_index) {
+                Some(address) => address,
+                None => {
+                    // The map names a shard we have no endpoint for yet. Refresh
+                    // and retry; if it is still missing after the refresh on the
+                    // next iteration, surface a clear error.
+                    last_resolve_err = Some(ClientError::Protocol(format!(
+                        "fleet routing has no endpoint for shard index {shard_index}"
+                    )));
+                    continue;
+                }
+            };
+            match self.call_endpoint(address, body) {
+                Ok(result) => return Ok(result),
+                Err(err) if attempt + 1 < FLEET_MAX_ATTEMPTS && is_owner_handoff(&err) => {
+                    // Owner moved: loop to refresh + re-resolve against the new owner.
+                    continue;
+                }
+                Err(err) => return Err(err),
+            }
+        }
+        Err(last_resolve_err.unwrap_or_else(|| {
+            ClientError::Protocol(
+                "fleet routing exhausted retries without resolving a shard owner".to_owned(),
+            )
+        }))
+    }
+
+    /// Send one already-encoded request to a fixed endpoint over the pooled
+    /// pipelined connection, dropping the connection on a transport error so the
+    /// next call reconnects.
+    fn call_endpoint(
+        &self,
+        address: SocketAddr,
+        body: &[u8],
+    ) -> Result<MetadataRpcResult, ClientError> {
         let request_id = self.next_request_id.fetch_add(1, Ordering::Relaxed);
         let connection = self.connection(address)?;
-        let body = match connection.call(request_id, &body, self.options.timeout) {
+        let body = match connection.call(request_id, body, self.timeout) {
             Ok(body) => body,
             Err(err @ ClientError::Io(_)) => {
                 self.drop_connection(address);
@@ -1303,6 +1969,118 @@ impl MetadataClient {
             .expect("metadata rpc connections")
             .remove(&address);
     }
+}
+
+impl FleetRouter {
+    /// Resolve the target shard index for a request using the *same* routing-key
+    /// extractor the server uses, against the locally cached map. Path requests
+    /// match by longest prefix; bare-inode requests read the index out of the id.
+    fn route(&self, request: &MetadataRpcRequest) -> Result<u16, ClientError> {
+        Ok(match request_routing_key(request) {
+            RoutingKey::Path(path) => {
+                let map = self.shard_map.read().expect("fleet shard map");
+                map.route(self.mount, path)
+            }
+            RoutingKey::Inode(raw) => InodeId::new(raw)
+                .map_err(|err| ClientError::Protocol(err.to_string()))?
+                .shard_index(),
+            RoutingKey::Default => DEFAULT_SHARD_INDEX,
+        })
+    }
+
+    /// Resolve the owning shard index for an absolute `path` against the cached
+    /// routing map — the same longest-prefix match `route` applies to a path
+    /// request. Used to group a layout-open batch by shard before fan-out.
+    fn route_path(&self, path: &str) -> u16 {
+        self.shard_map
+            .read()
+            .expect("fleet shard map")
+            .route(self.mount, path)
+    }
+
+    /// The endpoint currently mapped to `shard_index`, if the cache knows it.
+    fn endpoint(&self, shard_index: u16) -> Option<SocketAddr> {
+        self.endpoints
+            .read()
+            .expect("fleet endpoints")
+            .get(&shard_index)
+            .copied()
+    }
+
+    /// Rebuild the routing map and endpoint table from `control.list_shards()`.
+    /// Both caches are swapped under their write locks so a concurrent `route`
+    /// never sees a map entry whose endpoint is absent.
+    fn refresh(&self, client: &MetadataClient) -> Result<(), ClientError> {
+        let (shard_map, endpoints) = resolve_fleet_routes(self.control.as_ref(), self.mount)?;
+        // Drop pooled connections to endpoints that are no longer current so a
+        // handed-off owner's stale socket is not reused.
+        let live: std::collections::HashSet<SocketAddr> = endpoints.values().copied().collect();
+        {
+            let mut pool = client.connections.lock().expect("metadata rpc connections");
+            pool.retain(|address, _| live.contains(address));
+        }
+        *self.shard_map.write().expect("fleet shard map") = shard_map;
+        *self.endpoints.write().expect("fleet endpoints") = endpoints;
+        Ok(())
+    }
+}
+
+/// Build the `(shard_map, endpoints)` pair for fleet routing from the control
+/// store. Each registered shard contributes a longest-prefix route (non-default
+/// shards only — the default shard owns `/` implicitly) and a
+/// `shard_index -> endpoint` entry. Shards without an endpoint (currently
+/// unowned) are skipped; a request that routes to one fails resolution and is
+/// retried after the next refresh.
+fn resolve_fleet_routes(
+    control: &dyn ControlStore,
+    mount: MountId,
+) -> Result<(ShardMap, HashMap<u16, SocketAddr>), ClientError> {
+    let records = control
+        .list_shards()
+        .map_err(|err| ClientError::Protocol(format!("control list_shards failed: {err}")))?;
+    let mut routes = Vec::new();
+    let mut endpoints = HashMap::new();
+    for record in records {
+        if let Some(endpoint) = record.endpoint.as_deref() {
+            let address = endpoint.parse::<SocketAddr>().map_err(|err| {
+                ClientError::Protocol(format!(
+                    "control shard {} has unparseable endpoint {endpoint:?}: {err}",
+                    record.shard_id
+                ))
+            })?;
+            endpoints.insert(record.shard_index, address);
+        }
+        // The default shard owns "/" implicitly; only non-default subtree shards
+        // are entered as longest-prefix routes (mirrors the server's ShardMap).
+        if record.shard_index != DEFAULT_SHARD_INDEX {
+            let prefix = ShardPrefix::parse(&format!("mount-{}:{}", mount.get(), record.prefix))
+                .map_err(|err| {
+                    ClientError::Protocol(format!(
+                        "control shard {} has invalid prefix {:?}: {err}",
+                        record.shard_id, record.prefix
+                    ))
+                })?;
+            routes.push(ShardRoute {
+                shard_index: record.shard_index,
+                prefix,
+            });
+        }
+    }
+    Ok((ShardMap::from_routes(routes), endpoints))
+}
+
+/// Whether an error means "the owner moved" — re-resolve the shard map and retry
+/// against the new owner. Covers an explicit `NotOwner`, a stale owner epoch, and
+/// a self-fenced expired lease.
+fn is_owner_handoff(err: &ClientError) -> bool {
+    matches!(
+        err,
+        ClientError::Metadata(
+            nokv_meta::MetadError::NotOwner { .. }
+                | nokv_meta::MetadError::StaleOwnerEpoch { .. }
+                | nokv_meta::MetadError::LeaseExpired { .. }
+        )
+    )
 }
 
 fn create_files_request(
@@ -1339,6 +2117,19 @@ fn create_files_request(
         mode,
         uid,
         gid,
+    })
+}
+
+fn wire_open_path_read_plan_request(
+    request: &PathLayoutOpenRequest,
+) -> Result<WireOpenPathReadPlanRequest, ClientError> {
+    let len = u64::try_from(request.len)
+        .map_err(|_| ClientError::Protocol("path read length exceeds u64".to_owned()))?;
+    Ok(WireOpenPathReadPlanRequest {
+        path: request.path.clone(),
+        offset: request.offset,
+        len,
+        expected_generation: request.expected_generation,
     })
 }
 

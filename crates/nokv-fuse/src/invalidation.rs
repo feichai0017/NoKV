@@ -37,6 +37,8 @@ pub(crate) struct FuseInvalidationWorker {
     handle: Option<JoinHandle<()>>,
 }
 
+pub(crate) type LocalInvalidation = Arc<dyn Fn(InvalidationTarget) + Send + Sync>;
+
 #[derive(Default)]
 pub(crate) struct InvalidationRegistry {
     cursors: RwLock<HashMap<u64, WatchCursor>>,
@@ -71,6 +73,7 @@ impl FuseInvalidationWorker {
         backend: Arc<B>,
         notifier: Notifier,
         registry: Arc<InvalidationRegistry>,
+        local_invalidation: Option<LocalInvalidation>,
         options: FuseInvalidationOptions,
     ) -> Self
     where
@@ -87,6 +90,7 @@ impl FuseInvalidationWorker {
                     &*backend,
                     &notifier,
                     &registry,
+                    local_invalidation.as_deref(),
                     options.limit,
                     &worker_state,
                 );
@@ -109,6 +113,7 @@ impl FuseInvalidationWorker {
                     &*backend,
                     &notifier,
                     &registry,
+                    local_invalidation.as_deref(),
                     options.limit,
                     &worker_state,
                 );
@@ -184,12 +189,13 @@ fn run_once<B>(
     backend: &B,
     notifier: &Notifier,
     registry: &InvalidationRegistry,
+    local_invalidation: Option<&(dyn Fn(InvalidationTarget) + Send + Sync)>,
     limit: usize,
     state: &Mutex<FuseInvalidationWorkerState>,
 ) where
     B: FuseBackend,
 {
-    let result = replay_registered_scopes(backend, notifier, registry, limit);
+    let result = replay_registered_scopes(backend, notifier, registry, local_invalidation, limit);
     if let Ok(mut state) = state.lock() {
         state.iterations += 1;
         match result {
@@ -210,6 +216,7 @@ fn replay_registered_scopes<B>(
     backend: &B,
     notifier: &Notifier,
     registry: &InvalidationRegistry,
+    local_invalidation: Option<&(dyn Fn(InvalidationTarget) + Send + Sync)>,
     limit: usize,
 ) -> io::Result<InvalidationCounts>
 where
@@ -224,7 +231,7 @@ where
             continue;
         };
         for record in &records {
-            let counts = invalidate_record(notifier, record)?;
+            let counts = invalidate_record(notifier, record, local_invalidation)?;
             totals.events += counts.events;
             totals.entry_invalidations += counts.entry_invalidations;
             totals.inode_invalidations += counts.inode_invalidations;
@@ -234,12 +241,19 @@ where
     Ok(totals)
 }
 
-fn invalidate_record(notifier: &Notifier, record: &WatchRecord) -> io::Result<InvalidationCounts> {
+fn invalidate_record(
+    notifier: &Notifier,
+    record: &WatchRecord,
+    local_invalidation: Option<&(dyn Fn(InvalidationTarget) + Send + Sync)>,
+) -> io::Result<InvalidationCounts> {
     let target = invalidation_target(&record.event);
     let mut counts = InvalidationCounts {
         events: 1,
         ..InvalidationCounts::default()
     };
+    if let Some(local_invalidation) = local_invalidation {
+        local_invalidation(target.clone());
+    }
     if let (Some(parent), Some(name)) = (target.parent, target.name.as_ref()) {
         notifier.inval_entry(INodeNo(parent.get()), OsStr::from_bytes(name.as_bytes()))?;
         counts.entry_invalidations += 1;

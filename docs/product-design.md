@@ -133,13 +133,15 @@ nokv-gc-controller
   staged object cleanup, checkpoint retention, and orphan body GC
 
 nokv-python
-  Python SDK and fsspec binding for training frameworks
+  Python SDK and fsspec binding for training frameworks over native range
+  batches and reusable dataloader epoch readers
 ```
 
 The current repository implements a long-running `nokv-server`, framed
-metadata RPC for the Rust SDK and CLI, and a FUSE frontend that uses the same
-metadata client/server boundary. CSI, Python/fsspec, node-local cache, and
-production multi-node metadata operations remain product direction.
+metadata RPC for the Rust SDK and CLI, an initial Python/fsspec binding for
+native batch range reads, and a FUSE frontend that uses the same metadata
+client/server boundary. CSI, node-local cache, and production multi-node
+metadata operations remain product direction.
 
 ## Metadata Distribution
 
@@ -264,7 +266,12 @@ v0 local:
   read-only FUSE snapshot mounts
 
 v1 usable filesystem:
-  native zero-copy read client over the layout-open boundary
+  native cache-aware staged direct-write read client over the layout-open
+  boundary, with a Rust-owned staging-memory allocator boundary, explicit
+  system/page-locked host memory reporting, and read-only export guards for
+  Python dataloaders
+  native prepared range-batch/window plans, reusable batch readers, and epoch
+  readers for repeated training reads
   JuiceFS-style chunk/slice data path with bounded buffers and background flush
   fuller FUSE semantics beyond buffered write publish
   FUSE over the metadata server

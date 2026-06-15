@@ -15,6 +15,15 @@ __pycache__/
 .venv/
 **/.venv/
 
+# Python native extension + packaging build artifacts (built by maturin)
+*.so
+*.dylib
+*.pyd
+*.egg-info/
+build/
+dist/
+wheels/
+
 # Docs
 docs/node_modules/
 docs/.vitepress/dist/

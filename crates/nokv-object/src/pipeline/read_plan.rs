@@ -20,7 +20,9 @@ pub struct ObjectReadPlanKey {
 pub struct ObjectReadPlanCache {
     capacity: usize,
     plans: HashMap<ObjectReadPlanKey, ObjectReadPlan>,
-    order: VecDeque<ObjectReadPlanKey>,
+    recency: HashMap<ObjectReadPlanKey, u64>,
+    order: VecDeque<(ObjectReadPlanKey, u64)>,
+    next_touch: u64,
 }
 
 impl ObjectReadPlan {
@@ -45,7 +47,9 @@ impl ObjectReadPlanCache {
         Self {
             capacity: capacity.max(1),
             plans: HashMap::new(),
+            recency: HashMap::new(),
             order: VecDeque::new(),
+            next_touch: 0,
         }
     }
 
@@ -55,7 +59,7 @@ impl ObjectReadPlanCache {
             return Some(plan);
         }
         let mut selected = None;
-        for cached_key in self.order.iter().rev().copied() {
+        for (cached_key, _) in self.order.iter().rev().copied() {
             let Some(cached_plan) = self.plans.get(&cached_key) else {
                 continue;
             };
@@ -66,18 +70,36 @@ impl ObjectReadPlanCache {
         }
         let (cached_key, plan) = selected?;
         self.touch(cached_key);
+        self.plans.insert(*key, plan.clone());
+        self.touch(*key);
+        while self.plans.len() > self.capacity {
+            self.evict_oldest();
+        }
+        Some(plan)
+    }
+
+    pub fn get_exact(&mut self, key: &ObjectReadPlanKey) -> Option<ObjectReadPlan> {
+        let plan = self.plans.get(key).cloned()?;
+        self.touch(*key);
+        Some(plan)
+    }
+
+    pub fn get_slice_from(
+        &mut self,
+        cached_key: ObjectReadPlanKey,
+        request_key: ObjectReadPlanKey,
+    ) -> Option<ObjectReadPlan> {
+        let cached_plan = self.plans.get(&cached_key)?;
+        let plan = slice_cached_read_plan(cached_key, cached_plan, request_key)?;
+        self.touch(cached_key);
         Some(plan)
     }
 
     pub fn insert(&mut self, key: ObjectReadPlanKey, plan: ObjectReadPlan) {
-        self.order.retain(|existing| existing != &key);
-        self.order.push_back(key);
         self.plans.insert(key, plan);
+        self.touch(key);
         while self.plans.len() > self.capacity {
-            let Some(oldest) = self.order.pop_front() else {
-                break;
-            };
-            self.plans.remove(&oldest);
+            self.evict_oldest();
         }
     }
 
@@ -90,8 +112,46 @@ impl ObjectReadPlanCache {
     }
 
     fn touch(&mut self, key: ObjectReadPlanKey) {
-        self.order.retain(|existing| existing != &key);
-        self.order.push_back(key);
+        if self.next_touch == u64::MAX {
+            self.rebuild_order();
+        }
+        self.next_touch = self.next_touch.saturating_add(1);
+        let touch = self.next_touch;
+        self.recency.insert(key, touch);
+        self.order.push_back((key, touch));
+        if self.order.len() > self.capacity.saturating_mul(8).max(64) {
+            self.compact_order();
+        }
+    }
+
+    fn evict_oldest(&mut self) {
+        while let Some((oldest, touch)) = self.order.pop_front() {
+            if self.recency.get(&oldest) != Some(&touch) {
+                continue;
+            }
+            self.recency.remove(&oldest);
+            self.plans.remove(&oldest);
+            return;
+        }
+    }
+
+    fn compact_order(&mut self) {
+        let recency = &self.recency;
+        self.order
+            .retain(|(key, touch)| recency.get(key) == Some(touch));
+    }
+
+    fn rebuild_order(&mut self) {
+        self.recency.clear();
+        self.order.clear();
+        self.next_touch = 0;
+        let keys = self.plans.keys().copied().collect::<Vec<_>>();
+        for key in keys {
+            self.next_touch = self.next_touch.saturating_add(1);
+            let touch = self.next_touch;
+            self.recency.insert(key, touch);
+            self.order.push_back((key, touch));
+        }
     }
 }
 

@@ -22,6 +22,24 @@ where
     )
 }
 
+fn read_object_blocks_into<C>(
+    store: &impl ObjectStore,
+    cache: Option<&C>,
+    output: &mut [u8],
+    blocks: &[ObjectReadBlock],
+) -> Result<BlockReadIntoOutcome, ObjectError>
+where
+    C: BlockCache + ?Sized,
+{
+    read_object_blocks_into_with_cache_options(
+        store,
+        cache,
+        output,
+        blocks,
+        BlockReadOptions::default(),
+    )
+}
+
 fn read_file_blocks<S, C>(
     reader: &mut FileReadPipeline,
     store: &S,
@@ -836,6 +854,78 @@ fn read_object_blocks_fetches_pending_ranges_in_one_batch() {
 }
 
 #[test]
+fn read_object_blocks_into_writes_caller_buffer() {
+    let store = BatchCountingStore::new();
+    store
+        .put(&ObjectKey::new("blocks/a").unwrap(), b"abcdefgh".to_vec())
+        .unwrap();
+    store
+        .put(&ObjectKey::new("blocks/b").unwrap(), b"uvwxyz".to_vec())
+        .unwrap();
+    let blocks = vec![
+        ObjectReadBlock {
+            object_key: "blocks/a".to_owned(),
+            digest_uri: "sha256:test".to_owned(),
+            object_offset: 1,
+            object_len: 8,
+            len: 3,
+            output_offset: 0,
+        },
+        ObjectReadBlock {
+            object_key: "blocks/b".to_owned(),
+            digest_uri: "sha256:test".to_owned(),
+            object_offset: 2,
+            object_len: 6,
+            len: 2,
+            output_offset: 3,
+        },
+    ];
+    let mut output = vec![0xff; 5];
+
+    let read = read_object_blocks_into(
+        &store,
+        Option::<&MemoryBlockCache>::None,
+        &mut output,
+        &blocks,
+    )
+    .unwrap();
+
+    assert_eq!(output, b"bcdwx");
+    assert_eq!(read.object_gets, 2);
+    assert_eq!(read.object_get_bytes, 5);
+    assert_eq!(read.cache_hits, 0);
+    assert_eq!(store.batch_sizes(), vec![2]);
+}
+
+#[test]
+fn read_object_blocks_into_zero_fills_sparse_output_holes() {
+    let store = MemoryObjectStore::new();
+    let key = ObjectKey::new("blocks/a").unwrap();
+    store.put(&key, b"abcdefgh".to_vec()).unwrap();
+    let blocks = vec![ObjectReadBlock {
+        object_key: key.as_str().to_owned(),
+        digest_uri: "sha256:test".to_owned(),
+        object_offset: 1,
+        object_len: 8,
+        len: 3,
+        output_offset: 2,
+    }];
+    let mut output = vec![0xff; 6];
+
+    let read = read_object_blocks_into(
+        &store,
+        Option::<&MemoryBlockCache>::None,
+        &mut output,
+        &blocks,
+    )
+    .unwrap();
+
+    assert_eq!(output, [0, 0, b'b', b'c', b'd', 0]);
+    assert_eq!(read.object_gets, 1);
+    assert_eq!(read.object_get_bytes, 3);
+}
+
+#[test]
 fn read_object_blocks_propagates_batch_get_errors() {
     let store = BatchFailingStore::new();
     store
@@ -1379,7 +1469,7 @@ fn block_cache_reuses_object_reads() {
     let store = MemoryObjectStore::new();
     let key = ObjectKey::new("blocks/1/2/3/0/0").unwrap();
     store.put(&key, b"abcd".to_vec()).unwrap();
-    let cache = CountingBlockCache::default();
+    let cache = MemoryBlockCache::default();
     let blocks = vec![ObjectReadBlock {
         object_key: key.as_str().to_owned(),
         digest_uri: "sha256:test".to_owned(),
@@ -1398,6 +1488,35 @@ fn block_cache_reuses_object_reads() {
     assert_eq!(second.object_get_bytes, 0);
     assert_eq!(second.cache_hits, 1);
     assert_eq!(second.cache_hit_bytes, 4);
+}
+
+#[test]
+fn block_cache_hit_still_validates_object_key() {
+    let store = MemoryObjectStore::new();
+    let cache = MemoryBlockCache::default();
+    cache
+        .put(
+            crate::cache::block_range_cache_key("../bad", 0, 4),
+            b"abcd".to_vec(),
+        )
+        .unwrap();
+
+    let err = read_object_blocks(
+        &store,
+        Some(&cache),
+        4,
+        &[ObjectReadBlock {
+            object_key: "../bad".to_owned(),
+            digest_uri: "sha256:test".to_owned(),
+            object_offset: 0,
+            object_len: 4,
+            len: 4,
+            output_offset: 0,
+        }],
+    )
+    .unwrap_err();
+
+    assert_eq!(err, ObjectError::ParentTraversal);
 }
 
 #[test]
@@ -1444,6 +1563,63 @@ fn block_cache_reuses_covering_ranges() {
     assert_eq!(second.object_get_bytes, 0);
     assert_eq!(second.cache_hits, 1);
     assert_eq!(second.cache_hit_bytes, 4);
+
+    let stats = cache.stats().unwrap();
+    assert_eq!(stats.items, 1);
+    assert_eq!(stats.puts, 1);
+
+    let third = read_object_blocks(
+        &store,
+        Some(&cache),
+        4,
+        &[ObjectReadBlock {
+            object_key: key.as_str().to_owned(),
+            digest_uri: "sha256:test".to_owned(),
+            object_offset: 4,
+            object_len: 16,
+            len: 4,
+            output_offset: 0,
+        }],
+    )
+    .unwrap();
+    assert_eq!(third.bytes, b"efgh");
+    assert_eq!(third.object_gets, 0);
+    assert_eq!(third.cache_hits, 1);
+    assert_eq!(cache.stats().unwrap().puts, 1);
+}
+
+#[test]
+fn memory_block_cache_range_index_drops_evicted_entries() {
+    let cache = MemoryBlockCache::new(MemoryBlockCacheOptions {
+        max_bytes: 16,
+        max_items: 1,
+        ttl: None,
+    });
+    let first_key = "blocks/1/2/3/0/0";
+    let second_key = "blocks/1/2/3/0/1";
+    cache
+        .put(
+            crate::cache::block_range_cache_key(first_key, 0, 12),
+            b"abcdefghijkl".to_vec(),
+        )
+        .unwrap();
+    assert_eq!(
+        cache.get_block_range(first_key, 4, 4).unwrap(),
+        Some(b"efgh".to_vec())
+    );
+    cache
+        .put(
+            crate::cache::block_range_cache_key(second_key, 0, 4),
+            b"wxyz".to_vec(),
+        )
+        .unwrap();
+
+    assert_eq!(cache.get_block_range(first_key, 0, 12).unwrap(), None);
+    assert_eq!(cache.get_block_range(first_key, 4, 4).unwrap(), None);
+    assert_eq!(
+        cache.get_block_range(second_key, 1, 2).unwrap(),
+        Some(b"xy".to_vec())
+    );
 }
 
 #[test]
@@ -1676,6 +1852,60 @@ fn disk_block_cache_reuses_covering_ranges() {
     assert_eq!(second.object_gets, 0);
     assert_eq!(second.cache_hits, 1);
     assert_eq!(second.cache_hit_bytes, 4);
+}
+
+#[test]
+fn disk_block_cache_range_index_drops_evicted_entries() {
+    let dir = tempfile::tempdir().unwrap();
+    let cache = DiskBlockCache::new(DiskBlockCacheOptions {
+        root: dir.path().join("blocks"),
+        max_bytes: 1024,
+        max_items: 1,
+        ttl: None,
+    })
+    .unwrap();
+    let first_key = "blocks/1/2/3/0/0";
+    let second_key = "blocks/1/2/3/0/1";
+    cache
+        .put(
+            crate::cache::block_range_cache_key(first_key, 0, 12),
+            b"abcdefghijkl".to_vec(),
+        )
+        .unwrap();
+    cache
+        .put(
+            crate::cache::block_range_cache_key(second_key, 0, 4),
+            b"wxyz".to_vec(),
+        )
+        .unwrap();
+
+    assert_eq!(cache.get_block_range(first_key, 4, 4).unwrap(), None);
+    assert_eq!(
+        cache.get_block_range(second_key, 1, 2).unwrap(),
+        Some(b"xy".to_vec())
+    );
+}
+
+#[test]
+fn disk_block_cache_replaces_same_key_without_deleting_new_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let cache = DiskBlockCache::new(DiskBlockCacheOptions {
+        root: dir.path().join("blocks"),
+        max_bytes: 1024,
+        max_items: 8,
+        ttl: None,
+    })
+    .unwrap();
+    let object_key = "blocks/1/2/3/0/0";
+    let cache_key = crate::cache::block_range_cache_key(object_key, 0, 4);
+    cache.put(cache_key.clone(), b"abcd".to_vec()).unwrap();
+    cache.put(cache_key.clone(), b"wxyz".to_vec()).unwrap();
+
+    assert_eq!(cache.get(&cache_key).unwrap(), Some(b"wxyz".to_vec()));
+    assert_eq!(
+        cache.get_block_range(object_key, 1, 2).unwrap(),
+        Some(b"xy".to_vec())
+    );
 }
 
 #[test]
@@ -2472,7 +2702,7 @@ fn file_read_pipeline_reports_sequential_readahead_hints() {
     )
     .unwrap();
     assert_eq!(first.blocks.bytes, b"abcd");
-    assert_eq!(first.readahead, Some(ReadAheadHint { offset: 4, len: 4 }));
+    assert_eq!(first.readahead, None);
 
     let second = read_file_blocks(
         &mut reader,
@@ -2496,12 +2726,12 @@ fn file_read_pipeline_reports_sequential_readahead_hints() {
     let stats = reader.stats();
     assert_eq!(stats.reads, 2);
     assert_eq!(stats.sequential_reads, 2);
-    assert_eq!(stats.readahead_hints, 2);
-    assert_eq!(stats.readahead_hint_bytes, 8);
+    assert_eq!(stats.readahead_hints, 1);
+    assert_eq!(stats.readahead_hint_bytes, 4);
 }
 
 #[test]
-fn file_read_pipeline_uses_configured_readahead_window() {
+fn file_read_pipeline_uses_configured_readahead_window_after_continued_read() {
     let store = MemoryObjectStore::new();
     let key = ObjectKey::new("blocks/1/2/3/0/0").unwrap();
     store.put(&key, b"abcdefghijklmnop".to_vec()).unwrap();
@@ -2527,10 +2757,30 @@ fn file_read_pipeline_uses_configured_readahead_window() {
     )
     .unwrap();
     assert_eq!(read.blocks.bytes, b"abcd");
-    assert_eq!(read.readahead, Some(ReadAheadHint { offset: 4, len: 12 }));
+    assert_eq!(read.readahead, None);
+
+    let read = read_file_blocks(
+        &mut reader,
+        &store,
+        Option::<&MemoryBlockCache>::None,
+        16,
+        4,
+        4,
+        &[ObjectReadBlock {
+            object_key: key.as_str().to_owned(),
+            digest_uri: "sha256:test".to_owned(),
+            object_offset: 4,
+            object_len: 16,
+            len: 4,
+            output_offset: 0,
+        }],
+    )
+    .unwrap();
+    assert_eq!(read.blocks.bytes, b"efgh");
+    assert_eq!(read.readahead, Some(ReadAheadHint { offset: 8, len: 8 }));
     let stats = reader.stats();
     assert_eq!(stats.readahead_hints, 1);
-    assert_eq!(stats.readahead_hint_bytes, 12);
+    assert_eq!(stats.readahead_hint_bytes, 8);
 }
 
 #[test]
@@ -2559,7 +2809,7 @@ fn file_read_pipeline_throttles_readahead_within_active_window() {
         }],
     )
     .unwrap();
-    assert_eq!(first.readahead, Some(ReadAheadHint { offset: 4, len: 12 }));
+    assert_eq!(first.readahead, None);
 
     let second = read_file_blocks(
         &mut reader,
@@ -2579,12 +2829,32 @@ fn file_read_pipeline_throttles_readahead_within_active_window() {
     )
     .unwrap();
     assert_eq!(second.blocks.bytes, b"efgh");
-    assert_eq!(second.readahead, None);
+    assert_eq!(second.readahead, Some(ReadAheadHint { offset: 8, len: 8 }));
+
+    let third = read_file_blocks(
+        &mut reader,
+        &store,
+        Option::<&MemoryBlockCache>::None,
+        16,
+        8,
+        4,
+        &[ObjectReadBlock {
+            object_key: key.as_str().to_owned(),
+            digest_uri: "sha256:test".to_owned(),
+            object_offset: 8,
+            object_len: 16,
+            len: 4,
+            output_offset: 0,
+        }],
+    )
+    .unwrap();
+    assert_eq!(third.blocks.bytes, b"ijkl");
+    assert_eq!(third.readahead, None);
 
     let stats = reader.stats();
-    assert_eq!(stats.sequential_reads, 2);
+    assert_eq!(stats.sequential_reads, 3);
     assert_eq!(stats.readahead_hints, 1);
-    assert_eq!(stats.readahead_hint_bytes, 12);
+    assert_eq!(stats.readahead_hint_bytes, 8);
 }
 
 #[test]
@@ -2889,7 +3159,7 @@ fn file_read_pipeline_keeps_small_inner_block_sequential_read_exact() {
 }
 
 #[test]
-fn file_read_pipeline_returns_cache_warmup_for_small_inner_block_read() {
+fn file_read_pipeline_returns_cache_warmup_for_continued_small_inner_block_read() {
     let store = MemoryObjectStore::new();
     let key = ObjectKey::new("blocks/1/2/3/0/0").unwrap();
     let bytes = (0..DEFAULT_BLOCK_SIZE)
@@ -2902,7 +3172,27 @@ fn file_read_pipeline_returns_cache_warmup_for_small_inner_block_read() {
     });
     let quarter_block = DEFAULT_BLOCK_SIZE / 4;
 
-    let read = read_file_blocks(
+    let first = read_file_blocks(
+        &mut reader,
+        &store,
+        Some(&cache),
+        DEFAULT_BLOCK_SIZE as u64,
+        0,
+        quarter_block,
+        &[ObjectReadBlock {
+            object_key: key.as_str().to_owned(),
+            digest_uri: "sha256:test".to_owned(),
+            object_offset: 0,
+            object_len: DEFAULT_BLOCK_SIZE as u64,
+            len: quarter_block,
+            output_offset: 0,
+        }],
+    )
+    .unwrap();
+    assert_eq!(first.blocks.bytes, bytes[..quarter_block]);
+    assert_eq!(first.cache_warmup, None);
+
+    let second = read_file_blocks(
         &mut reader,
         &store,
         Some(&cache),
@@ -2920,22 +3210,60 @@ fn file_read_pipeline_returns_cache_warmup_for_small_inner_block_read() {
     )
     .unwrap();
 
-    assert_eq!(read.blocks.bytes, bytes[quarter_block..quarter_block * 2]);
-    assert_eq!(read.blocks.object_gets, 1);
-    assert_eq!(read.blocks.object_get_bytes, quarter_block as u64);
-    let warmup = read.cache_warmup.expect("expected full-block warmup");
-    assert_eq!(warmup.output_len, DEFAULT_BLOCK_SIZE);
+    assert_eq!(second.blocks.bytes, bytes[quarter_block..quarter_block * 2]);
+    assert_eq!(second.blocks.object_gets, 1);
+    assert_eq!(second.blocks.object_get_bytes, quarter_block as u64);
+    let warmup = second.cache_warmup.expect("expected segment warmup");
+    assert_eq!(warmup.output_len, quarter_block);
     assert_eq!(
         warmup.blocks,
         vec![ObjectReadBlock {
             object_key: key.as_str().to_owned(),
             digest_uri: "sha256:test".to_owned(),
-            object_offset: 0,
+            object_offset: quarter_block as u64,
             object_len: DEFAULT_BLOCK_SIZE as u64,
-            len: DEFAULT_BLOCK_SIZE,
+            len: quarter_block,
             output_offset: 0,
         }]
     );
+}
+
+#[test]
+fn file_read_pipeline_skips_cache_warmup_for_initial_small_block_start_read() {
+    let store = MemoryObjectStore::new();
+    let key = ObjectKey::new("blocks/1/2/3/0/0").unwrap();
+    let bytes = (0..DEFAULT_BLOCK_SIZE)
+        .map(|index| (index % 251) as u8)
+        .collect::<Vec<_>>();
+    store.put(&key, bytes.clone()).unwrap();
+    let cache = MemoryBlockCache::default();
+    let mut reader = FileReadPipeline::new(FileReadPipelineOptions {
+        max_readahead_bytes: DEFAULT_BLOCK_SIZE,
+    });
+    let quarter_block = DEFAULT_BLOCK_SIZE / 4;
+
+    let read = read_file_blocks(
+        &mut reader,
+        &store,
+        Some(&cache),
+        DEFAULT_BLOCK_SIZE as u64,
+        0,
+        quarter_block,
+        &[ObjectReadBlock {
+            object_key: key.as_str().to_owned(),
+            digest_uri: "sha256:test".to_owned(),
+            object_offset: 0,
+            object_len: DEFAULT_BLOCK_SIZE as u64,
+            len: quarter_block,
+            output_offset: 0,
+        }],
+    )
+    .unwrap();
+
+    assert_eq!(read.blocks.bytes, bytes[..quarter_block]);
+    assert_eq!(read.blocks.object_gets, 1);
+    assert_eq!(read.blocks.object_get_bytes, quarter_block as u64);
+    assert_eq!(read.cache_warmup, None);
 }
 
 #[test]
@@ -2959,28 +3287,49 @@ fn file_read_pipeline_cache_warmup_populates_block_cache() {
         max_readahead_bytes: DEFAULT_BLOCK_SIZE,
     });
     let quarter_block = DEFAULT_BLOCK_SIZE / 4;
+    let sample_len = 1024;
 
-    let first = read_file_blocks(
+    let stream_start = read_file_blocks(
         &mut reader,
         &store,
         Some(&cache),
         DEFAULT_BLOCK_SIZE as u64,
-        quarter_block as u64,
+        0,
         quarter_block,
         &[ObjectReadBlock {
             object_key: key.as_str().to_owned(),
             digest_uri: "sha256:test".to_owned(),
-            object_offset: quarter_block as u64,
+            object_offset: 0,
             object_len: DEFAULT_BLOCK_SIZE as u64,
             len: quarter_block,
             output_offset: 0,
         }],
     )
     .unwrap();
-    let warmup = first.cache_warmup.expect("expected full-block warmup");
+    assert_eq!(stream_start.cache_warmup, None);
+
+    let continued = read_file_blocks(
+        &mut reader,
+        &store,
+        Some(&cache),
+        DEFAULT_BLOCK_SIZE as u64,
+        quarter_block as u64,
+        sample_len,
+        &[ObjectReadBlock {
+            object_key: key.as_str().to_owned(),
+            digest_uri: "sha256:test".to_owned(),
+            object_offset: quarter_block as u64,
+            object_len: DEFAULT_BLOCK_SIZE as u64,
+            len: sample_len,
+            output_offset: 0,
+        }],
+    )
+    .unwrap();
+    let warmup = continued.cache_warmup.expect("expected segment warmup");
     assert!(prefetcher.submit(warmup).unwrap());
     wait_until(|| prefetcher.stats().unwrap().completed == 1);
 
+    let cached_offset = quarter_block + quarter_block - sample_len;
     let second = read_object_blocks(
         &store,
         Some(&cache),
@@ -2988,7 +3337,7 @@ fn file_read_pipeline_cache_warmup_populates_block_cache() {
         &[ObjectReadBlock {
             object_key: key.as_str().to_owned(),
             digest_uri: "sha256:test".to_owned(),
-            object_offset: (DEFAULT_BLOCK_SIZE - 1024) as u64,
+            object_offset: cached_offset as u64,
             object_len: DEFAULT_BLOCK_SIZE as u64,
             len: 1024,
             output_offset: 0,
@@ -2997,7 +3346,7 @@ fn file_read_pipeline_cache_warmup_populates_block_cache() {
     .unwrap();
     assert_eq!(
         second.bytes,
-        bytes[DEFAULT_BLOCK_SIZE - 1024..DEFAULT_BLOCK_SIZE]
+        bytes[cached_offset..cached_offset + sample_len]
     );
     assert_eq!(second.object_gets, 0);
     assert_eq!(second.cache_hits, 1);
@@ -3130,6 +3479,155 @@ fn file_read_pipeline_keeps_initial_random_read_exact() {
     assert_eq!(read.blocks.object_get_bytes, 1024);
     assert_eq!(read.blocks.cache_hits, 0);
     assert_eq!(read.readahead, None);
+    assert_eq!(read.cache_warmup, None);
+}
+
+#[test]
+fn file_read_pipeline_warms_cache_for_proven_sparse_forward_stream() {
+    let store = MemoryObjectStore::new();
+    let key = ObjectKey::new("blocks/1/2/3/0/0").unwrap();
+    let bytes = (0..DEFAULT_BLOCK_SIZE)
+        .map(|index| (index % 251) as u8)
+        .collect::<Vec<_>>();
+    store.put(&key, bytes.clone()).unwrap();
+    let cache = MemoryBlockCache::default();
+    let mut reader = FileReadPipeline::new(FileReadPipelineOptions {
+        max_readahead_bytes: DEFAULT_BLOCK_SIZE,
+    });
+    let sample_len = 16 * 1024;
+    let stride = sample_len * 2;
+
+    let first = read_file_blocks(
+        &mut reader,
+        &store,
+        Some(&cache),
+        DEFAULT_BLOCK_SIZE as u64,
+        0,
+        sample_len,
+        &[ObjectReadBlock {
+            object_key: key.as_str().to_owned(),
+            digest_uri: "sha256:test".to_owned(),
+            object_offset: 0,
+            object_len: DEFAULT_BLOCK_SIZE as u64,
+            len: sample_len,
+            output_offset: 0,
+        }],
+    )
+    .unwrap();
+    assert_eq!(first.blocks.bytes, bytes[..sample_len]);
+    assert_eq!(first.cache_warmup, None);
+
+    let second = read_file_blocks(
+        &mut reader,
+        &store,
+        Some(&cache),
+        DEFAULT_BLOCK_SIZE as u64,
+        stride as u64,
+        sample_len,
+        &[ObjectReadBlock {
+            object_key: key.as_str().to_owned(),
+            digest_uri: "sha256:test".to_owned(),
+            object_offset: stride as u64,
+            object_len: DEFAULT_BLOCK_SIZE as u64,
+            len: sample_len,
+            output_offset: 0,
+        }],
+    )
+    .unwrap();
+    assert_eq!(second.blocks.bytes, bytes[stride..stride + sample_len]);
+    assert_eq!(second.cache_warmup, None);
+
+    let third_offset = stride * 2;
+    let third = read_file_blocks(
+        &mut reader,
+        &store,
+        Some(&cache),
+        DEFAULT_BLOCK_SIZE as u64,
+        third_offset as u64,
+        sample_len,
+        &[ObjectReadBlock {
+            object_key: key.as_str().to_owned(),
+            digest_uri: "sha256:test".to_owned(),
+            object_offset: third_offset as u64,
+            object_len: DEFAULT_BLOCK_SIZE as u64,
+            len: sample_len,
+            output_offset: 0,
+        }],
+    )
+    .unwrap();
+    assert_eq!(
+        third.blocks.bytes,
+        bytes[third_offset..third_offset + sample_len]
+    );
+    let warmup = third.cache_warmup.expect("expected sparse segment warmup");
+    assert_eq!(
+        warmup,
+        ObjectPrefetchRequest::exact(
+            DEFAULT_BLOCK_SIZE / 4,
+            vec![ObjectReadBlock {
+                object_key: key.as_str().to_owned(),
+                digest_uri: "sha256:test".to_owned(),
+                object_offset: 0,
+                object_len: DEFAULT_BLOCK_SIZE as u64,
+                len: DEFAULT_BLOCK_SIZE / 4,
+                output_offset: 0,
+            }]
+        )
+    );
+}
+
+#[test]
+fn file_read_pipeline_skips_sparse_warmup_after_large_forward_jump() {
+    let store = MemoryObjectStore::new();
+    let key = ObjectKey::new("blocks/1/2/3/0/0").unwrap();
+    let bytes = (0..DEFAULT_BLOCK_SIZE)
+        .map(|index| (index % 251) as u8)
+        .collect::<Vec<_>>();
+    store.put(&key, bytes.clone()).unwrap();
+    let cache = MemoryBlockCache::default();
+    let mut reader = FileReadPipeline::new(FileReadPipelineOptions {
+        max_readahead_bytes: DEFAULT_BLOCK_SIZE,
+    });
+    let sample_len = 16 * 1024;
+
+    let _ = read_file_blocks(
+        &mut reader,
+        &store,
+        Some(&cache),
+        DEFAULT_BLOCK_SIZE as u64,
+        0,
+        sample_len,
+        &[ObjectReadBlock {
+            object_key: key.as_str().to_owned(),
+            digest_uri: "sha256:test".to_owned(),
+            object_offset: 0,
+            object_len: DEFAULT_BLOCK_SIZE as u64,
+            len: sample_len,
+            output_offset: 0,
+        }],
+    )
+    .unwrap();
+
+    let offset = DEFAULT_BLOCK_SIZE / 2;
+    let read = read_file_blocks(
+        &mut reader,
+        &store,
+        Some(&cache),
+        DEFAULT_BLOCK_SIZE as u64,
+        offset as u64,
+        sample_len,
+        &[ObjectReadBlock {
+            object_key: key.as_str().to_owned(),
+            digest_uri: "sha256:test".to_owned(),
+            object_offset: offset as u64,
+            object_len: DEFAULT_BLOCK_SIZE as u64,
+            len: sample_len,
+            output_offset: 0,
+        }],
+    )
+    .unwrap();
+    assert_eq!(read.blocks.bytes, bytes[offset..offset + sample_len]);
+    assert_eq!(read.cache_warmup, None);
 }
 
 #[test]
@@ -3171,6 +3669,7 @@ fn file_read_pipeline_caches_actual_bytes_for_short_final_block() {
     assert_eq!(first.blocks.object_gets, 1);
     assert_eq!(first.blocks.object_get_bytes, 3);
     assert_eq!(first.blocks.cache_hits, 0);
+    assert_eq!(first.cache_warmup, None);
 
     let second = read_file_blocks(
         &mut reader,
@@ -3283,8 +3782,40 @@ fn object_read_plan_cache_evicts_oldest_unused_plan() {
 }
 
 #[test]
+fn object_read_plan_cache_repeated_hits_keep_lru_order() {
+    let mut cache = ObjectReadPlanCache::new(2);
+    let a = ObjectReadPlanKey::new(1, 7, 0, 4);
+    let b = ObjectReadPlanKey::new(1, 7, 4, 4);
+    let c = ObjectReadPlanKey::new(1, 7, 8, 4);
+    let plan = ObjectReadPlan::new(
+        4,
+        vec![ObjectReadBlock {
+            object_key: "blocks/demo".to_owned(),
+            digest_uri: "sha256:test".to_owned(),
+            object_offset: 0,
+            object_len: 4,
+            len: 4,
+            output_offset: 0,
+        }],
+    );
+
+    cache.insert(a, plan.clone());
+    cache.insert(b, plan.clone());
+    for _ in 0..100 {
+        assert!(cache.get(&a).is_some());
+    }
+    cache.insert(c, plan);
+
+    assert!(cache.get(&a).is_some());
+    assert!(cache.get(&b).is_none());
+    assert!(cache.get(&c).is_some());
+    assert_eq!(cache.len(), 2);
+}
+
+#[test]
 fn object_read_plan_cache_reuses_covering_plan() {
     let mut cache = ObjectReadPlanCache::new(2);
+    let request_key = ObjectReadPlanKey::new(42, 7, 4, 4);
     cache.insert(
         ObjectReadPlanKey::new(42, 7, 0, 12),
         ObjectReadPlan::new(
@@ -3300,7 +3831,7 @@ fn object_read_plan_cache_reuses_covering_plan() {
         ),
     );
 
-    let plan = cache.get(&ObjectReadPlanKey::new(42, 7, 4, 4)).unwrap();
+    let plan = cache.get(&request_key).unwrap();
     assert_eq!(plan.output_len, 4);
     assert_eq!(
         plan.blocks,
@@ -3313,6 +3844,46 @@ fn object_read_plan_cache_reuses_covering_plan() {
             output_offset: 0,
         }]
     );
+    assert_eq!(cache.len(), 2);
+    assert_eq!(cache.get(&request_key), Some(plan));
+}
+
+#[test]
+fn object_read_plan_cache_slices_from_known_cover_without_insert() {
+    let mut cache = ObjectReadPlanCache::new(2);
+    let full_key = ObjectReadPlanKey::new(42, 7, 0, 12);
+    let request_key = ObjectReadPlanKey::new(42, 7, 4, 4);
+    cache.insert(
+        full_key,
+        ObjectReadPlan::new(
+            12,
+            vec![ObjectReadBlock {
+                object_key: "blocks/demo".to_owned(),
+                digest_uri: "sha256:test".to_owned(),
+                object_offset: 0,
+                object_len: 12,
+                len: 12,
+                output_offset: 0,
+            }],
+        ),
+    );
+
+    assert!(cache.get_exact(&request_key).is_none());
+    let plan = cache.get_slice_from(full_key, request_key).unwrap();
+    assert_eq!(plan.output_len, 4);
+    assert_eq!(
+        plan.blocks,
+        vec![ObjectReadBlock {
+            object_key: "blocks/demo".to_owned(),
+            digest_uri: "sha256:test".to_owned(),
+            object_offset: 4,
+            object_len: 12,
+            len: 4,
+            output_offset: 0,
+        }]
+    );
+    assert_eq!(cache.len(), 1);
+    assert!(cache.get_exact(&request_key).is_none());
 }
 
 #[test]
@@ -3322,6 +3893,7 @@ fn memory_block_cache_enforces_item_and_byte_limits() {
         max_items: 2,
         ttl: None,
     });
+    assert_eq!(cache.shard_count(), 1);
     cache.put("a".to_owned(), b"aa".to_vec()).unwrap();
     cache.put("b".to_owned(), b"bb".to_vec()).unwrap();
     assert!(cache.get("a").unwrap().is_some());
@@ -3340,6 +3912,12 @@ fn memory_block_cache_enforces_item_and_byte_limits() {
     assert_eq!(stats.items, 0);
     assert_eq!(stats.bytes, 0);
     assert!(stats.evictions >= 4);
+}
+
+#[test]
+fn memory_block_cache_shards_default_training_cache() {
+    let cache = MemoryBlockCache::default();
+    assert_eq!(cache.shard_count(), 16);
 }
 
 #[test]

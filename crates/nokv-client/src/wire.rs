@@ -221,6 +221,9 @@ pub(crate) fn client_error_from_wire_error(error: WireMetadataError) -> ClientEr
         WireMetadataError::NotDirectory => {
             ClientError::Metadata(nokv_meta::MetadError::NotDirectory)
         }
+        WireMetadataError::DirectoryNotEmpty => {
+            ClientError::Metadata(nokv_meta::MetadError::DirectoryNotEmpty)
+        }
         WireMetadataError::MissingBodyDescriptor => {
             ClientError::Metadata(nokv_meta::MetadError::MissingBodyDescriptor)
         }
@@ -229,6 +232,37 @@ pub(crate) fn client_error_from_wire_error(error: WireMetadataError) -> ClientEr
         ),
         WireMetadataError::StaleBodyGeneration { expected, current } => {
             ClientError::Metadata(nokv_meta::MetadError::StaleBodyGeneration { expected, current })
+        }
+        WireMetadataError::StaleOwnerEpoch {
+            owner_epoch,
+            required_epoch,
+        } => ClientError::Metadata(nokv_meta::MetadError::StaleOwnerEpoch {
+            owner_epoch,
+            required_epoch,
+        }),
+        WireMetadataError::LeaseExpired {
+            now_ms,
+            deadline_ms,
+        } => ClientError::Metadata(nokv_meta::MetadError::LeaseExpired {
+            now_ms,
+            deadline_ms,
+        }),
+        WireMetadataError::NotOwner { shard_id, endpoint } => {
+            ClientError::Metadata(nokv_meta::MetadError::NotOwner { shard_id, endpoint })
+        }
+        WireMetadataError::CrossShard {
+            source_shard,
+            dest_shard,
+        } => ClientError::Metadata(nokv_meta::MetadError::CrossShard {
+            source_shard,
+            dest_shard,
+        }),
+        WireMetadataError::GraftPoint => ClientError::Metadata(nokv_meta::MetadError::GraftPoint),
+        WireMetadataError::SyncLogArchiveFailed { committed, message } => {
+            ClientError::Metadata(nokv_meta::MetadError::SyncLogArchiveFailed {
+                committed,
+                message,
+            })
         }
         WireMetadataError::LockConflict { lock } => match wire_advisory_lock(lock) {
             Ok(lock) => ClientError::LockConflict(lock),

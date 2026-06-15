@@ -37,6 +37,16 @@ pub struct BlockReadOutcome {
     pub cache_hit_bytes: u64,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub struct BlockReadIntoOutcome {
+    pub object_gets: usize,
+    pub object_get_bytes: u64,
+    pub coalesced_gets: usize,
+    pub coalesced_get_bytes: u64,
+    pub cache_hits: usize,
+    pub cache_hit_bytes: u64,
+}
+
 #[derive(Clone, Debug)]
 struct PendingFetch {
     key: ObjectKey,
@@ -269,6 +279,232 @@ where
         cache_hits,
         cache_hit_bytes,
     })
+}
+
+pub fn read_object_blocks_into_with_cache_options<O, C>(
+    store: &O,
+    cache: Option<&C>,
+    output: &mut [u8],
+    blocks: &[ObjectReadBlock],
+    options: BlockReadOptions,
+) -> Result<BlockReadIntoOutcome, ObjectError>
+where
+    O: ObjectStore,
+    C: BlockCache + ?Sized,
+{
+    #[derive(Clone)]
+    struct PendingRead {
+        key: ObjectKey,
+        digest_uri: String,
+        object_offset: u64,
+        object_len: u64,
+        len: usize,
+        output_offset: usize,
+    }
+
+    if let Some(cache) = cache {
+        if let Some(outcome) = single_block_cache_hit_into(cache, output, blocks)? {
+            return Ok(outcome);
+        }
+    }
+
+    output.fill(0);
+    let mut object_gets = 0_usize;
+    let mut object_get_bytes = 0_u64;
+    let mut coalesced_gets = 0_usize;
+    let mut coalesced_get_bytes = 0_u64;
+    let mut cache_hits = 0_usize;
+    let mut cache_hit_bytes = 0_u64;
+    let mut pending = Vec::new();
+    for block in blocks {
+        let key = ObjectKey::new(block.object_key.clone())?;
+        if block.len == 0 {
+            return Err(ObjectError::InvalidRange);
+        }
+        let object_end = checked_read_end(block.object_offset, block.len)?;
+        if object_end > block.object_len {
+            return Err(ObjectError::InvalidRange);
+        }
+        let end = block
+            .output_offset
+            .checked_add(block.len)
+            .ok_or(ObjectError::InvalidRange)?;
+        if end > output.len() {
+            return Err(ObjectError::InvalidRange);
+        }
+        if let Some(cache) = cache {
+            if let Some(cached) =
+                cache.get_block_range(key.as_str(), block.object_offset, block.len)?
+            {
+                if cached.len() != block.len {
+                    return Err(ObjectError::InvalidRange);
+                }
+                cache_hits += 1;
+                cache_hit_bytes = cache_hit_bytes.saturating_add(cached.len() as u64);
+                output[block.output_offset..end].copy_from_slice(&cached);
+                continue;
+            }
+        }
+        pending.push(PendingRead {
+            key,
+            digest_uri: block.digest_uri.clone(),
+            object_offset: block.object_offset,
+            object_len: block.object_len,
+            len: block.len,
+            output_offset: block.output_offset,
+        });
+    }
+    pending.sort_by(|left, right| {
+        left.key
+            .as_str()
+            .cmp(right.key.as_str())
+            .then_with(|| left.digest_uri.cmp(&right.digest_uri))
+            .then_with(|| left.object_offset.cmp(&right.object_offset))
+            .then_with(|| left.output_offset.cmp(&right.output_offset))
+    });
+
+    let mut fetches = Vec::new();
+    let mut index = 0_usize;
+    while index < pending.len() {
+        let start = index;
+        let mut end = index + 1;
+        let first_exact_end = checked_read_end(pending[index].object_offset, pending[index].len)?;
+        let (mut fetch_offset, mut fetch_end) = cache_fill_range(
+            options.cache_fill,
+            pending[index].object_offset,
+            pending[index].len,
+            pending[index].object_len,
+        )?;
+        let mut exact_offset = pending[index].object_offset;
+        let mut exact_end = first_exact_end;
+        while end < pending.len()
+            && pending[end].key == pending[start].key
+            && pending[end].digest_uri == pending[start].digest_uri
+            && pending[end].object_len == pending[start].object_len
+        {
+            let read_end = checked_read_end(pending[end].object_offset, pending[end].len)?;
+            let (next_fetch_offset, next_fetch_end) = cache_fill_range(
+                options.cache_fill,
+                pending[end].object_offset,
+                pending[end].len,
+                pending[end].object_len,
+            )?;
+            if next_fetch_offset > fetch_end {
+                break;
+            }
+            fetch_offset = fetch_offset.min(next_fetch_offset);
+            fetch_end = fetch_end.max(next_fetch_end);
+            exact_offset = exact_offset.min(pending[end].object_offset);
+            exact_end = exact_end.max(read_end);
+            end += 1;
+        }
+        let exact_len =
+            usize::try_from(exact_end - exact_offset).map_err(|_| ObjectError::InvalidRange)?;
+        let fetch_len =
+            usize::try_from(fetch_end - fetch_offset).map_err(|_| ObjectError::InvalidRange)?;
+        fetches.push(PendingFetch {
+            key: pending[start].key.clone(),
+            digest_uri: pending[start].digest_uri.clone(),
+            fetch_offset,
+            fetch_len,
+            exact_offset,
+            exact_len,
+            reads_start: start,
+            reads_end: end,
+        });
+        index = end;
+    }
+
+    let fetched_many = fetch_object_ranges(store, &fetches, &options)?;
+    for (fetch, fetched) in fetches.into_iter().zip(fetched_many) {
+        if fetched.object_get {
+            object_gets += 1;
+            object_get_bytes = object_get_bytes.saturating_add(fetched.bytes.len() as u64);
+            if fetch.reads_end - fetch.reads_start > 1 {
+                coalesced_gets += 1;
+                coalesced_get_bytes =
+                    coalesced_get_bytes.saturating_add(fetched.bytes.len() as u64);
+            }
+            if let Some(cache) = cache {
+                cache.put_block(
+                    block_range_cache_key(
+                        fetch.key.as_str(),
+                        fetched.object_offset,
+                        fetched.bytes.len(),
+                    ),
+                    fetched.bytes.clone(),
+                )?;
+            }
+        }
+        for request in &pending[fetch.reads_start..fetch.reads_end] {
+            let relative = request
+                .object_offset
+                .checked_sub(fetched.object_offset)
+                .and_then(|offset| usize::try_from(offset).ok())
+                .ok_or(ObjectError::InvalidRange)?;
+            let relative_end = relative
+                .checked_add(request.len)
+                .ok_or(ObjectError::InvalidRange)?;
+            if relative_end > fetched.bytes.len() {
+                return Err(ObjectError::InvalidRange);
+            }
+            let bytes = &fetched.bytes[relative..relative_end];
+            let output_end = request
+                .output_offset
+                .checked_add(bytes.len())
+                .ok_or(ObjectError::InvalidRange)?;
+            output[request.output_offset..output_end].copy_from_slice(bytes);
+        }
+    }
+    Ok(BlockReadIntoOutcome {
+        object_gets,
+        object_get_bytes,
+        coalesced_gets,
+        coalesced_get_bytes,
+        cache_hits,
+        cache_hit_bytes,
+    })
+}
+
+fn single_block_cache_hit_into<C>(
+    cache: &C,
+    output: &mut [u8],
+    blocks: &[ObjectReadBlock],
+) -> Result<Option<BlockReadIntoOutcome>, ObjectError>
+where
+    C: BlockCache + ?Sized,
+{
+    let [block] = blocks else {
+        return Ok(None);
+    };
+    if block.len == 0 {
+        return Err(ObjectError::InvalidRange);
+    }
+    if block.output_offset != 0 || block.len != output.len() {
+        return Ok(None);
+    }
+    ObjectKey::validate_raw(block.object_key.as_str())?;
+    let object_end = checked_read_end(block.object_offset, block.len)?;
+    if object_end > block.object_len {
+        return Err(ObjectError::InvalidRange);
+    }
+    let Some(bytes) =
+        cache.get_block_range(block.object_key.as_str(), block.object_offset, block.len)?
+    else {
+        return Ok(None);
+    };
+    if bytes.len() != block.len {
+        return Err(ObjectError::InvalidRange);
+    }
+    output.copy_from_slice(&bytes);
+    Ok(Some(BlockReadIntoOutcome {
+        object_gets: 0,
+        object_get_bytes: 0,
+        coalesced_gets: 0,
+        coalesced_get_bytes: 0,
+        cache_hits: 1,
+        cache_hit_bytes: block.len as u64,
+    }))
 }
 
 fn checked_read_end(offset: u64, len: usize) -> Result<u64, ObjectError> {

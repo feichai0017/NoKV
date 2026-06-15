@@ -19,11 +19,13 @@ use nokv_types::{AdvisoryLockRequest, DentryName, FileType, InodeAttr, InodeId};
 
 use crate::attr::file_attr;
 use crate::backend::{FuseBackend, FuseBackendError};
-use crate::invalidation::InvalidationRegistry;
+use crate::invalidation::{InvalidationRegistry, InvalidationTarget, LocalInvalidation};
 
 use super::directory::{DirectoryHandle, FUSE_READDIR_PAGE_SIZE};
 use super::errors::errno;
 use super::locks::{advisory_lock_kind_from_fuse, FuseLockRequest};
+#[cfg(test)]
+use super::merge_fuse_read_stats;
 #[cfg(test)]
 use super::options::FuseObjectPipelineStats;
 use super::options::{FuseOptions, FuseView};
@@ -36,7 +38,7 @@ use super::write_session::{
     push_buffered_write, select_unstaged_blocks, take_buffered_upload_ranges, BufferedWriteRange,
     PendingBufferedRange, PendingBufferedUpload, WriteHandle, WriteStageReservation,
 };
-use super::{NoKvFuse, ReadHandle};
+use super::{FuseReadStats, NoKvFuse, ReadHandle, ReadHandleState};
 
 impl<B> NoKvFuse<B>
 where
@@ -54,8 +56,10 @@ where
         let fuse = Self {
             backend,
             options,
+            read_stats: Arc::new(FuseReadStats::default()),
             parents: RwLock::new(parents),
             names: RwLock::new(HashMap::new()),
+            attrs: Arc::new(RwLock::new(HashMap::new())),
             next_handle: AtomicU64::new(1),
             read_handles: RwLock::new(HashMap::new()),
             write_handles: RwLock::new(HashMap::new()),
@@ -81,8 +85,28 @@ where
     pub(super) fn remember_entry(&self, entry: &DentryWithAttr) {
         self.remember_parent(entry.attr.inode, entry.dentry.parent);
         self.remember_name(entry.attr.inode, &entry.dentry.name);
+        self.remember_attr(&entry.attr);
         if entry.attr.file_type == FileType::Directory {
             self.register_watch_scope(entry.attr.inode);
+        }
+    }
+
+    pub(super) fn remember_attr(&self, attr: &InodeAttr) {
+        if let Ok(mut attrs) = self.attrs.write() {
+            attrs.insert(attr.inode.get(), attr.clone());
+        }
+    }
+
+    pub(super) fn cached_attr(&self, inode: InodeId) -> Option<InodeAttr> {
+        self.attrs
+            .read()
+            .ok()
+            .and_then(|attrs| attrs.get(&inode.get()).cloned())
+    }
+
+    pub(super) fn forget_attr_cache(&self, inode: InodeId) {
+        if let Ok(mut attrs) = self.attrs.write() {
+            attrs.remove(&inode.get());
         }
     }
 
@@ -90,6 +114,7 @@ where
         if inode == self.options.view.root() {
             return;
         }
+        self.forget_attr_cache(inode);
         if let Ok(mut parents) = self.parents.write() {
             parents.remove(&inode.get());
         }
@@ -123,11 +148,30 @@ where
 
     #[cfg(test)]
     pub(crate) fn object_pipeline_stats(&self) -> Result<FuseObjectPipelineStats, Errno> {
-        self.backend.object_pipeline_stats().map_err(errno)
+        let mut stats = self.backend.object_pipeline_stats().map_err(errno)?;
+        merge_fuse_read_stats(&mut stats, &self.read_stats);
+        Ok(stats)
+    }
+
+    pub(super) fn record_fuse_read_request(&self, size: u32) {
+        self.read_stats.requests.fetch_add(1, Ordering::Relaxed);
+        self.read_stats
+            .request_bytes
+            .fetch_add(u64::from(size), Ordering::Relaxed);
     }
 
     pub(super) fn invalidation_registry(&self) -> Arc<InvalidationRegistry> {
         Arc::clone(&self.invalidation)
+    }
+
+    pub(super) fn local_invalidation(&self) -> LocalInvalidation {
+        let attr_cache = Arc::clone(&self.attrs);
+        let local: LocalInvalidation = Arc::new(move |target: InvalidationTarget| {
+            if let Ok(mut attrs) = attr_cache.write() {
+                attrs.remove(&target.inode.get());
+            }
+        });
+        local
     }
 
     pub(super) fn parent_of(&self, inode: InodeId) -> InodeId {
@@ -223,6 +267,22 @@ where
         }
     }
 
+    pub(super) fn live_open_attr(&self, inode: InodeId) -> Result<InodeAttr, Errno> {
+        let attr = self
+            .service_get_attr(inode)
+            .map_err(errno)?
+            .ok_or(Errno::ENOENT)?;
+        self.remember_attr(&attr);
+        Ok(attr)
+    }
+
+    pub(super) fn read_open_attr(&self, inode: InodeId) -> Result<InodeAttr, Errno> {
+        if let Some(attr) = self.cached_attr(inode) {
+            return Ok(attr);
+        }
+        self.live_open_attr(inode)
+    }
+
     pub(super) fn service_lookup_plus(
         &self,
         parent: InodeId,
@@ -311,11 +371,27 @@ where
         offset: u64,
         len: usize,
         pipeline: &mut FileReadPipeline,
+        read_plans: &mut nokv_object::ObjectReadPlanCache,
     ) -> Result<Vec<u8>, FuseBackendError> {
         match self.options.view {
             FuseView::Live => self
                 .backend
-                .read_file_with_known_attr_pipeline(attr, offset, len, pipeline),
+                .read_file_with_known_attr_pipeline(attr, offset, len, pipeline, read_plans),
+            FuseView::Snapshot { snapshot_id, .. } => {
+                self.backend
+                    .read_file_at_snapshot(snapshot_id, attr.inode, offset, len)
+            }
+        }
+    }
+
+    pub(super) fn service_read_file_with_known_attr(
+        &self,
+        attr: &InodeAttr,
+        offset: u64,
+        len: usize,
+    ) -> Result<Vec<u8>, FuseBackendError> {
+        match self.options.view {
+            FuseView::Live => self.backend.read_file_with_known_attr(attr, offset, len),
             FuseView::Snapshot { snapshot_id, .. } => {
                 self.backend
                     .read_file_at_snapshot(snapshot_id, attr.inode, offset, len)
@@ -449,7 +525,9 @@ where
             raw,
             Arc::new(ReadHandle {
                 attr,
-                reader: Mutex::new(FileReadPipeline::new(self.options.read_pipeline)),
+                state: Mutex::new(ReadHandleState::new(FileReadPipeline::new(
+                    self.options.read_pipeline,
+                ))),
             }),
         );
         Ok(FileHandle(raw))
@@ -470,16 +548,34 @@ where
         else {
             return Ok(None);
         };
-        let mut reader = handle.reader.lock().map_err(|_| Errno::EIO)?.clone();
+        // Clamp the requested length to what the handle's known size can serve
+        // before EITHER backend path. A read that starts before EOF but extends
+        // past `attr.size` must be a short read, not a backend range error
+        // (mirrors the write-handle read path in this file).
+        if offset >= handle.attr.size {
+            return Ok(Some(Vec::new()));
+        }
+        let len = u64::from(size)
+            .min(handle.attr.size - offset)
+            .try_into()
+            .map_err(|_| Errno::EINVAL)?;
+        if !self.options.prefetch.enabled {
+            let bytes = self
+                .service_read_file_with_known_attr(&handle.attr, offset, len)
+                .map_err(errno)?;
+            return Ok(Some(bytes));
+        }
+        let mut state = handle.state.lock().map_err(|_| Errno::EIO)?;
+        let ReadHandleState { reader, read_plans } = &mut *state;
         let bytes = self
             .service_read_file_with_known_attr_pipeline(
                 &handle.attr,
                 offset,
-                size as usize,
-                &mut reader,
+                len,
+                reader,
+                read_plans,
             )
             .map_err(errno)?;
-        *handle.reader.lock().map_err(|_| Errno::EIO)? = reader;
         Ok(Some(bytes))
     }
 
@@ -666,7 +762,7 @@ where
         if data.is_empty() {
             return Ok(0);
         }
-        {
+        let inode = {
             let mut handles = self.write_handles.write().map_err(|_| Errno::EIO)?;
             let handle = handles.get_mut(&fh.0).ok_or(Errno::EBADF)?;
             if handle.prepared.is_none() {
@@ -690,31 +786,40 @@ where
             push_buffered_write(&mut handle.buffered, offset, data);
             handle.size = handle.size.max(end);
             handle.dirty = true;
-        }
+            handle.inode
+        };
+        self.forget_attr_cache(inode);
         self.flush_handle_buffers(fh, false)?;
         Ok(data.len())
     }
 
     pub(super) fn truncate_handle(&self, fh: FileHandle, size: u64) -> Result<(), Errno> {
-        let mut handles = self.write_handles.write().map_err(|_| Errno::EIO)?;
-        let handle = handles.get_mut(&fh.0).ok_or(Errno::EBADF)?;
-        if handle.prepared.is_none() {
-            handle.prepared = Some(
-                self.backend
-                    .prepare_artifact_replace(handle.parent, handle.name.clone())
-                    .map_err(errno)?,
-            );
-        }
-        if handle.writer.is_none() {
-            let prepared = handle.prepared.as_ref().ok_or(Errno::EIO)?;
-            handle.writer = Some(
-                self.backend
-                    .new_write_pipeline(prepared, &fuse_manifest_id(handle.parent, handle.inode))
-                    .map_err(errno)?,
-            );
-        }
-        handle.size = size;
-        handle.dirty = true;
+        let inode = {
+            let mut handles = self.write_handles.write().map_err(|_| Errno::EIO)?;
+            let handle = handles.get_mut(&fh.0).ok_or(Errno::EBADF)?;
+            if handle.prepared.is_none() {
+                handle.prepared = Some(
+                    self.backend
+                        .prepare_artifact_replace(handle.parent, handle.name.clone())
+                        .map_err(errno)?,
+                );
+            }
+            if handle.writer.is_none() {
+                let prepared = handle.prepared.as_ref().ok_or(Errno::EIO)?;
+                handle.writer = Some(
+                    self.backend
+                        .new_write_pipeline(
+                            prepared,
+                            &fuse_manifest_id(handle.parent, handle.inode),
+                        )
+                        .map_err(errno)?,
+                );
+            }
+            handle.size = size;
+            handle.dirty = true;
+            handle.inode
+        };
+        self.forget_attr_cache(inode);
         Ok(())
     }
 
@@ -1144,7 +1249,8 @@ where
             writer.staged_chunks(),
         );
         let chunks = chunk_manifests_from_stored_chunks(writer.staged_chunks());
-        self.backend
+        let result = self
+            .backend
             .publish_prepared_artifact_staged_session(
                 prepared,
                 PublishArtifactStagedSession {
@@ -1163,6 +1269,11 @@ where
                 },
             )
             .map_err(errno)?;
+        let entry_inode = result.entry.attr.inode;
+        self.remember_entry(&result.entry);
+        if let Some(replaced) = result.replaced.filter(|old| old.attr.inode != entry_inode) {
+            self.forget_inode_cache(replaced.attr.inode);
+        }
         if let Some(handle) = self
             .write_handles
             .write()

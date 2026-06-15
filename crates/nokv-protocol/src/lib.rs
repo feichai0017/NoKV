@@ -16,6 +16,21 @@ use serde::{Deserialize, Serialize};
 const BINARY_CODEC_LIMIT: u64 = 16 * 1024 * 1024;
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct WireOpenPathReadPlanRequest {
+    pub path: String,
+    pub offset: u64,
+    pub len: u64,
+    pub expected_generation: Option<u64>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct WireOpenPathReadPlan {
+    pub metadata: WirePathMetadata,
+    pub lease: WireReadLease,
+    pub plan: WireBodyReadPlan,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum MetadataRpcRequest {
     Batch {
@@ -104,6 +119,25 @@ pub enum MetadataRpcRequest {
         mode: u32,
         uid: u32,
         gid: u32,
+    },
+    /// Graft a foreign subtree directory into `parent`'s shard. `target_inode`
+    /// is owned by another shard; the handler writes only the dentry projection
+    /// (no Inode record). Routed by `parent` like the other inode-keyed creates.
+    CreateGraft {
+        parent: u64,
+        name: String,
+        target_inode: u64,
+        mode: u32,
+        uid: u32,
+        gid: u32,
+    },
+    /// Remove the parent-shard half of a cross-shard graft (the dentry only).
+    /// Dedicated teardown path that bypasses the rmdir graft guard. Routed by
+    /// `parent` like the other inode-keyed dentry ops. Idempotent: a
+    /// `Dentry { entry: None }` result means the dentry was already gone.
+    RemoveGraft {
+        parent: u64,
+        name: String,
     },
     CreateDirPath {
         path: String,
@@ -297,6 +331,9 @@ pub enum MetadataRpcRequest {
         len: u64,
         expected_generation: Option<u64>,
     },
+    OpenPathReadPlanBatch {
+        requests: Vec<WireOpenPathReadPlanRequest>,
+    },
     ReadBodyPlan {
         inode: u64,
         generation: u64,
@@ -380,16 +417,66 @@ pub enum WireMetadataError {
     NotFound,
     NotFile,
     NotDirectory,
+    /// A directory removal/rename found the target non-empty. Carried as a typed
+    /// variant so it survives the wire as `MetadError::DirectoryNotEmpty` (→
+    /// `ENOTEMPTY` in FUSE), instead of collapsing into an opaque `Metadata`
+    /// message that the client cannot classify.
+    DirectoryNotEmpty,
     MissingBodyDescriptor,
     PredicateFailed,
-    StaleBodyGeneration { expected: u64, current: u64 },
-    LockConflict { lock: WireAdvisoryLock },
-    InvalidPath { message: String },
-    InvalidQuery { message: String },
-    Metadata { message: String },
-    Object { message: String },
-    Io { message: String },
-    Protocol { message: String },
+    StaleBodyGeneration {
+        expected: u64,
+        current: u64,
+    },
+    StaleOwnerEpoch {
+        owner_epoch: u64,
+        required_epoch: u64,
+    },
+    LeaseExpired {
+        now_ms: u64,
+        deadline_ms: u64,
+    },
+    /// The addressed shard is not owned by this node. The client should
+    /// re-resolve the shard owner (via the control plane / shard map) and retry
+    /// against `endpoint` when present.
+    NotOwner {
+        shard_id: String,
+        endpoint: Option<String>,
+    },
+    /// A rename/hardlink/clone crossed a shard boundary. The client maps this to
+    /// `EXDEV`; it is terminal (not a handoff to retry).
+    CrossShard {
+        source_shard: u16,
+        dest_shard: u16,
+    },
+    /// The target dentry is a cross-shard graft point; remove/rename of it must
+    /// go through the graft lifecycle. The client maps this to `EBUSY`.
+    GraftPoint,
+    SyncLogArchiveFailed {
+        committed: bool,
+        message: String,
+    },
+    LockConflict {
+        lock: WireAdvisoryLock,
+    },
+    InvalidPath {
+        message: String,
+    },
+    InvalidQuery {
+        message: String,
+    },
+    Metadata {
+        message: String,
+    },
+    Object {
+        message: String,
+    },
+    Io {
+        message: String,
+    },
+    Protocol {
+        message: String,
+    },
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -456,6 +543,9 @@ pub enum MetadataRpcResult {
         metadata: WirePathMetadata,
         lease: WireReadLease,
         plan: WireBodyReadPlan,
+    },
+    OpenPathReadPlanBatch {
+        plans: Vec<WireOpenPathReadPlan>,
     },
     CloneSubtree {
         root: u64,
@@ -1468,6 +1558,119 @@ impl fmt::Display for MetadataProtocolError {
 
 impl std::error::Error for MetadataProtocolError {}
 
+/// What a request routes on: an absolute path, a bare inode/parent, or nothing
+/// addressable (bootstrap / snapshot-id-only / empty batch), which targets the
+/// default shard. Borrows from the request so routing is allocation-free.
+///
+/// This lives in the protocol crate so the client and server route *identically*
+/// off the same wire request — there is a single source of truth for the
+/// partitioning key.
+pub enum RoutingKey<'a> {
+    Path(&'a str),
+    Inode(u64),
+    Default,
+}
+
+/// The routing dimension a request carries. For variants that bundle both a
+/// `snapshot_id` and an inode/path, key on the inode/path (the snapshot id is
+/// shard-local and not a routing key on its own).
+pub fn request_routing_key(request: &MetadataRpcRequest) -> RoutingKey<'_> {
+    match request {
+        // Path-addressed operations route by longest-prefix match.
+        MetadataRpcRequest::LookupPath { path }
+        | MetadataRpcRequest::StatPath { path }
+        | MetadataRpcRequest::ReadDirPlusPath { path }
+        | MetadataRpcRequest::StatCard { path }
+        | MetadataRpcRequest::CreateDirPath { path, .. }
+        | MetadataRpcRequest::CreateFilePath { path, .. }
+        | MetadataRpcRequest::RemoveFilePath { path }
+        | MetadataRpcRequest::RemoveEmptyDirPath { path }
+        | MetadataRpcRequest::SnapshotSubtreePath { path }
+        | MetadataRpcRequest::ReadIndexedPathPage { path, .. }
+        | MetadataRpcRequest::ReadDirPlusPathPage { path, .. }
+        | MetadataRpcRequest::ReadPage { path, .. }
+        | MetadataRpcRequest::ListPage { path, .. }
+        | MetadataRpcRequest::StatPathAtSnapshot { path, .. }
+        | MetadataRpcRequest::ReadDirPlusPathAtSnapshot { path, .. }
+        | MetadataRpcRequest::ReadFilePathAtSnapshot { path, .. }
+        | MetadataRpcRequest::ReadArtifactPathAtSnapshot { path, .. }
+        | MetadataRpcRequest::OpenPathReadPlan { path, .. }
+        | MetadataRpcRequest::PrepareArtifactPath { path, .. } => RoutingKey::Path(path),
+        MetadataRpcRequest::CreateFilesInDirPath { parent_path, .. } => {
+            RoutingKey::Path(parent_path)
+        }
+        MetadataRpcRequest::FindPaths { request } => RoutingKey::Path(&request.path),
+        MetadataRpcRequest::AggregatePaths { request } => RoutingKey::Path(&request.path),
+        MetadataRpcRequest::GrepPaths { request } => RoutingKey::Path(&request.path),
+        // A batch open routes by its FIRST entry's path. The client guarantees
+        // every batch it sends is single-shard (it groups requests by shard before
+        // sending), so the first path's owner owns the whole batch; an empty batch
+        // has no addressable key and targets the default shard.
+        MetadataRpcRequest::OpenPathReadPlanBatch { requests } => match requests.first() {
+            Some(first) => RoutingKey::Path(&first.path),
+            None => RoutingKey::Default,
+        },
+        // Cross-path operations route on their source path; cross-shard pairs are
+        // rejected downstream by the (single-shard) service.
+        MetadataRpcRequest::RenamePath { source, .. } => RoutingKey::Path(source),
+        MetadataRpcRequest::RenameReplacePath { source, .. } => RoutingKey::Path(source),
+        MetadataRpcRequest::CloneSubtreePath { src_path, .. } => RoutingKey::Path(src_path),
+        MetadataRpcRequest::DiffSubtrees { a_path, .. } => RoutingKey::Path(a_path),
+        MetadataRpcRequest::RollbackSubtreePath { target_path, .. } => {
+            RoutingKey::Path(target_path)
+        }
+
+        // Inode/parent-addressed operations route on the encoded shard index.
+        MetadataRpcRequest::GetAttr { inode }
+        | MetadataRpcRequest::GetAttrAtSnapshot { inode, .. }
+        | MetadataRpcRequest::SetXattr { inode, .. }
+        | MetadataRpcRequest::GetXattr { inode, .. }
+        | MetadataRpcRequest::ListXattr { inode }
+        | MetadataRpcRequest::RemoveXattr { inode, .. }
+        | MetadataRpcRequest::GetAdvisoryLock { inode, .. }
+        | MetadataRpcRequest::SetAdvisoryLock { inode, .. }
+        | MetadataRpcRequest::ReadBodyPlan { inode, .. }
+        | MetadataRpcRequest::ReadSymlink { inode }
+        | MetadataRpcRequest::ReadSymlinkAtSnapshot { inode, .. }
+        | MetadataRpcRequest::ReadFileAtSnapshot { inode, .. } => RoutingKey::Inode(*inode),
+        MetadataRpcRequest::LookupPlus { parent, .. }
+        | MetadataRpcRequest::CurrentDentryVersion { parent, .. }
+        | MetadataRpcRequest::LookupPlusAtSnapshot { parent, .. }
+        | MetadataRpcRequest::ReadDirPlus { parent }
+        | MetadataRpcRequest::ReadDirPlusPage { parent, .. }
+        | MetadataRpcRequest::ReadDirPlusAtSnapshot { parent, .. }
+        | MetadataRpcRequest::CreateDir { parent, .. }
+        | MetadataRpcRequest::CreateGraft { parent, .. }
+        | MetadataRpcRequest::RemoveGraft { parent, .. }
+        | MetadataRpcRequest::CreateFile { parent, .. }
+        | MetadataRpcRequest::CreateFilePrepared { parent, .. }
+        | MetadataRpcRequest::CreateSymlink { parent, .. }
+        | MetadataRpcRequest::CreateSpecialNode { parent, .. }
+        | MetadataRpcRequest::UpdateAttrs { parent, .. }
+        | MetadataRpcRequest::RemoveFile { parent, .. }
+        | MetadataRpcRequest::RemoveEmptyDir { parent, .. }
+        | MetadataRpcRequest::PrepareArtifact { parent, .. } => RoutingKey::Inode(*parent),
+        MetadataRpcRequest::Link { new_parent, .. } => RoutingKey::Inode(*new_parent),
+        MetadataRpcRequest::Rename { parent, .. } => RoutingKey::Inode(*parent),
+        MetadataRpcRequest::RenameReplace { parent, .. } => RoutingKey::Inode(*parent),
+        MetadataRpcRequest::SnapshotSubtree { root } => RoutingKey::Inode(*root),
+        MetadataRpcRequest::PublishPreparedArtifact { prepared, .. } => {
+            RoutingKey::Inode(prepared.parent)
+        }
+        MetadataRpcRequest::PublishPreparedArtifactStagedSession { prepared, .. } => {
+            RoutingKey::Inode(prepared.parent)
+        }
+
+        // No addressable key: target the default/root shard.
+        MetadataRpcRequest::Batch { .. }
+        | MetadataRpcRequest::BootstrapRoot { .. }
+        | MetadataRpcRequest::UpdateRootAttrs { .. }
+        | MetadataRpcRequest::SnapshotPin { .. }
+        | MetadataRpcRequest::RetireSnapshot { .. }
+        | MetadataRpcRequest::RenewSnapshot { .. } => RoutingKey::Default,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1551,6 +1754,97 @@ mod tests {
         };
         let encoded = encode_envelope(&envelope).unwrap();
         assert_eq!(decode_envelope(&encoded).unwrap(), envelope);
+    }
+
+    #[test]
+    fn binary_codec_round_trips_open_path_read_plan_batch() {
+        let request = MetadataRpcRequest::OpenPathReadPlanBatch {
+            requests: vec![WireOpenPathReadPlanRequest {
+                path: "/dataset/sample-0.bin".to_owned(),
+                offset: 4,
+                len: 8,
+                expected_generation: Some(3),
+            }],
+        };
+        let encoded = encode_request(&request).unwrap();
+        assert_eq!(decode_request(&encoded).unwrap(), request);
+
+        let envelope = MetadataRpcEnvelope {
+            ok: true,
+            result: Some(MetadataRpcResult::OpenPathReadPlanBatch {
+                plans: vec![WireOpenPathReadPlan {
+                    metadata: WirePathMetadata {
+                        attr: WireInodeAttr {
+                            inode: 42,
+                            file_type: "file".to_owned(),
+                            mode: 0o644,
+                            uid: 1000,
+                            gid: 1000,
+                            rdev: 0,
+                            nlink: 1,
+                            size: 16,
+                            generation: 3,
+                            mtime_ms: 8,
+                            ctime_ms: 8,
+                        },
+                        body: None,
+                    },
+                    lease: WireReadLease {
+                        inode: 42,
+                        generation: 3,
+                        read_version: 9,
+                        lease_expires_unix_ms: 12_345,
+                    },
+                    plan: WireBodyReadPlan {
+                        output_len: 8,
+                        blocks: vec![WireObjectReadBlock {
+                            object_key: "blocks/sample-0".to_owned(),
+                            digest_uri: "sha256:test".to_owned(),
+                            object_offset: 4,
+                            object_len: 16,
+                            len: 8,
+                            output_offset: 0,
+                        }],
+                    },
+                }],
+            }),
+            error: None,
+            error_kind: None,
+        };
+        let encoded = encode_envelope(&envelope).unwrap();
+        assert_eq!(decode_envelope(&encoded).unwrap(), envelope);
+    }
+
+    #[test]
+    fn open_path_read_plan_batch_routes_on_first_entry_path() {
+        // A non-empty batch routes on its first entry's path so the whole
+        // (client-guaranteed single-shard) batch reaches that path's owner.
+        let batch = MetadataRpcRequest::OpenPathReadPlanBatch {
+            requests: vec![
+                WireOpenPathReadPlanRequest {
+                    path: "/dataset/sample-0.bin".to_owned(),
+                    offset: 0,
+                    len: 4,
+                    expected_generation: None,
+                },
+                WireOpenPathReadPlanRequest {
+                    path: "/dataset/sample-1.bin".to_owned(),
+                    offset: 0,
+                    len: 4,
+                    expected_generation: None,
+                },
+            ],
+        };
+        assert!(matches!(
+            request_routing_key(&batch),
+            RoutingKey::Path("/dataset/sample-0.bin")
+        ));
+
+        // An empty batch has no addressable key and targets the default shard.
+        let empty = MetadataRpcRequest::OpenPathReadPlanBatch {
+            requests: Vec::new(),
+        };
+        assert!(matches!(request_routing_key(&empty), RoutingKey::Default));
     }
 
     #[test]

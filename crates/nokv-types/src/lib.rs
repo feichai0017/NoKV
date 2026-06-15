@@ -6,9 +6,11 @@
 //! clients, or service wire types.
 
 mod names;
+mod shard;
 mod types;
 
 pub use names::{parse_absolute_path, DentryName, NameError, PathError};
+pub use shard::{ShardMap, ShardPrefix, ShardPrefixParseError, ShardRoute, DEFAULT_SHARD_INDEX};
 pub use types::{
     AdvisoryLock, AdvisoryLockKind, AdvisoryLockRequest, BlockDescriptor, BodyDescriptor,
     ChunkManifest, DentryProjection, DentryRecord, FileType, ForkBinding, InodeAttr, InodeId,

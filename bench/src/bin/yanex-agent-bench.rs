@@ -6611,6 +6611,7 @@ fn open_existing_nokv(
         MountId::new(1).expect("mount id is non-zero"),
         metadata,
         objects,
+        0,
     )
     .map_err(from_nokv)
 }

@@ -42,6 +42,9 @@ BENCH_ENV_KEYS = (
     "NOKV_BENCH_MDTEST_BIN",
     "NOKV_BENCH_MPIRUN_BIN",
     "NOKV_BENCH_JUICEFS_BIN",
+    "NOKV_BENCH_RANGE_STRIDE",
+    "NOKV_BENCH_RANGE_COALESCE_GAP_BYTES",
+    "NOKV_BENCH_CACHE_STATES",
 )
 
 
@@ -104,6 +107,10 @@ def capture(args: argparse.Namespace) -> dict[str, object]:
             "concurrency": args.concurrency,
             "product_workloads": args.product_workloads,
             "primitive_workloads": args.primitive_workloads,
+            "real_tools": args.real_tools,
+            "range_stride": args.range_stride,
+            "range_coalesce_gap_bytes": args.range_coalesce_gap_bytes,
+            "cache_states": args.cache_states,
             "repeats": args.repeats,
         },
         "selected_env": selected_env,
@@ -120,6 +127,10 @@ def _selftest() -> int:
         concurrency="1",
         product_workloads="metadata_create_list",
         primitive_workloads="metadata",
+        real_tools="default",
+        range_stride="2",
+        range_coalesce_gap_bytes="512",
+        cache_states="cold,warm",
         repeats=1,
     )
     doc = capture(args)
@@ -139,6 +150,10 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--concurrency", default="")
     parser.add_argument("--product-workloads", default="")
     parser.add_argument("--primitive-workloads", default="")
+    parser.add_argument("--real-tools", default="")
+    parser.add_argument("--range-stride", default="")
+    parser.add_argument("--range-coalesce-gap-bytes", default="")
+    parser.add_argument("--cache-states", default="")
     parser.add_argument("--repeats", type=int, default=1)
     parser.add_argument("--selftest", action="store_true")
     args = parser.parse_args(argv)

@@ -249,6 +249,7 @@ pub struct S3ObjectStore {
 pub enum ConfiguredObjectStore {
     S3(Arc<S3ObjectStore>),
     TieredLocal(Arc<TieredObjectStore<LocalObjectStore, S3ObjectStore>>),
+    Memory(Arc<MemoryObjectStore>),
 }
 
 impl ConfiguredObjectStore {
@@ -256,6 +257,7 @@ impl ConfiguredObjectStore {
         match self {
             Self::S3(_) => Ok(None),
             Self::TieredLocal(store) => store.stats().map(Some),
+            Self::Memory(_) => Ok(None),
         }
     }
 
@@ -263,6 +265,7 @@ impl ConfiguredObjectStore {
         match self {
             Self::S3(_) => Ok(None),
             Self::TieredLocal(store) => store.hot().stats().map(Some),
+            Self::Memory(_) => Ok(None),
         }
     }
 }
@@ -290,6 +293,10 @@ impl ObjectKey {
         let raw = raw.into();
         validate_key(&raw)?;
         Ok(Self(raw))
+    }
+
+    pub(crate) fn validate_raw(raw: &str) -> Result<(), ObjectError> {
+        validate_key(raw)
     }
 
     pub fn as_str(&self) -> &str {
@@ -650,6 +657,7 @@ impl ObjectStore for ConfiguredObjectStore {
         match self {
             Self::S3(store) => store.capabilities(),
             Self::TieredLocal(store) => store.capabilities(),
+            Self::Memory(store) => store.capabilities(),
         }
     }
 
@@ -661,6 +669,7 @@ impl ObjectStore for ConfiguredObjectStore {
         match self {
             Self::S3(store) => store.put(key, bytes),
             Self::TieredLocal(store) => store.put(key, bytes),
+            Self::Memory(store) => store.put(key, bytes),
         }
     }
 
@@ -668,6 +677,7 @@ impl ObjectStore for ConfiguredObjectStore {
         match self {
             Self::S3(store) => store.get(key, range),
             Self::TieredLocal(store) => store.get(key, range),
+            Self::Memory(store) => store.get(key, range),
         }
     }
 
@@ -679,6 +689,7 @@ impl ObjectStore for ConfiguredObjectStore {
         match self {
             Self::S3(store) => store.get_if_present(key, range),
             Self::TieredLocal(store) => store.get_if_present(key, range),
+            Self::Memory(store) => store.get_if_present(key, range),
         }
     }
 
@@ -689,6 +700,7 @@ impl ObjectStore for ConfiguredObjectStore {
         match self {
             Self::S3(store) => store.get_many_if_present(requests),
             Self::TieredLocal(store) => store.get_many_if_present(requests),
+            Self::Memory(store) => store.get_many_if_present(requests),
         }
     }
 
@@ -696,6 +708,7 @@ impl ObjectStore for ConfiguredObjectStore {
         match self {
             Self::S3(store) => store.get_many(requests),
             Self::TieredLocal(store) => store.get_many(requests),
+            Self::Memory(store) => store.get_many(requests),
         }
     }
 
@@ -703,6 +716,7 @@ impl ObjectStore for ConfiguredObjectStore {
         match self {
             Self::S3(store) => store.head(key),
             Self::TieredLocal(store) => store.head(key),
+            Self::Memory(store) => store.head(key),
         }
     }
 
@@ -710,6 +724,7 @@ impl ObjectStore for ConfiguredObjectStore {
         match self {
             Self::S3(store) => store.delete(key),
             Self::TieredLocal(store) => store.delete(key),
+            Self::Memory(store) => store.delete(key),
         }
     }
 
@@ -720,6 +735,7 @@ impl ObjectStore for ConfiguredObjectStore {
         match self {
             Self::S3(store) => store.resolve_read_placements(blocks),
             Self::TieredLocal(store) => store.resolve_read_placements(blocks),
+            Self::Memory(store) => store.resolve_read_placements(blocks),
         }
     }
 
@@ -727,6 +743,7 @@ impl ObjectStore for ConfiguredObjectStore {
         match self {
             Self::S3(store) => store.tiered_stats(),
             Self::TieredLocal(store) => store.tiered_stats(),
+            Self::Memory(store) => store.tiered_stats(),
         }
     }
 
@@ -734,6 +751,7 @@ impl ObjectStore for ConfiguredObjectStore {
         match self {
             Self::S3(store) => store.local_hot_stats(),
             Self::TieredLocal(store) => store.local_hot_stats(),
+            Self::Memory(store) => store.local_hot_stats(),
         }
     }
 }

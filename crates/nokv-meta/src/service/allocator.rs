@@ -6,7 +6,7 @@ where
     O: ObjectStore,
 {
     pub fn refresh_allocator_state(&self) -> Result<(), MetadError> {
-        let allocator = recover_allocator_state(&self.metadata, self.mount)?;
+        let allocator = recover_allocator_state(&self.metadata, self.mount, self.shard_index)?;
         self.clock
             .fetch_max(allocator.last_commit_version, Ordering::Relaxed);
         self.reserved_version
@@ -50,6 +50,13 @@ where
         {
             return Ok(());
         }
+        // Read guard held across the fence check and the reservation commit so a
+        // failover epoch bump cannot land between them.
+        let _fence = self
+            .epoch_fence
+            .read()
+            .unwrap_or_else(|err| err.into_inner());
+        self.ensure_owner_epoch_current()?;
 
         let reserved_version = current_reserved_version.max(reservation_upper_bound(
             required_version,
