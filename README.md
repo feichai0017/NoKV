@@ -184,9 +184,13 @@ agent-workspace and artifact publish/read patterns first.
 | POSIX completeness | Mature production filesystem | P0 subset implemented; still hardening compatibility gates |
 | Maturity | Production, large deployments | Young Rust implementation; single-node local mode is usable, replication is roadmap |
 
-NoKV is currently a usable single-node object-backed filesystem with a built-in
-Holt metadata engine behind a long-running metadata server. It is not yet a
-JuiceFS/3FS class distributed filesystem.
+NoKV is an object-backed filesystem with a sharded Holt metadata plane: multiple
+metadata shards (one Holt engine each) behind long-running metadata servers,
+routed through an etcd control plane, with cross-shard grafts presenting a single
+FUSE namespace across shards. Metadata HA today is single-writer-per-shard with
+checkpoint-image + shared-log, epoch-fenced failover — not yet consensus
+replication — so it is not yet a JuiceFS/3FS class production-HA distributed
+filesystem.
 
 ## 🏗️ Architecture
 
@@ -195,6 +199,7 @@ crates/
   nokv-types     storage-neutral namespace model types
   nokv-protocol  framed metadata RPC DTOs and binary codec
   nokv-meta      schema, MetadataCommand, Holt store, service core
+  nokv-control   shard ownership, epochs, and failover coordination
   nokv-object    S3-compatible object body storage helpers
   nokv-client    Rust SDK over metadata service and object backend
   nokv-fuse      low-level FUSE frontend
@@ -277,6 +282,7 @@ covered by the FUSE smoke test.
 | [`nokv-protocol`](https://crates.io/crates/nokv-protocol) | Framed metadata RPC DTOs and binary codec |
 | [`nokv-object`](https://crates.io/crates/nokv-object) | S3-compatible object body storage |
 | [`nokv-meta`](https://crates.io/crates/nokv-meta) | Schema, `MetadataCommand`, Holt store, service core |
+| [`nokv-control`](https://crates.io/crates/nokv-control) | Shard ownership, epochs, and failover coordination |
 | [`nokv-client`](https://crates.io/crates/nokv-client) | Rust SDK over the metadata service |
 | [`nokv-fuse`](https://crates.io/crates/nokv-fuse) | Low-level FUSE frontend |
 | [`nokv-server`](https://crates.io/crates/nokv-server) | Long-running metad process and framed RPC |
@@ -301,16 +307,37 @@ Implemented today:
   `aggregate`/`read`/`grep`) in the Rust SDK, with LLM-ready tool definitions;
 - long-running `nokv-server` with health, readiness, stats, manual GC, and
   framed binary metadata RPC;
+- `nokv-control` shard ownership store (in-memory plus optional etcd-backed
+  session leases behind the `etcd` feature) and a server shard-owner guard that
+  installs and renews lease epochs into the metadata commit fence;
+- multi-shard distributed metadata: subtree/path-prefix sharding (one Holt engine
+  per shard), high-bit shard-tagged global inodes, etcd control-plane routing with
+  client re-resolve on owner handoff, and cross-shard grafts that present a single
+  FUSE namespace across shards;
+- logical metadata log segment codec/archive/replay foundation, plus controlled
+  server sync shared-log ACK mode that publishes `LogRef` before successful RPC
+  ACKs, including grouped independent-batch log segments;
+- controlled metadata failover smoke that restores a checkpoint, replays the
+  shared log, starts the bumped-epoch owner, and accepts a new metadata write;
+- local multi-process metadata HA + multi-shard fleet smoke scripts that exercise
+  etcd ownership, RustFS-backed checkpoint/log archive, owner death, epoch
+  failover, post-failover replay, and a SIGSTOP/SIGCONT stale-owner fence mode;
+- a Python SDK (PyO3) and fsspec filesystem with reads, writes, namespace ops,
+  snapshots, atomic checkpoint publish/resolve, and a torch DataLoader + DCP
+  backend;
 - read-only snapshot mounts, snapshot-version reads, typed watch replay, and
   FUSE cache invalidation from watch events;
 - pending-object GC and metadata history GC tied to snapshot retention.
 
 Not implemented yet:
 
-- distributed metadata replication and HA — NoKV is single-node today;
+- consensus-replicated metadata (Raft/Paxos) — HA today is single-writer-per-shard
+  with checkpoint + shared-log failover, not replicated;
+- intra-subtree sharding (a single hot subtree is capped at one shard), learner
+  read scaling, and chaos-tested failover timing;
 - an MCP server for the agent verbs — in development, tracked in
   [#354](https://github.com/feichai0017/NoKV/issues/354);
-- Python/fsspec and Kubernetes CSI packages;
+- Kubernetes CSI packages;
 - full POSIX hardening such as ACL enforcement, broad external compatibility
   gate coverage, and mature multi-client cache coherence.
 
@@ -330,9 +357,15 @@ Key workloads:
 - `mdtest-easy` and `mdtest-hard` metadata smoke workloads;
 - `metadata-negative-lookup`, `artifact-index-lookup`, and
   `metadata-concurrent-read` Holt metadata read-path workloads;
+- `metadata-durability-batch` batch metadata create workload with comparable
+  `local-only` and `sync-shared-log` ACK phases;
 - `checkpoint-publish` object-backed checkpoint publish/read;
 - `training-read` dataset-shaped object reads;
-- `mlperf-dlio` generated MLPerf Storage/DLIO-style I/O shape.
+- `mlperf-dlio` generated MLPerf Storage/DLIO-style training and checkpoint
+  shape;
+- metadata HA smoke through `scripts/run-metadata-ha-smoke.sh` for owner leases,
+  epoch fencing, checkpoint restore, shared-log replay, failover RTO timing, and
+  stale-owner write rejection.
 
 All workloads are single-node service runs; see
 [docs/benchmarks.md](docs/benchmarks.md) for the full workload list, profiles,
@@ -347,10 +380,39 @@ the same package:
 cargo run --release -p nokv-bench --bin yanex-agent-bench -- list-tasks
 ```
 
+For the fast AI-training product gate, run:
+
+```bash
+scripts/run-ai-training-smoke.sh
+```
+
+The default gate covers Holt metadata read concurrency, checkpoint publish, and
+DLIO-style object reads/writes. Most benchmark workloads are still single-node
+service runs. Training-cluster claims need separate runs that report
+replication, cache, object-store, and durability settings.
+
+Run `scripts/run-ai-training-smoke.sh fuse-smoke` when the local machine has a
+working FUSE installation and you want the mounted POSIX smoke in the same
+workflow.
+
+For the local metadata HA gate, run:
+
+```bash
+scripts/run-metadata-ha-smoke.sh
+```
+
+It requires RustFS, AWS CLI, curl, and either a local `etcd` binary or
+`NOKV_HA_ETCD_ENDPOINTS` pointing at an external etcd cluster.
+Set `NOKV_HA_METRICS_JSON=/tmp/nokv-ha.json` to keep the emitted
+`HA_SMOKE_METRICS` JSON for CI or benchmark reports.
+Set `NOKV_HA_STALE_OWNER_CHAOS=1` to run the local stale-owner fence mode; that
+mode uses `NOKV_HA_OWNER_B_BIND` for the replacement owner.
+
 ## 📚 Documentation
 
 - [Architecture](docs/architecture.md)
 - [Product Design](docs/product-design.md)
+- [AI-Native Metadata HA And Fast Path](docs/metadata-ha-fast-path.md)
 - [Metadata Schema](docs/metadata-schema.md)
 - [Object Layout](docs/object-layout.md)
 - [Checkpointing](docs/checkpointing.md)

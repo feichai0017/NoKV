@@ -72,6 +72,111 @@ where
         Ok(projection.into())
     }
 
+    /// Graft a foreign subtree directory into this shard's namespace.
+    ///
+    /// `target_inode` is owned by ANOTHER shard (the subtree shard). This writes
+    /// ONLY the dentry projection — a stub directory attr embedded for the
+    /// foreign inode — and deliberately NO `inode_key` Inode record. Two reasons:
+    ///   1. Reads need nothing more: `lookup_plus`/`read_dir_plus` decode the
+    ///      attr embedded in the projection and never fetch `inode_key`, so the
+    ///      parent shard can satisfy `lookup(parent, name)` and `readdir(parent)`
+    ///      with just this dentry, returning the foreign inode as the child.
+    ///   2. Allocator safety: an Inode record for `target_inode` would be folded
+    ///      by the Inode arm of `recover_allocator_state` and could poison this
+    ///      shard's allocator. We never write one, and recovery's Dentry arm is
+    ///      shard-guarded so the foreign `child`/`attr.inode` here is excluded
+    ///      from this shard's high-water on a fallback rebuild.
+    ///
+    /// We do NOT call `next_inode()`: no local inode is minted. The graft is the
+    /// parent-shard half of a cross-shard mount point; the subtree dir itself is
+    /// created (with a real Inode record) on the owning shard.
+    pub fn create_graft(
+        &self,
+        parent: InodeId,
+        name: DentryName,
+        target_inode: InodeId,
+        mode: u32,
+        uid: u32,
+        gid: u32,
+    ) -> Result<DentryWithAttr, MetadError> {
+        let version = self.next_version()?;
+        let attr = directory_attr(target_inode, mode, uid, gid, version.get());
+        let projection = projection(parent, name, attr, None);
+        let command = self.create_graft_command(&projection, version)?;
+        self.commit_metadata(command)?;
+        Ok(projection.into())
+    }
+
+    /// Remove the parent-shard half of a cross-shard graft: the single dentry
+    /// projection under `parent` named `name`. This is the dedicated teardown
+    /// path that DELIBERATELY bypasses the `prepare_remove_empty_dir` graft guard
+    /// (which exists to stop a *blind* rmdir from orphaning the child subtree).
+    ///
+    /// Safety rails that keep this from becoming a generic delete escape hatch:
+    ///   - The target MUST be a graft (foreign child); a same-shard dentry is
+    ///     rejected with `NotDirectory`/`GraftPoint`-free `MetadError` so this can
+    ///     never delete a real local dir+inode (which would leak the inode and
+    ///     skip the PrefixEmpty check). A normal dir goes through `remove_empty_dir`.
+    ///   - Only the dentry projection is deleted — there is, by construction, no
+    ///     local Inode record for the foreign child, so there is nothing else to
+    ///     remove on this shard. The child subtree itself is reaped on its owning
+    ///     shard by the caller (`unregister_graft`).
+    ///
+    /// Idempotent: returns `Ok(None)` when the dentry is already absent.
+    pub fn remove_graft(
+        &self,
+        parent: InodeId,
+        name: &DentryName,
+    ) -> Result<Option<DentryWithAttr>, MetadError> {
+        let Some((entry, dentry_version)) = self.lookup_plus_for_write_plan(parent, name)? else {
+            return Ok(None);
+        };
+        if entry.attr.file_type != FileType::Directory {
+            return Err(MetadError::NotDirectory);
+        }
+        // Refuse to delete a same-shard child through this projection-only path:
+        // that would leak its Inode record and skip emptiness checking. Such a
+        // dentry is a normal directory and must use `remove_empty_dir`.
+        if !self.is_graft_child(&entry) {
+            return Err(MetadError::InvalidPath(
+                "remove_graft target is not a cross-shard graft point".to_owned(),
+            ));
+        }
+        let version = self.next_version()?;
+        let key = dentry_key(self.mount, parent, name);
+        self.commit_metadata(MetadataCommand {
+            request_id: request_id(b"remove-graft", self.mount, entry.attr.inode, version),
+            kind: CommandKind::RemoveEmptyDir,
+            read_version: predecessor(version)?,
+            commit_version: version,
+            primary_family: RecordFamily::Dentry,
+            primary_key: key.clone(),
+            // Only the dentry version is guarded: there is no Inode record and no
+            // local subtree to assert empty (the child's contents live on the
+            // owning shard). A lost idempotent re-run surfaces as PredicateFailed.
+            predicates: vec![PredicateRef {
+                family: RecordFamily::Dentry,
+                key: key.clone(),
+                predicate: Predicate::VersionEquals(dentry_version),
+            }],
+            mutations: vec![delete_mutation(RecordFamily::Dentry, key)],
+            watch: self
+                .watch_projection(
+                    parent,
+                    WatchEvent {
+                        kind: WatchEventKind::Remove,
+                        parent: Some(parent),
+                        name: Some(name.clone()),
+                        inode: entry.attr.inode,
+                        version: version.get(),
+                    },
+                )
+                .into_iter()
+                .collect(),
+        })?;
+        Ok(Some(entry))
+    }
+
     pub fn create_file(
         &self,
         parent: InodeId,
@@ -217,6 +322,11 @@ where
         new_parent: InodeId,
         new_name: DentryName,
     ) -> Result<DentryWithAttr, MetadError> {
+        // Fence a cross-shard hardlink before any lookup: the linked `inode` and
+        // the destination directory `new_parent` must both live in this shard (see
+        // `ensure_same_shard`). A hardlink across shards would name an inode from a
+        // foreign namespace, which this shard cannot own or GC.
+        self.ensure_same_shard(inode, new_parent)?;
         let version = self.next_version()?;
         let read_version = predecessor(version)?;
         let source_inode_key = inode_key(self.mount, inode);
@@ -633,14 +743,14 @@ where
             .iter()
             .map(|(_, batch)| batch.command.clone())
             .collect::<Vec<_>>();
-        let committed = self.metadata.commit_independent_batch(&commands);
+        let committed = self.commit_independent_metadata_batch(&commands);
         for ((index, batch), result) in prepared.into_iter().zip(committed) {
             match result {
                 Ok(_) => {
                     self.record_create_batch(kind, batch.entries.len());
                     results[index] = Some(Ok(batch.entries));
                 }
-                Err(err) => results[index] = Some(Err(err.into())),
+                Err(err) => results[index] = Some(Err(err)),
             }
         }
 
@@ -818,6 +928,13 @@ where
         let (entry, dentry_version) = self
             .lookup_plus_for_write_plan(parent, name)?
             .ok_or(MetadError::NotFound)?;
+        // A graft child is a foreign-shard directory; `unlink` on it would also
+        // hit the directory check below, but report the actionable graft-point
+        // error first (and guard the path explicitly) so a misrouted unlink can
+        // never delete the parent's dentry and strand the child subtree.
+        if self.is_graft_child(&entry) {
+            return Err(MetadError::GraftPoint);
+        }
         if entry.attr.file_type == FileType::Directory {
             return Err(MetadError::NotFile);
         }
@@ -971,9 +1088,9 @@ where
             .iter()
             .map(|(_, remove)| remove.command.clone())
             .collect::<Vec<_>>();
-        let committed = self.metadata.commit_independent_batch(&commands);
+        let committed = self.commit_independent_metadata_batch(&commands);
         for ((index, remove), result) in prepared.into_iter().zip(committed) {
-            results[index] = Some(result.map(|_| remove.entry).map_err(Into::into));
+            results[index] = Some(result.map(|_| remove.entry));
         }
 
         Ok(results
@@ -1005,7 +1122,7 @@ where
     ) -> Result<DentryWithAttr, MetadError> {
         let version = self.next_version()?;
         let prepared = self.prepare_remove_empty_dir(parent, name, path_components, version)?;
-        map_remove_empty_dir_commit(self.metadata.commit_metadata(prepared.command))?;
+        map_remove_empty_dir_commit(self.commit_metadata(prepared.command))?;
         Ok(prepared.entry)
     }
 
@@ -1024,6 +1141,13 @@ where
         }
         if entry.attr.inode == InodeId::root() {
             return Err(MetadError::CannotRemoveRoot);
+        }
+        // A graft point's child lives on another shard. `PrefixEmpty` below scans
+        // only THIS shard's dentry subspace, which is always empty for a foreign
+        // child, so a plain rmdir would succeed and orphan the whole child
+        // subtree. Reject; removal goes through the graft lifecycle.
+        if self.is_graft_child(&entry) {
+            return Err(MetadError::GraftPoint);
         }
         let source_key = dentry_key(self.mount, parent, name);
         let child_prefix = dentry_prefix(self.mount, entry.attr.inode);
@@ -1110,7 +1234,7 @@ where
             .iter()
             .map(|(_, remove)| remove.command.clone())
             .collect::<Vec<_>>();
-        let committed = self.metadata.commit_independent_batch(&commands);
+        let committed = self.commit_independent_metadata_batch(&commands);
         for ((index, remove), result) in prepared.into_iter().zip(committed) {
             results[index] = Some(map_remove_empty_dir_commit(result).map(|_| remove.entry));
         }
@@ -1200,6 +1324,40 @@ where
         )
     }
 
+    /// Authoritative cross-shard fence for inode-addressed dual-endpoint ops
+    /// (rename, hardlink). Both directory inodes must live in *this* service's
+    /// shard: an inode carries its owning shard in its high bits, so a `src` and
+    /// `dst` in different shards (or addressed to the wrong service by a
+    /// misrouted/buggy client) can never be one in-shard commit. Reject before any
+    /// lookup or mutation so the op fails as a clean `EXDEV` instead of resolving
+    /// the foreign endpoint as `NotFound` (or, worse, a partial cross-DB write).
+    ///
+    /// Within a single shard every inode carries that shard's index, so this is a
+    /// no-op for legitimate same-shard ops.
+    fn ensure_same_shard(&self, src: InodeId, dst: InodeId) -> Result<(), MetadError> {
+        let here = self.shard_index();
+        if src.shard_index() != here || dst.shard_index() != here {
+            return Err(MetadError::CrossShard {
+                source_shard: src.shard_index(),
+                dest_shard: dst.shard_index(),
+            });
+        }
+        Ok(())
+    }
+
+    /// Whether `entry` is a cross-shard graft point — a dentry in THIS shard
+    /// whose child inode is minted by ANOTHER shard. Such a dentry projects a
+    /// foreign subtree directory whose contents live on the owning shard, so any
+    /// emptiness check or content move performed here is blind to them. Callers
+    /// that delete or relink a dentry MUST reject these (see
+    /// [`MetadError::GraftPoint`]) and route through the graft lifecycle instead.
+    ///
+    /// For shard 0 every owned child carries shard index 0 (`compose(0, x) == x`),
+    /// so this is always `false` and the single-shard paths are unchanged.
+    fn is_graft_child(&self, entry: &DentryWithAttr) -> bool {
+        entry.attr.inode.shard_index() != self.shard_index()
+    }
+
     pub(super) fn rename_inner(
         &self,
         parent: InodeId,
@@ -1209,6 +1367,10 @@ where
         replace: bool,
         path_index: Option<(&[DentryName], &[DentryName])>,
     ) -> Result<RenameReplaceResult, MetadError> {
+        // Fence cross-shard renames before touching the namespace (see
+        // `ensure_same_shard`): `parent`/`new_parent` are the source and
+        // destination directory inodes.
+        self.ensure_same_shard(parent, new_parent)?;
         let (source, source_version) = self
             .lookup_plus_for_write_plan(parent, name)?
             .ok_or(MetadError::NotFound)?;
@@ -1218,9 +1380,24 @@ where
                 replaced: None,
             });
         }
+        // Moving a graft point would rewrite the parent's dentry projection under
+        // a new key (and copy the foreign attr/body), detaching it from where the
+        // child shard's namespace is rooted and orphaning the subtree. A
+        // self-rename (handled above) is harmless; any actual move is rejected.
+        if self.is_graft_child(&source) {
+            return Err(MetadError::GraftPoint);
+        }
         let destination = self.lookup_plus_for_write_plan(new_parent, &new_name)?;
         if !replace && destination.is_some() {
             return Err(MetadataError::PredicateFailed.into());
+        }
+        // Overwriting a graft point as the rename DESTINATION would delete its
+        // foreign child's dentry here and decrement a foreign inode this shard
+        // does not own — same orphaning hazard from the other side.
+        if let Some((entry, _)) = &destination {
+            if self.is_graft_child(entry) {
+                return Err(MetadError::GraftPoint);
+            }
         }
         if replace {
             if source.attr.file_type == FileType::Directory {
@@ -1606,6 +1783,66 @@ where
         })
     }
 
+    /// Build the cross-shard graft command. Unlike every other create path this
+    /// emits a SINGLE mutation — the dentry projection — and NO Inode record for
+    /// the (foreign) child. Predicates match the single-projection create path:
+    /// parent inode must Exist (the graft lands under a real local directory) and
+    /// the dentry must NotExist (idempotent re-runs surface as `PredicateFailed`,
+    /// which the client orchestration tolerates).
+    fn create_graft_command(
+        &self,
+        projection: &DentryProjection,
+        version: Version,
+    ) -> Result<MetadataCommand, MetadError> {
+        let parent = projection.dentry.parent;
+        let dentry = dentry_key(self.mount, parent, &projection.dentry.name);
+        Ok(MetadataCommand {
+            request_id: request_id(
+                kind_name(CommandKind::CreateDir),
+                self.mount,
+                parent,
+                version,
+            ),
+            kind: CommandKind::CreateDir,
+            read_version: predecessor(version)?,
+            commit_version: version,
+            primary_family: RecordFamily::Dentry,
+            primary_key: dentry.clone(),
+            predicates: vec![
+                PredicateRef {
+                    family: RecordFamily::Inode,
+                    key: inode_key(self.mount, parent),
+                    predicate: Predicate::Exists,
+                },
+                PredicateRef {
+                    family: RecordFamily::Dentry,
+                    key: dentry.clone(),
+                    predicate: Predicate::NotExists,
+                },
+            ],
+            // Exactly one mutation: the dentry projection. No Inode record for the
+            // foreign child — that is the allocator-safety invariant of a graft.
+            mutations: vec![put_projection_mutation(
+                RecordFamily::Dentry,
+                dentry,
+                projection,
+            )],
+            watch: self
+                .watch_projection(
+                    parent,
+                    WatchEvent {
+                        kind: create_watch_kind(CommandKind::CreateDir),
+                        parent: Some(parent),
+                        name: Some(projection.dentry.name.clone()),
+                        inode: projection.attr.inode,
+                        version: version.get(),
+                    },
+                )
+                .into_iter()
+                .collect(),
+        })
+    }
+
     pub(super) fn commit_create_projection_with_chunks(
         &self,
         kind: CommandKind,
@@ -1856,12 +2093,12 @@ where
     }
 }
 
-fn map_remove_empty_dir_commit(
-    result: Result<CommitResult, MetadataError>,
-) -> Result<(), MetadError> {
+fn map_remove_empty_dir_commit(result: Result<CommitResult, MetadError>) -> Result<(), MetadError> {
     match result {
         Ok(_) => Ok(()),
-        Err(MetadataError::PredicateFailed) => Err(MetadError::DirectoryNotEmpty),
-        Err(err) => Err(err.into()),
+        Err(MetadError::Metadata(MetadataError::PredicateFailed)) => {
+            Err(MetadError::DirectoryNotEmpty)
+        }
+        Err(err) => Err(err),
     }
 }

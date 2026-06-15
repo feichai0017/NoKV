@@ -966,6 +966,38 @@ where
         })
     }
 
+    pub fn open_path_read_plan_batch(
+        &self,
+        requests: &[super::OpenPathReadPlanRequest],
+    ) -> Result<Vec<OpenPathReadPlan>, MetadError> {
+        if requests.is_empty() {
+            return Ok(Vec::new());
+        }
+        let version = self.read_version()?;
+        requests
+            .iter()
+            .map(|request| {
+                let path_plan = self.path_read_plan_at_version(
+                    &request.path,
+                    request.offset,
+                    request.len,
+                    request.expected_generation,
+                    version,
+                )?;
+                let lease = read_lease_for_generation(
+                    path_plan.metadata.attr.inode,
+                    path_plan.metadata.attr.generation,
+                    version,
+                );
+                Ok(OpenPathReadPlan {
+                    metadata: path_plan.metadata,
+                    lease,
+                    plan: path_plan.plan,
+                })
+            })
+            .collect()
+    }
+
     fn body_read_plan_at_version(
         &self,
         inode: InodeId,

@@ -12,11 +12,15 @@ use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use nokv_client::{ArtifactMetadata, DataFabricReadStats, NoKvFsClient};
+use nokv_client::{
+    ArtifactMetadata, DataFabricReadStats, MetadataClient, NoKvFsClient, PathLayoutOpenRequest,
+    PathRangeReadRequest, PathReadRange,
+};
+use nokv_control::{ControlStore, InMemoryControlStore, ShardId};
 use nokv_meta::{
     DentryWithAttr, HistoryGcOptions, MetadataServiceStats, MetadataStoreStats, ObjectGcOptions,
     ObjectTransferStats, RenameReplaceResult,
@@ -26,8 +30,8 @@ use nokv_object::{
     ObjectStoreConfig, S3ObjectStoreOptions, TieredObjectStoreOptions, TieredObjectStoreStats,
     TieredPutPolicy,
 };
-use nokv_server::{Server, ServerOptions};
-use nokv_types::{MountId, PathMetadata};
+use nokv_server::{Server, ServerOptions, ServerShardOwnerOptions, ServerSharedLogOptions};
+use nokv_types::{MountId, PathMetadata, DEFAULT_SHARD_INDEX};
 
 const DEFAULT_MODE_DIR: u32 = 0o755;
 const DEFAULT_MODE_FILE: u32 = 0o644;
@@ -50,6 +54,8 @@ enum Workload {
     MetadataNegativeLookup,
     ArtifactIndexLookup,
     MetadataConcurrentRead,
+    MetadataDurabilityBatch,
+    MetadataShardRouting,
     CheckpointPublish,
     TrainingRead,
     NativeLayoutRead,
@@ -71,6 +77,8 @@ struct Config {
     hot_object_max_bytes: Option<u64>,
     hot_fill_mode: HotFillMode,
     read_repeats: usize,
+    range_stride: usize,
+    range_coalesce_gap_bytes: u64,
     block_cache: bool,
     checkpoint_bytes: Option<usize>,
     sample_bytes: Option<usize>,
@@ -207,6 +215,9 @@ struct ResultRow {
     metadata_atomic_apply_commands: u64,
     metadata_atomic_apply_max_batch: u64,
     metadata_atomic_apply_ns: u64,
+    metadata_log_segments_archived: u64,
+    metadata_log_entries_archived: u64,
+    metadata_log_archive_bytes: u64,
     path_index_lookups: u64,
     path_index_hits: u64,
     path_index_misses: u64,
@@ -378,6 +389,23 @@ trait BenchClient: Sync {
             .map(|range| self.read_path(path, range.offset, range.len, expected_generation))
             .collect()
     }
+    fn read_range_batches(
+        &self,
+        requests: &[ShardRangeReadRequest],
+        max_gap_bytes: u64,
+    ) -> Result<Vec<Vec<Vec<u8>>>, BenchError> {
+        requests
+            .iter()
+            .map(|request| {
+                self.read_ranges(
+                    &request.path,
+                    &request.ranges,
+                    Some(request.generation),
+                    max_gap_bytes,
+                )
+            })
+            .collect()
+    }
     fn stats(&self) -> Result<BenchStats, BenchError>;
 }
 
@@ -385,6 +413,13 @@ struct ServiceBenchClient {
     client: NoKvFsClient<ConfiguredObjectStore>,
     objects: ConfiguredObjectStore,
     stats_addr: SocketAddr,
+    include_server_object_stats: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MetadataDurabilityMode {
+    LocalOnly,
+    SyncSharedLog,
 }
 
 impl BenchClient for ServiceBenchClient {
@@ -508,9 +543,71 @@ impl BenchClient for ServiceBenchClient {
             .map_err(from_client)
     }
 
+    fn read_paths(&self, requests: &[NativeReadRequest]) -> Result<Vec<Vec<u8>>, BenchError> {
+        let requests = requests
+            .iter()
+            .map(|request| {
+                PathLayoutOpenRequest::new(&request.path, request.offset, request.len)
+                    .with_expected_generation(request.generation)
+            })
+            .collect::<Vec<_>>();
+        NoKvFsClient::read_paths(&self.client, &requests)
+            .map(|reads| reads.into_iter().map(|read| read.bytes).collect())
+            .map_err(from_client)
+    }
+
+    fn read_ranges(
+        &self,
+        path: &str,
+        ranges: &[NativeReadRange],
+        expected_generation: Option<u64>,
+        max_gap_bytes: u64,
+    ) -> Result<Vec<Vec<u8>>, BenchError> {
+        let ranges = ranges
+            .iter()
+            .map(|range| (range.offset, range.len))
+            .collect::<Vec<_>>();
+        NoKvFsClient::read_path_ranges(
+            &self.client,
+            path,
+            &ranges,
+            expected_generation,
+            max_gap_bytes,
+        )
+        .map_err(from_client)
+    }
+
+    fn read_range_batches(
+        &self,
+        requests: &[ShardRangeReadRequest],
+        max_gap_bytes: u64,
+    ) -> Result<Vec<Vec<Vec<u8>>>, BenchError> {
+        let requests = requests
+            .iter()
+            .map(|request| {
+                PathRangeReadRequest::new(
+                    &request.path,
+                    request
+                        .ranges
+                        .iter()
+                        .map(|range| PathReadRange::new(range.offset, range.len))
+                        .collect(),
+                )
+                .with_expected_generation(request.generation)
+                .with_max_gap_bytes(max_gap_bytes)
+            })
+            .collect::<Vec<_>>();
+        NoKvFsClient::read_path_ranges_batch(&self.client, &requests).map_err(from_client)
+    }
+
     fn stats(&self) -> Result<BenchStats, BenchError> {
         let mut stats = fetch_server_stats(self.stats_addr)?;
-        stats.object = NoKvFsClient::object_stats(&self.client);
+        let client_object_stats = NoKvFsClient::object_stats(&self.client);
+        stats.object = if self.include_server_object_stats {
+            add_object_transfer_stats(stats.object, client_object_stats)
+        } else {
+            client_object_stats
+        };
         stats.data_fabric = NoKvFsClient::data_fabric_stats(&self.client).map_err(from_client)?;
         stats.tiered_object = self
             .objects
@@ -526,16 +623,105 @@ impl BenchClient for ServiceBenchClient {
     }
 }
 
+fn add_object_transfer_stats(
+    left: ObjectTransferStats,
+    right: ObjectTransferStats,
+) -> ObjectTransferStats {
+    ObjectTransferStats {
+        object_puts: left.object_puts.saturating_add(right.object_puts),
+        object_put_bytes: left.object_put_bytes.saturating_add(right.object_put_bytes),
+        object_gets: left.object_gets.saturating_add(right.object_gets),
+        object_get_bytes: left.object_get_bytes.saturating_add(right.object_get_bytes),
+        coalesced_gets: left.coalesced_gets.saturating_add(right.coalesced_gets),
+        coalesced_get_bytes: left
+            .coalesced_get_bytes
+            .saturating_add(right.coalesced_get_bytes),
+        cache_hits: left.cache_hits.saturating_add(right.cache_hits),
+        cache_hit_bytes: left.cache_hit_bytes.saturating_add(right.cache_hit_bytes),
+        prefetch_enqueued: left
+            .prefetch_enqueued
+            .saturating_add(right.prefetch_enqueued),
+        prefetch_dropped: left.prefetch_dropped.saturating_add(right.prefetch_dropped),
+        prefetch_completed: left
+            .prefetch_completed
+            .saturating_add(right.prefetch_completed),
+        prefetch_failed: left.prefetch_failed.saturating_add(right.prefetch_failed),
+        prefetch_object_gets: left
+            .prefetch_object_gets
+            .saturating_add(right.prefetch_object_gets),
+        prefetch_object_get_bytes: left
+            .prefetch_object_get_bytes
+            .saturating_add(right.prefetch_object_get_bytes),
+        prefetch_cache_hits: left
+            .prefetch_cache_hits
+            .saturating_add(right.prefetch_cache_hits),
+        prefetch_cache_hit_bytes: left
+            .prefetch_cache_hit_bytes
+            .saturating_add(right.prefetch_cache_hit_bytes),
+        read_plan_cache_hits: left
+            .read_plan_cache_hits
+            .saturating_add(right.read_plan_cache_hits),
+        read_plan_cache_misses: left
+            .read_plan_cache_misses
+            .saturating_add(right.read_plan_cache_misses),
+        object_writeback_enqueued: left
+            .object_writeback_enqueued
+            .saturating_add(right.object_writeback_enqueued),
+        object_writeback_inline: left
+            .object_writeback_inline
+            .saturating_add(right.object_writeback_inline),
+        object_writeback_completed: left
+            .object_writeback_completed
+            .saturating_add(right.object_writeback_completed),
+        object_writeback_failed: left
+            .object_writeback_failed
+            .saturating_add(right.object_writeback_failed),
+        object_writeback_staged_bytes: left
+            .object_writeback_staged_bytes
+            .saturating_add(right.object_writeback_staged_bytes),
+        object_writeback_uploaded_bytes: left
+            .object_writeback_uploaded_bytes
+            .saturating_add(right.object_writeback_uploaded_bytes),
+        object_writeback_queue_wait_ns: left
+            .object_writeback_queue_wait_ns
+            .saturating_add(right.object_writeback_queue_wait_ns),
+        object_writeback_queue_max_wait_ns: left
+            .object_writeback_queue_max_wait_ns
+            .max(right.object_writeback_queue_max_wait_ns),
+        object_writeback_upload_ns: left
+            .object_writeback_upload_ns
+            .saturating_add(right.object_writeback_upload_ns),
+        object_writeback_upload_max_ns: left
+            .object_writeback_upload_max_ns
+            .max(right.object_writeback_upload_max_ns),
+        object_writeback_collect_ns: left
+            .object_writeback_collect_ns
+            .saturating_add(right.object_writeback_collect_ns),
+        object_writeback_digest_ns: left
+            .object_writeback_digest_ns
+            .saturating_add(right.object_writeback_digest_ns),
+        object_writeback_store_put_ns: left
+            .object_writeback_store_put_ns
+            .saturating_add(right.object_writeback_store_put_ns),
+        object_writeback_cache_put_ns: left
+            .object_writeback_cache_put_ns
+            .saturating_add(right.object_writeback_cache_put_ns),
+        manifest_chunks: left.manifest_chunks.saturating_add(right.manifest_chunks),
+        manifest_blocks: left.manifest_blocks.saturating_add(right.manifest_blocks),
+    }
+}
+
 fn main() {
     if let Err(err) = run(env::args().skip(1).collect()) {
         eprintln!("error: {err}");
         eprintln!(
             "\nUsage: nokv-bench [--profile smoke|standard|long] \
-             [--workload all|metadata-smoke|mdtest-easy|mdtest-hard|metadata-negative-lookup|artifact-index-lookup|metadata-concurrent-read|checkpoint-publish|training-read|native-layout-read|ai-dataset-batch-read|ai-shard-range-read|mlperf-dlio|demo-dataset] \
+             [--workload all|metadata-smoke|mdtest-easy|mdtest-hard|metadata-negative-lookup|artifact-index-lookup|metadata-concurrent-read|metadata-durability-batch|metadata-shard-routing|checkpoint-publish|training-read|native-layout-read|ai-dataset-batch-read|ai-shard-range-read|mlperf-dlio|demo-dataset] \
              [--root PATH] [--object-backend s3|rustfs] \
              [--hot-object-root PATH] [--hot-object-max-bytes N] [--hot-fill-mode inline|background] \
              [--object-concurrency N] [--checkpoint-bytes N] [--sample-bytes N] \
-             [--read-repeats N] [--block-cache on|off] [--keep]"
+             [--read-repeats N] [--range-stride N] [--range-coalesce-gap-bytes N] \
+             [--block-cache on|off] [--keep]"
         );
         std::process::exit(2);
     }
@@ -565,6 +751,12 @@ fn run_one(
     shape: &WorkloadShape,
     workload: Workload,
 ) -> Result<Vec<ResultRow>, BenchError> {
+    if workload == Workload::MetadataDurabilityBatch {
+        return bench_metadata_durability_batch(config, shape);
+    }
+    if workload == Workload::MetadataShardRouting {
+        return bench_metadata_shard_routing(config, shape);
+    }
     let label = workload_name(workload);
     let client = client_for(config, label)?;
     client.bootstrap_root(DEFAULT_MODE_DIR, DEFAULT_UID, DEFAULT_GID)?;
@@ -579,6 +771,10 @@ fn run_one(
         }
         Workload::MetadataConcurrentRead => {
             bench_metadata_concurrent_read(client.as_ref(), config, shape)?
+        }
+        Workload::MetadataDurabilityBatch => unreachable!("durability batch uses two clients"),
+        Workload::MetadataShardRouting => {
+            unreachable!("shard routing builds its own in-process fleet")
         }
         Workload::CheckpointPublish => bench_checkpoint_publish(client.as_ref(), config, shape)?,
         Workload::TrainingRead => bench_training_read(client.as_ref(), config, shape)?,
@@ -918,6 +1114,638 @@ fn bench_metadata_concurrent_read(
     }))
 }
 
+fn bench_metadata_durability_batch(
+    config: &Config,
+    shape: &WorkloadShape,
+) -> Result<Vec<ResultRow>, BenchError> {
+    let local = service_client_for_with_metadata_durability(
+        config,
+        "metadata-durability-batch-local-only",
+        MetadataDurabilityMode::LocalOnly,
+    )?;
+    local.bootstrap_root(DEFAULT_MODE_DIR, DEFAULT_UID, DEFAULT_GID)?;
+    let local = bench_metadata_durability_batch_phase(
+        local.as_ref(),
+        config,
+        shape,
+        MetadataDurabilityMode::LocalOnly,
+    )?;
+
+    let sync = service_client_for_with_metadata_durability(
+        config,
+        "metadata-durability-batch-sync-shared-log",
+        MetadataDurabilityMode::SyncSharedLog,
+    )?;
+    sync.bootstrap_root(DEFAULT_MODE_DIR, DEFAULT_UID, DEFAULT_GID)?;
+    let sync = bench_metadata_durability_batch_phase(
+        sync.as_ref(),
+        config,
+        shape,
+        MetadataDurabilityMode::SyncSharedLog,
+    )?;
+
+    Ok(vec![local, sync])
+}
+
+fn bench_metadata_durability_batch_phase(
+    client: &dyn BenchClient,
+    config: &Config,
+    shape: &WorkloadShape,
+    mode: MetadataDurabilityMode,
+) -> Result<ResultRow, BenchError> {
+    let root = "/metadata-durability-batch";
+    client.mkdir(root, DEFAULT_MODE_DIR, DEFAULT_UID, DEFAULT_GID)?;
+    let dir_paths = (0..shape.dirs)
+        .map(|dir| format!("{root}/shard-{dir:05}"))
+        .collect::<Vec<_>>();
+    client.mkdirs(&dir_paths, DEFAULT_MODE_DIR, DEFAULT_UID, DEFAULT_GID)?;
+
+    let mut file_paths = Vec::with_capacity(shape.dirs * shape.files_per_dir);
+    for file in 0..shape.files_per_dir {
+        for dir_path in &dir_paths {
+            file_paths.push(format!("{dir_path}/sample-{file:05}.meta"));
+        }
+    }
+
+    let before = client.stats()?;
+    let start = Instant::now();
+    let entries = client.create_files(&file_paths, DEFAULT_MODE_FILE, DEFAULT_UID, DEFAULT_GID)?;
+    let seconds = start.elapsed().as_secs_f64();
+    if entries.len() != file_paths.len() {
+        return Err(BenchError::Client(format!(
+            "metadata durability batch created {} entries, expected {}",
+            entries.len(),
+            file_paths.len()
+        )));
+    }
+    let checksum = entries
+        .iter()
+        .fold(0_u64, |acc, entry| acc.wrapping_add(entry.attr.inode.get()));
+    black_box(checksum);
+
+    let mut row = row(RowInput {
+        workload: "metadata-durability-batch",
+        profile: config.profile,
+        operations: file_paths.len(),
+        seconds,
+        bytes: 0,
+        samples: 0,
+        stats: stats_delta(before, client.stats()?),
+        object_concurrency: config.object_concurrency,
+        read_repeats: config.read_repeats,
+        block_cache: config.block_cache,
+        checksum,
+        shape: format!(
+            "dirs={} files_per_dir={} timed_ops=batch_create_files_across_dirs file_body=metadata-only",
+            shape.dirs, shape.files_per_dir
+        ),
+        caveat: metadata_durability_caveat(config, mode),
+    });
+    row.phase = metadata_durability_phase(mode);
+    Ok(row)
+}
+
+/// Number of subtree shards the distributed-metadata routing workload fans across
+/// (plus the implicit default shard 0). Kept small and fixed so the in-process
+/// fleet is bounded and the row is reproducible across runs/profiles. Overridable
+/// at runtime via `NOKV_BENCH_SHARD_ROUTING_SHARDS` for the scaling sweep.
+const SHARD_ROUTING_SHARDS: usize = 4;
+
+/// Env var: number of subtree shards the routing fleet fans across. Defaults to
+/// [`SHARD_ROUTING_SHARDS`] so unset runs (and the unit tests) keep today's shape.
+const SHARD_ROUTING_SHARDS_ENV: &str = "NOKV_BENCH_SHARD_ROUTING_SHARDS";
+
+/// Env var: number of worker threads driving the *fleet* phase of the routing
+/// bench. Defaults to 1, which is the original strictly-sequential single-client
+/// path — so the baseline behavior is unchanged unless this is set. For the
+/// scaling demo set it equal to the shard count.
+const SHARD_ROUTING_CONCURRENCY_ENV: &str = "NOKV_BENCH_SHARD_ROUTING_CONCURRENCY";
+
+/// Read a positive-`usize` env override, falling back to `default` when the var is
+/// unset, empty, unparseable, or zero. Keeping the fallback total means a typo
+/// degrades to the documented default rather than silently disabling the phase.
+fn shard_routing_env_usize(key: &str, default: usize) -> usize {
+    match std::env::var(key) {
+        Ok(raw) => raw
+            .trim()
+            .parse::<usize>()
+            .ok()
+            .filter(|v| *v > 0)
+            .unwrap_or(default),
+        Err(_) => default,
+    }
+}
+
+/// An in-process metadata fleet for the routing microbench: one `Server` per
+/// shard (the default shard 0 plus `SHARD_ROUTING_SHARDS` subtree shards), all
+/// sharing one `InMemoryControlStore`, fronted by a fleet `MetadataClient` that
+/// resolves each request to its owning shard's endpoint. Each member's serve loop
+/// runs on its own thread; the per-shard stats addresses let the bench read back
+/// how many commits each shard actually absorbed.
+struct ShardRoutingFleet {
+    client: MetadataClient,
+    /// Retained so concurrent drivers can mint one *independent* fleet
+    /// `MetadataClient` per worker from the same control plane (see
+    /// [`ShardRoutingFleet::new_client`]).
+    control: Arc<dyn ControlStore>,
+    mount: MountId,
+    stats_addrs: Vec<SocketAddr>,
+    prefixes: Vec<String>,
+}
+
+impl ShardRoutingFleet {
+    /// Build a fleet of `shard_count` subtree shards (`/shard-00`..) plus the
+    /// default shard. `root` scopes each member's meta dir. With `shard_count == 0`
+    /// this is the single-shard baseline: just the default shard owns everything.
+    fn build(root: &std::path::Path, shard_count: usize) -> Result<Self, BenchError> {
+        let control = Arc::new(InMemoryControlStore::new());
+
+        let mut stats_addrs = Vec::with_capacity(shard_count + 1);
+        let mut prefixes = Vec::with_capacity(shard_count + 1);
+
+        // Register every shard identity BEFORE any owner acquires so each slot
+        // reads its index/prefix from the control record.
+        nokv_control::register_shard(
+            control.as_ref(),
+            ShardId::new("mount-1:/"),
+            "/",
+            DEFAULT_SHARD_INDEX,
+        )
+        .map_err(from_client)?;
+        for shard in 0..shard_count {
+            let prefix = format!("/shard-{shard:02}");
+            let shard_index = (shard + 1) as u16;
+            nokv_control::register_shard(
+                control.as_ref(),
+                ShardId::new(format!("mount-1:{prefix}")),
+                prefix.clone(),
+                shard_index,
+            )
+            .map_err(from_client)?;
+        }
+
+        // Bring up the default shard owner.
+        let default_addr = spawn_routing_member(root, Arc::clone(&control), "mount-1:/")?;
+        stats_addrs.push(default_addr);
+        prefixes.push("/".to_owned());
+        // Bring up each subtree shard owner.
+        for shard in 0..shard_count {
+            let prefix = format!("/shard-{shard:02}");
+            let addr =
+                spawn_routing_member(root, Arc::clone(&control), &format!("mount-1:{prefix}"))?;
+            stats_addrs.push(addr);
+            prefixes.push(prefix);
+        }
+
+        let mount = MountId::new(1).unwrap();
+        let control = Arc::clone(&control) as Arc<dyn ControlStore>;
+        let client = MetadataClient::fleet(Arc::clone(&control), mount).map_err(from_client)?;
+        Ok(Self {
+            client,
+            control,
+            mount,
+            stats_addrs,
+            prefixes,
+        })
+    }
+
+    /// Mint a fresh fleet `MetadataClient` against the same in-memory control
+    /// plane and the already-running shard members. Each concurrent worker takes
+    /// its own client so the per-connection write mutex and the per-client
+    /// connection pool are not shared — the shared-client path serializes every
+    /// request behind one `Mutex<TcpStream>` per shard, which would cap fleet
+    /// throughput regardless of shard count.
+    fn new_client(&self) -> Result<MetadataClient, BenchError> {
+        MetadataClient::fleet(Arc::clone(&self.control), self.mount).map_err(from_client)
+    }
+
+    /// Sum of `commit_total` across every shard's metadata store — the server-side
+    /// corroboration that the client's routed creates actually committed somewhere.
+    fn total_commits(&self) -> Result<u64, BenchError> {
+        let mut total: u64 = 0;
+        for addr in &self.stats_addrs {
+            total = total.saturating_add(fetch_server_stats(*addr)?.metadata_store.commit_total);
+        }
+        Ok(total)
+    }
+
+    /// Per-shard `commit_total`, indexed the same as `prefixes`/`stats_addrs`
+    /// (slot 0 is the default shard). This is the measured request distribution the
+    /// row reports, proving the fleet client fanned writes across the shards rather
+    /// than funneling them to one node.
+    fn per_shard_commits(&self) -> Result<Vec<u64>, BenchError> {
+        self.stats_addrs
+            .iter()
+            .map(|addr| Ok(fetch_server_stats(*addr)?.metadata_store.commit_total))
+            .collect()
+    }
+}
+
+/// Open one routing-fleet member: a fresh `Server` owning `shard_id`, served on a
+/// background thread off a bound localhost port. Its `NodeId` is its bind addr, so
+/// the control record's endpoint resolves straight back to it for the fleet
+/// client. The workload is metadata-only, so each member opens its own (never
+/// contacted) fake-S3 object store from its config. Returns the bind address
+/// (also the stats/HTTP address).
+fn spawn_routing_member(
+    root: &std::path::Path,
+    control: Arc<InMemoryControlStore>,
+    shard_id: &str,
+) -> Result<SocketAddr, BenchError> {
+    let listener = TcpListener::bind("127.0.0.1:0").map_err(from_io)?;
+    let bind = listener.local_addr().map_err(from_io)?;
+    let sanitized = shard_id
+        .chars()
+        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '_' })
+        .collect::<String>();
+    let options = ServerOptions {
+        bind,
+        mount: MountId::new(1).expect("mount id is non-zero"),
+        meta_path: root.join(format!("meta-{sanitized}")),
+        metadata_checkpoint_archive_prefix: None,
+        object: ObjectStoreConfig::s3(S3ObjectStoreOptions {
+            bucket: "unused".to_owned(),
+            root: "/".to_owned(),
+            region: "auto".to_owned(),
+            endpoint: Some("http://127.0.0.1:1".to_owned()),
+            access_key_id: Some("unused".to_owned()),
+            secret_access_key: Some("unused".to_owned()),
+            session_token: None,
+            virtual_host_style: false,
+            skip_signature: true,
+        }),
+        uid: DEFAULT_UID,
+        gid: DEFAULT_GID,
+        object_gc: ObjectGcOptions {
+            interval: Duration::from_secs(3600),
+            limit: 1024,
+            run_immediately: false,
+            read_lease_grace: ObjectGcOptions::default().read_lease_grace,
+        },
+        history_gc: HistoryGcOptions {
+            interval: Duration::from_secs(3600),
+            limit: 1024,
+            run_immediately: false,
+        },
+        control: None,
+    };
+    // No renewal worker, so nothing races the measurement.
+    let server = Server::open_with_control(
+        options,
+        control as Arc<dyn ControlStore>,
+        vec![ServerShardOwnerOptions::fresh(shard_id, bind.to_string()).with_renewal(None)],
+    )
+    .map_err(from_client)?;
+    thread::spawn(move || {
+        let _ = server.serve(listener);
+    });
+    Ok(bind)
+}
+
+/// The path set the routing workload drives, split into the order it must be
+/// created in.
+struct ShardRoutingPaths {
+    /// Top-level `/shard-NN` directories — one per subtree shard. Each is the
+    /// shard's own prefix directory and must exist in that shard's namespace before
+    /// anything lands under it (the prefix is not auto-created on acquire).
+    shard_dirs: Vec<String>,
+    /// `/shard-NN/dir-XXXXX` subdirectories, spread across shards by prefix.
+    dir_paths: Vec<String>,
+    /// `/shard-NN/dir-XXXXX/file-YYYYY` leaf files.
+    file_paths: Vec<String>,
+}
+
+/// Build the path set the routing workload drives: `dirs` subdirectories (each
+/// holding `files_per_dir` files) spread evenly across `shard_count` subtree
+/// shards by their top-level prefix, so the fleet client must fan them across
+/// shards. The same set is replayed against the single-shard baseline (where
+/// every path routes to shard 0) so the two rows are directly comparable.
+fn shard_routing_paths(shape: &WorkloadShape, shard_count: usize) -> ShardRoutingPaths {
+    let shard_dirs = (0..shard_count)
+        .map(|shard| format!("/shard-{shard:02}"))
+        .collect::<Vec<_>>();
+    let mut dir_paths = Vec::new();
+    let mut file_paths = Vec::new();
+    for dir in 0..shape.dirs {
+        let shard = dir % shard_count;
+        let dir_path = format!("/shard-{shard:02}/dir-{dir:05}");
+        dir_paths.push(dir_path.clone());
+        for file in 0..shape.files_per_dir {
+            file_paths.push(format!("{dir_path}/file-{file:05}"));
+        }
+    }
+    ShardRoutingPaths {
+        shard_dirs,
+        dir_paths,
+        file_paths,
+    }
+}
+
+/// Deliverable 2 — distributed-metadata routing microbench. Emits two comparable
+/// rows over one path set: a single-shard baseline (every path served by shard 0)
+/// and an `N`-shard fleet (paths fanned across shards by prefix, each request
+/// routed to its owning shard's endpoint by the fleet client). The fleet row's
+/// `shape` carries the measured per-shard request distribution and the routing
+/// overhead vs the baseline so the two are read together.
+fn bench_metadata_shard_routing(
+    config: &Config,
+    shape: &WorkloadShape,
+) -> Result<Vec<ResultRow>, BenchError> {
+    let shard_count = shard_routing_env_usize(SHARD_ROUTING_SHARDS_ENV, SHARD_ROUTING_SHARDS);
+    let concurrency = shard_routing_env_usize(SHARD_ROUTING_CONCURRENCY_ENV, 1);
+    let paths = shard_routing_paths(shape, shard_count);
+    // ops = shard-dir mkdirs + subdir mkdirs + file creates + file lookups.
+    let total_ops = paths.shard_dirs.len() + paths.dir_paths.len() + paths.file_paths.len() * 2;
+
+    // --- Single-shard baseline: one server owns "/", so every path routes to
+    // shard 0. This is the apples-to-apples reference the fleet row is measured
+    // against (same path set, same op mix, one node).
+    let baseline_root = config.root.join("metadata-shard-routing-baseline");
+    let baseline = ShardRoutingFleet::build(&baseline_root, 0)?;
+    baseline
+        .client
+        .bootstrap_root(DEFAULT_MODE_DIR, DEFAULT_UID, DEFAULT_GID)
+        .map_err(from_client)?;
+    // The baseline always stays sequential (concurrency=1): it is the one-node
+    // reference the fleet's aggregate ops/s is measured against, so it must not
+    // itself benefit from worker parallelism.
+    let (baseline_seconds, baseline_checksum) = drive_shard_routing(&baseline.client, &paths)?;
+    let baseline_commits = baseline.total_commits()?;
+    let baseline_per_op_us = baseline_seconds * 1_000_000.0 / total_ops.max(1) as f64;
+    let baseline_ops_per_sec = shard_routing_ops_per_sec(total_ops, baseline_seconds);
+    let mut baseline_row = shard_routing_row(
+        config,
+        shape,
+        total_ops,
+        baseline_seconds,
+        baseline_checksum,
+        baseline_commits,
+        format!(
+            "topology=single-shard shards=1 concurrency=1 dirs={} files_per_dir={} paths={} op_mix=mkdir+create+lookup baseline_per_op_us={baseline_per_op_us:.3} fleet_ops_per_sec={baseline_ops_per_sec:.0} file_body=metadata-only",
+            shape.dirs,
+            shape.files_per_dir,
+            paths.file_paths.len(),
+        ),
+        "single-node baseline: one in-process Holt metadata server owns every path (shard 0); sequential reference for the fleet routing row".to_owned(),
+    );
+    baseline_row.phase = "single-shard-baseline";
+
+    // --- N-shard fleet: the same path set spread across `shard_count` subtree
+    // shards, each served by its own in-process server; the fleet client resolves
+    // every request to the owning shard's endpoint.
+    let fleet_root = config.root.join("metadata-shard-routing-fleet");
+    let fleet = ShardRoutingFleet::build(&fleet_root, shard_count)?;
+    fleet
+        .client
+        .bootstrap_root(DEFAULT_MODE_DIR, DEFAULT_UID, DEFAULT_GID)
+        .map_err(from_client)?;
+    // concurrency==1 keeps the original single-client sequential path verbatim;
+    // >1 fans the file create/lookup phases across that many workers, each with
+    // its own fleet client, so routed throughput can scale with shard count.
+    let (fleet_seconds, fleet_checksum) = if concurrency <= 1 {
+        drive_shard_routing(&fleet.client, &paths)?
+    } else {
+        drive_shard_routing_concurrent(&fleet, &paths, concurrency)?
+    };
+    let fleet_commits = fleet.total_commits()?;
+    let per_shard = fleet.per_shard_commits()?;
+
+    // Server-side request distribution across the subtree shards (slot 0 is the
+    // default shard, which only absorbs the root bootstrap here since every path
+    // is under a /shard-NN prefix).
+    let subtree_commits: Vec<u64> = per_shard.iter().skip(1).copied().collect();
+    let max_shard = subtree_commits.iter().copied().max().unwrap_or(0);
+    let min_shard = subtree_commits.iter().copied().min().unwrap_or(0);
+    let routing_overhead_pct = if baseline_seconds > 0.0 {
+        (fleet_seconds - baseline_seconds) / baseline_seconds * 100.0
+    } else {
+        0.0
+    };
+    let fleet_per_op_us = fleet_seconds * 1_000_000.0 / total_ops.max(1) as f64;
+    let fleet_ops_per_sec = shard_routing_ops_per_sec(total_ops, fleet_seconds);
+    // Even fan-out check: every subtree shard absorbed the same commit count.
+    let even_fanout = subtree_commits.len() > 1 && max_shard == min_shard;
+    let distribution = per_shard
+        .iter()
+        .zip(&fleet.prefixes)
+        .map(|(commits, prefix)| format!("{prefix}={commits}"))
+        .collect::<Vec<_>>()
+        .join(",");
+
+    let client_mode = if concurrency <= 1 {
+        "shared-single-client-sequential"
+    } else {
+        "per-worker-fleet-clients"
+    };
+    let mut fleet_row = shard_routing_row(
+        config,
+        shape,
+        total_ops,
+        fleet_seconds,
+        fleet_checksum,
+        fleet_commits,
+        format!(
+            "topology=fleet shards={shard_count} concurrency={concurrency} client_mode={client_mode} dirs={} files_per_dir={} paths={} op_mix=mkdir+create+lookup per_shard_commits=[{distribution}] subtree_commit_skew_max_minus_min={} even_fanout={even_fanout} fleet_per_op_us={fleet_per_op_us:.3} fleet_ops_per_sec={fleet_ops_per_sec:.0} routing_overhead_vs_single_shard_pct={routing_overhead_pct:.2} file_body=metadata-only",
+            shape.dirs,
+            shape.files_per_dir,
+            paths.file_paths.len(),
+            max_shard.saturating_sub(min_shard),
+        ),
+        format!(
+            "SINGLE-BOX, IN-PROCESS routing only: {shard_count} subtree shards plus the default shard, each an in-process Holt metadata server on a localhost TCP port, all sharing ONE in-memory control store; driven by {concurrency} worker thread(s) ({client_mode}). per-shard counts are server-side commit_total. NOT a multi-machine cluster, NOT a real network, NO etcd/quorum — this shows how routed metadata throughput scales with shard parallelism ON ONE MULTI-CORE BOX (expect a plateau near the physical core count), not cross-machine scaling"
+        ),
+    );
+    // The exact shard count lives in `shape` (`shards=N`); the phase label stays a
+    // stable static so downstream CSV consumers can group on it.
+    fleet_row.phase = "fleet-multi-shard";
+
+    Ok(vec![baseline_row, fleet_row])
+}
+
+/// Drive the routing op mix against `client`: create the top-level `/shard-NN`
+/// directories, then every subdirectory, then every file, then look every file
+/// back up (so each path is both written and routed-for-read). Returns the
+/// elapsed wall time and a checksum of the touched inodes (folded so the work is
+/// not optimized away). Everything is issued one-by-one (not batched) so each
+/// path routes independently — batch create coalesces by parent and would mask
+/// the per-request routing this workload exists to measure.
+fn drive_shard_routing(
+    client: &MetadataClient,
+    paths: &ShardRoutingPaths,
+) -> Result<(f64, u64), BenchError> {
+    let start = Instant::now();
+    let mut checksum = 0_u64;
+    for dir in paths.shard_dirs.iter().chain(paths.dir_paths.iter()) {
+        let entry = client
+            .mkdir(dir, DEFAULT_MODE_DIR, DEFAULT_UID, DEFAULT_GID)
+            .map_err(from_client)?;
+        checksum = checksum.wrapping_add(entry.attr.inode.get());
+    }
+    for path in &paths.file_paths {
+        let entry = client
+            .create_file(path, DEFAULT_MODE_FILE, DEFAULT_UID, DEFAULT_GID)
+            .map_err(from_client)?;
+        checksum = checksum.wrapping_add(entry.attr.inode.get());
+    }
+    for path in &paths.file_paths {
+        let entry = client
+            .lookup(path)
+            .map_err(from_client)?
+            .ok_or_else(|| BenchError::Client(format!("shard-routing lookup missed {path}")))?;
+        checksum = checksum.wrapping_add(entry.attr.inode.get());
+    }
+    black_box(checksum);
+    Ok((start.elapsed().as_secs_f64(), checksum))
+}
+
+/// Concurrent variant of [`drive_shard_routing`] for the fleet scaling sweep.
+/// Directories are still created single-threaded (a file create needs its parent
+/// dir present, and the dirs themselves fan across shards by prefix so they are a
+/// negligible fraction of the op mix), then the file creates and the file lookups
+/// are each split into `workers` disjoint contiguous slices of `file_paths` and
+/// driven in parallel. Crucially every worker gets its *own* fleet client
+/// (`fleet.new_client()`) so threads do not serialize on a shared connection's
+/// write mutex — that is what lets routed throughput actually rise with shard
+/// count on a multi-core box. The whole mkdir+create+lookup span is timed so the
+/// returned seconds/`total_ops` are defined identically to the sequential path,
+/// keeping the baseline and fleet rows directly comparable.
+fn drive_shard_routing_concurrent(
+    fleet: &ShardRoutingFleet,
+    paths: &ShardRoutingPaths,
+    concurrency: usize,
+) -> Result<(f64, u64), BenchError> {
+    let workers = concurrency.max(1).min(paths.file_paths.len().max(1));
+    let start = Instant::now();
+
+    // Phase 1: directories, single-threaded (parents must exist before files).
+    let mut checksum = 0_u64;
+    for dir in paths.shard_dirs.iter().chain(paths.dir_paths.iter()) {
+        let entry = fleet
+            .client
+            .mkdir(dir, DEFAULT_MODE_DIR, DEFAULT_UID, DEFAULT_GID)
+            .map_err(from_client)?;
+        checksum = checksum.wrapping_add(entry.attr.inode.get());
+    }
+
+    // One independent fleet client per worker, reused across both the create and
+    // the lookup phase so we pay the route-resolution + connect cost once.
+    let clients: Vec<MetadataClient> = (0..workers)
+        .map(|_| fleet.new_client())
+        .collect::<Result<_, _>>()?;
+
+    // Phase 2: file creates, partitioned across workers.
+    let create_sum = run_shard_routing_phase(&clients, &paths.file_paths, |client, path| {
+        let entry = client
+            .create_file(path, DEFAULT_MODE_FILE, DEFAULT_UID, DEFAULT_GID)
+            .map_err(from_client)?;
+        Ok(entry.attr.inode.get())
+    })?;
+
+    // Phase 3: file lookups, same partition (each path written then routed-for-read).
+    let lookup_sum = run_shard_routing_phase(&clients, &paths.file_paths, |client, path| {
+        let entry = client
+            .lookup(path)
+            .map_err(from_client)?
+            .ok_or_else(|| BenchError::Client(format!("shard-routing lookup missed {path}")))?;
+        Ok(entry.attr.inode.get())
+    })?;
+
+    checksum = checksum.wrapping_add(create_sum).wrapping_add(lookup_sum);
+    black_box(checksum);
+    Ok((start.elapsed().as_secs_f64(), checksum))
+}
+
+/// Run one routing phase (create or lookup) over `paths`, splitting them into
+/// `clients.len()` disjoint contiguous slices — one worker thread per client —
+/// and folding each touched inode into a wrapping checksum. Contiguous slicing
+/// (rather than round-robin) keeps a worker's slice spanning several `/shard-NN`
+/// prefixes, so every worker still drives every shard and the fan-out the row
+/// reports stays even. The first error aborts the scope and is surfaced.
+fn run_shard_routing_phase<F>(
+    clients: &[MetadataClient],
+    paths: &[String],
+    op: F,
+) -> Result<u64, BenchError>
+where
+    F: Fn(&MetadataClient, &str) -> Result<u64, BenchError> + Sync,
+{
+    let workers = clients.len().max(1);
+    let chunk = paths.len().div_ceil(workers).max(1);
+    let checksum = AtomicU64::new(0);
+    let error: Mutex<Option<BenchError>> = Mutex::new(None);
+    std::thread::scope(|scope| {
+        for (client, slice) in clients.iter().zip(paths.chunks(chunk)) {
+            let checksum = &checksum;
+            let error = &error;
+            let op = &op;
+            scope.spawn(move || {
+                let mut local = 0_u64;
+                for path in slice {
+                    match op(client, path) {
+                        Ok(value) => local = local.wrapping_add(value),
+                        Err(err) => {
+                            *error.lock().expect("shard-routing error lock") = Some(err);
+                            return;
+                        }
+                    }
+                }
+                checksum.fetch_add(local, Ordering::Relaxed);
+            });
+        }
+    });
+    if let Some(err) = error.into_inner().expect("shard-routing error lock") {
+        return Err(err);
+    }
+    Ok(checksum.load(Ordering::Relaxed))
+}
+
+/// Aggregate ops/s for a routing phase: `operations` total ops over `seconds`
+/// wall-clock. Returns 0.0 for a zero/degenerate duration so the row never
+/// divides by zero.
+fn shard_routing_ops_per_sec(operations: usize, seconds: f64) -> f64 {
+    if seconds > 0.0 {
+        operations as f64 / seconds
+    } else {
+        0.0
+    }
+}
+
+/// Assemble a result row for a shard-routing phase. The routing microbench is
+/// metadata-only and has no object/data-fabric traffic, so all object/tier
+/// counters are zero; the load-bearing numbers are `ops_per_second`,
+/// `metadata_commits`, and the per-shard distribution carried in `shape`.
+#[allow(clippy::too_many_arguments)]
+fn shard_routing_row(
+    config: &Config,
+    _shape: &WorkloadShape,
+    operations: usize,
+    seconds: f64,
+    checksum: u64,
+    metadata_commits: u64,
+    shape_desc: String,
+    caveat: String,
+) -> ResultRow {
+    let mut row = row(RowInput {
+        workload: "metadata-shard-routing",
+        profile: config.profile,
+        operations,
+        seconds,
+        bytes: 0,
+        samples: 0,
+        stats: BenchStats::default(),
+        object_concurrency: config.object_concurrency,
+        read_repeats: config.read_repeats,
+        block_cache: config.block_cache,
+        checksum,
+        shape: shape_desc,
+        caveat,
+    });
+    // The aggregate commit count is gathered from the fleet's own per-shard stats
+    // endpoints rather than a single server, so set it on the row directly.
+    row.metadata_commits = metadata_commits;
+    row
+}
+
 fn bench_checkpoint_publish(
     client: &dyn BenchClient,
     config: &Config,
@@ -1245,7 +2073,7 @@ fn bench_ai_dataset_batch_read_phase(
         ),
         caveat: object_caveat(
             config,
-            "AI dataset batch read through benchmark-side read_path loops; cold phase should expose object fallbacks, warm phase should expose local hot hits",
+            "AI dataset batch read through SDK batch layout-open plus parallel object reads; cold phase should expose object fallbacks, warm phase should expose local hot hits",
         ),
     });
     row.phase = phase;
@@ -1284,10 +2112,12 @@ fn bench_ai_shard_range_read(
             let offset = u64::try_from(payload.len())
                 .map_err(|_| BenchError::Client("shard offset exceeds u64".to_owned()))?;
             payload.extend(dataset_payload(shard, sample, shape.dataset_file_bytes));
-            ranges.push(NativeReadRange {
-                offset,
-                len: shape.dataset_file_bytes,
-            });
+            if sample % config.range_stride == 0 {
+                ranges.push(NativeReadRange {
+                    offset,
+                    len: shape.dataset_file_bytes,
+                });
+            }
         }
         let entry = client.put_artifact(
             &path,
@@ -1319,15 +2149,18 @@ fn bench_ai_shard_range_read_phase(
 ) -> Result<ResultRow, BenchError> {
     let before = client.stats()?;
     let start = Instant::now();
-    let checksum = run_parallel(requests.len(), config.object_concurrency, |index| {
-        let request = &requests[index];
-        let reads =
-            client.read_ranges(&request.path, &request.ranges, Some(request.generation), 0)?;
-        Ok(reads
-            .iter()
-            .map(|bytes| bytes.iter().map(|byte| *byte as u64).sum::<u64>())
-            .sum::<u64>())
-    })?;
+    let batch_size = config.object_concurrency.max(1);
+    let mut checksum = 0_u64;
+    for chunk in requests.chunks(batch_size) {
+        let reads = client.read_range_batches(chunk, config.range_coalesce_gap_bytes)?;
+        checksum = checksum.saturating_add(
+            reads
+                .iter()
+                .flat_map(|request_reads| request_reads.iter())
+                .map(|bytes| bytes.iter().map(|byte| *byte as u64).sum::<u64>())
+                .sum::<u64>(),
+        );
+    }
     black_box(checksum);
     let samples = requests
         .iter()
@@ -1351,15 +2184,19 @@ fn bench_ai_shard_range_read_phase(
         block_cache: config.block_cache,
         checksum,
         shape: format!(
-            "phase={} shard_count={} samples_per_shard={} sample_bytes={} max_gap_bytes=0 range_coalescing=true layout_plan_per_shard=true",
+            "phase={} shard_count={} batch_size={} samples_per_shard={} selected_samples_per_shard={} sample_bytes={} range_stride={} max_gap_bytes={} range_coalescing=true range_batch_open=true",
             phase,
             requests.len(),
+            batch_size,
             shape.dataset_files_per_dir.clamp(1, 256),
-            shape.dataset_file_bytes
+            requests.first().map(|request| request.ranges.len()).unwrap_or(0),
+            shape.dataset_file_bytes,
+            config.range_stride,
+            config.range_coalesce_gap_bytes
         ),
         caveat: object_caveat(
             config,
-            "AI shard range read through benchmark-side read_path loops; warm phase should expose local hot hits",
+            "AI shard range read through SDK batch coalesced range reads; warm phase should expose local hot hits",
         ),
     });
     row.phase = phase;
@@ -1654,6 +2491,18 @@ fn row(input: RowInput) -> ResultRow {
         metadata_atomic_apply_commands: input.stats.metadata_store.atomic_apply_command_total,
         metadata_atomic_apply_max_batch: input.stats.metadata_store.atomic_apply_max_batch,
         metadata_atomic_apply_ns: input.stats.metadata_store.atomic_apply_ns_total,
+        metadata_log_segments_archived: input
+            .stats
+            .metadata_service
+            .metadata_log_segments_archived_total,
+        metadata_log_entries_archived: input
+            .stats
+            .metadata_service
+            .metadata_log_entries_archived_total,
+        metadata_log_archive_bytes: input
+            .stats
+            .metadata_service
+            .metadata_log_archive_bytes_total,
         path_index_lookups,
         path_index_hits,
         path_index_misses: input.stats.metadata_service.path_index_miss_total,
@@ -1719,7 +2568,7 @@ fn boundary_labels(config: &Config, workload: &str) -> BoundaryLabels {
 }
 
 fn csv_header() -> &'static str {
-    "boundary,system,metadata_tier,object_backend,cache_state,concurrency,tool,profile,workload,phase,operations,seconds,ops_per_second,throughput_MiB_s,p50_us,p99_us,cost_breakdown,samples_per_second,object_puts,object_put_bytes,object_gets,object_get_bytes,coalesced_gets,coalesced_get_bytes,cache_hits,cache_hit_bytes,cache_hit_rate,prefetch_enqueued,prefetch_dropped,prefetch_completed,prefetch_failed,prefetch_object_gets,prefetch_object_get_bytes,prefetch_cache_hits,prefetch_cache_hit_bytes,read_plan_cache_hits,read_plan_cache_misses,object_writeback_enqueued,object_writeback_inline,object_writeback_completed,object_writeback_failed,object_writeback_staged_bytes,object_writeback_uploaded_bytes,object_writeback_queue_wait_ns,object_writeback_queue_max_wait_ns,object_writeback_upload_ns,object_writeback_upload_max_ns,object_writeback_collect_ns,object_writeback_digest_ns,object_writeback_store_put_ns,object_writeback_cache_put_ns,manifest_chunks,manifest_blocks,data_fabric_planned_blocks,data_fabric_local_nvme_hits,data_fabric_object_fallbacks,data_fabric_object_gets,data_fabric_object_get_bytes,data_fabric_coalesced_ranges,data_fabric_coalesced_range_bytes,data_fabric_cache_hits,data_fabric_cache_hit_bytes,tiered_hot_gets,tiered_hot_hits,tiered_hot_misses,tiered_hot_errors,tiered_cold_gets,tiered_cold_get_bytes,tiered_cold_puts,tiered_cold_put_errors,tiered_hot_puts,tiered_hot_put_errors,tiered_hot_fills,tiered_hot_fill_enqueued,tiered_hot_fill_coalesced,tiered_hot_fill_errors,tiered_cold_deletes,tiered_hot_deletes,tiered_hot_delete_errors,tiered_hot_put_ns,tiered_pending_cold_put_ns,tiered_cold_put_enqueue_ns,local_hot_resident_objects,local_hot_resident_bytes,local_hot_max_bytes,local_hot_evictions,local_hot_eviction_bytes,local_hot_admission_rejections,local_hot_puts,local_hot_put_bytes,local_hot_put_total_ns,local_hot_put_prepare_ns,local_hot_put_write_ns,local_hot_put_sync_ns,local_hot_put_rename_ns,local_hot_put_record_ns,metadata_commits,metadata_dedupe_hits,metadata_predicates,metadata_prefix_empty_predicates,metadata_gets,metadata_get_user_strong,metadata_get_write_plan_local,metadata_get_snapshot,metadata_scans,metadata_scan_user_strong,metadata_scan_write_plan_local,metadata_scan_snapshot,metadata_scan_visited,metadata_scan_returned,metadata_history_lookups,metadata_current_puts,metadata_current_deletes,metadata_history_writes,metadata_watch_writes,metadata_dedupe_writes,metadata_commit_prepare_ns,metadata_atomic_applies,metadata_atomic_apply_commands,metadata_atomic_apply_max_batch,metadata_atomic_apply_ns,path_index_lookups,path_index_hits,path_index_misses,path_index_stale,path_index_scan_stale,path_index_fallback,path_index_hit_rate,create_files_batches,create_files_entries,create_dirs_batches,create_dirs_entries,read_dir_plus_calls,read_dir_plus_entries,read_dir_plus_projection_hits,read_dir_plus_projection_hit_rate,object_concurrency,read_repeats,block_cache,checksum,shape,caveat"
+    "boundary,system,metadata_tier,object_backend,cache_state,concurrency,tool,profile,workload,phase,operations,seconds,ops_per_second,throughput_MiB_s,p50_us,p99_us,cost_breakdown,samples_per_second,object_puts,object_put_bytes,object_gets,object_get_bytes,coalesced_gets,coalesced_get_bytes,cache_hits,cache_hit_bytes,cache_hit_rate,prefetch_enqueued,prefetch_dropped,prefetch_completed,prefetch_failed,prefetch_object_gets,prefetch_object_get_bytes,prefetch_cache_hits,prefetch_cache_hit_bytes,read_plan_cache_hits,read_plan_cache_misses,object_writeback_enqueued,object_writeback_inline,object_writeback_completed,object_writeback_failed,object_writeback_staged_bytes,object_writeback_uploaded_bytes,object_writeback_queue_wait_ns,object_writeback_queue_max_wait_ns,object_writeback_upload_ns,object_writeback_upload_max_ns,object_writeback_collect_ns,object_writeback_digest_ns,object_writeback_store_put_ns,object_writeback_cache_put_ns,manifest_chunks,manifest_blocks,data_fabric_planned_blocks,data_fabric_local_nvme_hits,data_fabric_object_fallbacks,data_fabric_object_gets,data_fabric_object_get_bytes,data_fabric_coalesced_ranges,data_fabric_coalesced_range_bytes,data_fabric_cache_hits,data_fabric_cache_hit_bytes,tiered_hot_gets,tiered_hot_hits,tiered_hot_misses,tiered_hot_errors,tiered_cold_gets,tiered_cold_get_bytes,tiered_cold_puts,tiered_cold_put_errors,tiered_hot_puts,tiered_hot_put_errors,tiered_hot_fills,tiered_hot_fill_enqueued,tiered_hot_fill_coalesced,tiered_hot_fill_errors,tiered_cold_deletes,tiered_hot_deletes,tiered_hot_delete_errors,tiered_hot_put_ns,tiered_pending_cold_put_ns,tiered_cold_put_enqueue_ns,local_hot_resident_objects,local_hot_resident_bytes,local_hot_max_bytes,local_hot_evictions,local_hot_eviction_bytes,local_hot_admission_rejections,local_hot_puts,local_hot_put_bytes,local_hot_put_total_ns,local_hot_put_prepare_ns,local_hot_put_write_ns,local_hot_put_sync_ns,local_hot_put_rename_ns,local_hot_put_record_ns,metadata_commits,metadata_dedupe_hits,metadata_predicates,metadata_prefix_empty_predicates,metadata_gets,metadata_get_user_strong,metadata_get_write_plan_local,metadata_get_snapshot,metadata_scans,metadata_scan_user_strong,metadata_scan_write_plan_local,metadata_scan_snapshot,metadata_scan_visited,metadata_scan_returned,metadata_history_lookups,metadata_current_puts,metadata_current_deletes,metadata_history_writes,metadata_watch_writes,metadata_dedupe_writes,metadata_commit_prepare_ns,metadata_atomic_applies,metadata_atomic_apply_commands,metadata_atomic_apply_max_batch,metadata_atomic_apply_ns,metadata_log_segments_archived,metadata_log_entries_archived,metadata_log_archive_bytes,path_index_lookups,path_index_hits,path_index_misses,path_index_stale,path_index_scan_stale,path_index_fallback,path_index_hit_rate,create_files_batches,create_files_entries,create_dirs_batches,create_dirs_entries,read_dir_plus_calls,read_dir_plus_entries,read_dir_plus_projection_hits,read_dir_plus_projection_hit_rate,object_concurrency,read_repeats,block_cache,checksum,shape,caveat"
 }
 
 fn csv_row(row: &ResultRow, labels: &BoundaryLabels) -> String {
@@ -1847,6 +2696,9 @@ fn csv_row(row: &ResultRow, labels: &BoundaryLabels) -> String {
         row.metadata_atomic_apply_commands.to_string(),
         row.metadata_atomic_apply_max_batch.to_string(),
         row.metadata_atomic_apply_ns.to_string(),
+        row.metadata_log_segments_archived.to_string(),
+        row.metadata_log_entries_archived.to_string(),
+        row.metadata_log_archive_bytes.to_string(),
         row.path_index_lookups.to_string(),
         row.path_index_hits.to_string(),
         row.path_index_misses.to_string(),
@@ -2288,6 +3140,18 @@ fn stats_delta(before: BenchStats, after: BenchStats) -> BenchStats {
                 .metadata_service
                 .read_dir_plus_projection_hit_total
                 .saturating_sub(before.metadata_service.read_dir_plus_projection_hit_total),
+            metadata_log_segments_archived_total: after
+                .metadata_service
+                .metadata_log_segments_archived_total
+                .saturating_sub(before.metadata_service.metadata_log_segments_archived_total),
+            metadata_log_entries_archived_total: after
+                .metadata_service
+                .metadata_log_entries_archived_total
+                .saturating_sub(before.metadata_service.metadata_log_entries_archived_total),
+            metadata_log_archive_bytes_total: after
+                .metadata_service
+                .metadata_log_archive_bytes_total
+                .saturating_sub(before.metadata_service.metadata_log_archive_bytes_total),
         },
     }
 }
@@ -2298,6 +3162,25 @@ fn metadata_only_caveat(config: &Config) -> String {
         object_backend_name(config.object_backend),
         local_metadata_caveat()
     )
+}
+
+fn metadata_durability_phase(mode: MetadataDurabilityMode) -> &'static str {
+    match mode {
+        MetadataDurabilityMode::LocalOnly => "local-only",
+        MetadataDurabilityMode::SyncSharedLog => "sync-shared-log",
+    }
+}
+
+fn metadata_durability_caveat(config: &Config, mode: MetadataDurabilityMode) -> String {
+    match mode {
+        MetadataDurabilityMode::LocalOnly => {
+            "single Holt metadata server; ACK after local metadata commit; timed op is batch create across dirs".to_owned()
+        }
+        MetadataDurabilityMode::SyncSharedLog => format!(
+            "single Holt metadata server plus in-memory control owner; ACK after local metadata commit, grouped shared-log segment archive, and LogRef publish; object_backend={}; no etcd quorum",
+            object_backend_name(config.object_backend)
+        ),
+    }
 }
 
 fn object_caveat(config: &Config, path: &str) -> String {
@@ -2335,13 +3218,21 @@ fn client_for(config: &Config, workload: &str) -> Result<Box<dyn BenchClient>, B
 }
 
 fn service_client_for(config: &Config, workload: &str) -> Result<Box<dyn BenchClient>, BenchError> {
+    service_client_for_with_metadata_durability(config, workload, MetadataDurabilityMode::LocalOnly)
+}
+
+fn service_client_for_with_metadata_durability(
+    config: &Config,
+    workload: &str,
+    durability: MetadataDurabilityMode,
+) -> Result<Box<dyn BenchClient>, BenchError> {
     let meta = config.root.join(workload).join("meta");
     let object = object_config_for(config, workload);
     let objects = object.clone().open().map_err(from_client)?;
     let client_objects = objects.clone();
     let listener = TcpListener::bind("127.0.0.1:0").map_err(from_io)?;
     let bind = listener.local_addr().map_err(from_io)?;
-    let server = Server::open(ServerOptions {
+    let options = ServerOptions {
         bind,
         mount: MountId::new(1).expect("mount id is non-zero"),
         meta_path: meta,
@@ -2360,7 +3251,22 @@ fn service_client_for(config: &Config, workload: &str) -> Result<Box<dyn BenchCl
             limit: 1024,
             run_immediately: false,
         },
-    })
+        control: None,
+    };
+    let server = match durability {
+        MetadataDurabilityMode::LocalOnly => Server::open(options),
+        MetadataDurabilityMode::SyncSharedLog => Server::open_with_control(
+            options,
+            Arc::new(InMemoryControlStore::new()),
+            vec![
+                ServerShardOwnerOptions::fresh("mount-1:/", format!("bench-{workload}"))
+                    .with_renewal(None)
+                    .with_shared_log(Some(ServerSharedLogOptions::new(format!(
+                        "metadata/bench/{workload}/shared-log"
+                    )))),
+            ],
+        ),
+    }
     .map_err(from_client)?;
     thread::spawn(move || {
         let _ = server.serve(listener);
@@ -2371,6 +3277,7 @@ fn service_client_for(config: &Config, workload: &str) -> Result<Box<dyn BenchCl
         client,
         objects: client_objects,
         stats_addr: bind,
+        include_server_object_stats: durability == MetadataDurabilityMode::SyncSharedLog,
     }))
 }
 
@@ -2483,6 +3390,15 @@ fn fetch_server_stats(address: SocketAddr) -> Result<BenchStats, BenchError> {
                 body,
                 "read_dir_plus_projection_hit_total",
             )?,
+            metadata_log_segments_archived_total: json_u64(
+                body,
+                "metadata_log_segments_archived_total",
+            )?,
+            metadata_log_entries_archived_total: json_u64(
+                body,
+                "metadata_log_entries_archived_total",
+            )?,
+            metadata_log_archive_bytes_total: json_u64(body, "metadata_log_archive_bytes_total")?,
         },
     })
 }
@@ -2602,6 +3518,8 @@ fn parse(args: Vec<String>) -> Result<Config, BenchError> {
     let mut hot_object_max_bytes = None;
     let mut hot_fill_mode = HotFillMode::Inline;
     let mut read_repeats = 1_usize;
+    let mut range_stride = 1_usize;
+    let mut range_coalesce_gap_bytes = 0_u64;
     let mut block_cache = true;
     let mut checkpoint_bytes = None;
     let mut sample_bytes = None;
@@ -2701,6 +3619,18 @@ fn parse(args: Vec<String>) -> Result<Config, BenchError> {
                 read_repeats =
                     parse_positive_usize(value(&args, index, "--read-repeats")?, "--read-repeats")?;
             }
+            "--range-stride" => {
+                index += 1;
+                range_stride =
+                    parse_positive_usize(value(&args, index, "--range-stride")?, "--range-stride")?;
+            }
+            "--range-coalesce-gap-bytes" => {
+                index += 1;
+                range_coalesce_gap_bytes = parse_u64(
+                    value(&args, index, "--range-coalesce-gap-bytes")?,
+                    "--range-coalesce-gap-bytes",
+                )?;
+            }
             "--block-cache" => {
                 index += 1;
                 block_cache = parse_block_cache(value(&args, index, "--block-cache")?)?;
@@ -2727,6 +3657,8 @@ fn parse(args: Vec<String>) -> Result<Config, BenchError> {
         hot_object_max_bytes,
         hot_fill_mode,
         read_repeats,
+        range_stride,
+        range_coalesce_gap_bytes,
         block_cache,
         checkpoint_bytes,
         sample_bytes,
@@ -2807,6 +3739,11 @@ fn parse_positive_u64(raw: &str, option: &'static str) -> Result<u64, BenchError
         .ok_or_else(|| BenchError::UnknownOption(format!("{option} {raw}")))
 }
 
+fn parse_u64(raw: &str, option: &'static str) -> Result<u64, BenchError> {
+    raw.parse::<u64>()
+        .map_err(|_| BenchError::UnknownOption(format!("{option} {raw}")))
+}
+
 fn parse_hot_fill_mode(raw: &str) -> Result<HotFillMode, BenchError> {
     match raw {
         "inline" => Ok(HotFillMode::Inline),
@@ -2855,6 +3792,8 @@ fn parse_workload(raw: &str) -> Result<Workload, BenchError> {
         "metadata-negative-lookup" => Ok(Workload::MetadataNegativeLookup),
         "artifact-index-lookup" => Ok(Workload::ArtifactIndexLookup),
         "metadata-concurrent-read" => Ok(Workload::MetadataConcurrentRead),
+        "metadata-durability-batch" => Ok(Workload::MetadataDurabilityBatch),
+        "metadata-shard-routing" => Ok(Workload::MetadataShardRouting),
         "checkpoint-publish" => Ok(Workload::CheckpointPublish),
         "training-read" => Ok(Workload::TrainingRead),
         "native-layout-read" => Ok(Workload::NativeLayoutRead),
@@ -2874,6 +3813,8 @@ fn expand_workloads(workload: Workload) -> Vec<Workload> {
             Workload::MetadataNegativeLookup,
             Workload::ArtifactIndexLookup,
             Workload::MetadataConcurrentRead,
+            Workload::MetadataDurabilityBatch,
+            Workload::MetadataShardRouting,
             Workload::CheckpointPublish,
             Workload::TrainingRead,
             Workload::NativeLayoutRead,
@@ -2887,6 +3828,8 @@ fn expand_workloads(workload: Workload) -> Vec<Workload> {
             Workload::MdtestHard,
             Workload::MetadataNegativeLookup,
             Workload::MetadataConcurrentRead,
+            Workload::MetadataDurabilityBatch,
+            Workload::MetadataShardRouting,
         ],
         other => vec![other],
     }
@@ -2943,6 +3886,8 @@ fn workload_name(workload: Workload) -> &'static str {
         Workload::MetadataNegativeLookup => "metadata-negative-lookup",
         Workload::ArtifactIndexLookup => "artifact-index-lookup",
         Workload::MetadataConcurrentRead => "metadata-concurrent-read",
+        Workload::MetadataDurabilityBatch => "metadata-durability-batch",
+        Workload::MetadataShardRouting => "metadata-shard-routing",
         Workload::CheckpointPublish => "checkpoint-publish",
         Workload::TrainingRead => "training-read",
         Workload::NativeLayoutRead => "native-layout-read",
@@ -3059,6 +4004,8 @@ mod tests {
         assert!(config.keep);
         assert_eq!(config.object_concurrency, 1);
         assert_eq!(config.read_repeats, 1);
+        assert_eq!(config.range_stride, 1);
+        assert_eq!(config.range_coalesce_gap_bytes, 0);
         assert!(config.block_cache);
     }
 
@@ -3109,6 +4056,10 @@ mod tests {
             s("65536"),
             s("--read-repeats"),
             s("3"),
+            s("--range-stride"),
+            s("2"),
+            s("--range-coalesce-gap-bytes"),
+            s("512"),
             s("--block-cache"),
             s("off"),
         ])
@@ -3117,6 +4068,8 @@ mod tests {
         assert_eq!(config.checkpoint_bytes, Some(1_048_576));
         assert_eq!(config.sample_bytes, Some(65_536));
         assert_eq!(config.read_repeats, 3);
+        assert_eq!(config.range_stride, 2);
+        assert_eq!(config.range_coalesce_gap_bytes, 512);
         assert!(!config.block_cache);
     }
 
@@ -3136,6 +4089,12 @@ mod tests {
     fn parse_metadata_concurrent_read_workload() {
         let config = parse(vec![s("--workload"), s("metadata-concurrent-read")]).unwrap();
         assert_eq!(config.workload, Workload::MetadataConcurrentRead);
+    }
+
+    #[test]
+    fn parse_metadata_durability_batch_workload() {
+        let config = parse(vec![s("--workload"), s("metadata-durability-batch")]).unwrap();
+        assert_eq!(config.workload, Workload::MetadataDurabilityBatch);
     }
 
     #[test]
@@ -3175,7 +4134,7 @@ mod tests {
 
     #[test]
     fn stats_json_parser_reads_metadata_fields() {
-        let body = r#"{"object_puts":41,"object_put_bytes":42,"object_gets":43,"object_get_bytes":44,"coalesced_gets":45,"coalesced_get_bytes":46,"cache_hits":47,"cache_hit_bytes":48,"prefetch_enqueued":49,"prefetch_dropped":50,"prefetch_completed":51,"prefetch_failed":52,"prefetch_object_gets":53,"prefetch_object_get_bytes":54,"prefetch_cache_hits":55,"prefetch_cache_hit_bytes":56,"read_plan_cache_hits":57,"read_plan_cache_misses":58,"object_writeback_enqueued":59,"object_writeback_inline":60,"object_writeback_completed":62,"object_writeback_failed":63,"object_writeback_staged_bytes":64,"object_writeback_uploaded_bytes":65,"object_writeback_queue_wait_ns":66,"object_writeback_queue_max_wait_ns":67,"object_writeback_upload_ns":68,"object_writeback_upload_max_ns":69,"object_writeback_collect_ns":70,"object_writeback_digest_ns":71,"object_writeback_store_put_ns":72,"object_writeback_cache_put_ns":73,"manifest_chunks":74,"manifest_blocks":75,"tiered_hot_put_ns":76,"tiered_pending_cold_put_ns":77,"tiered_cold_put_enqueue_ns":78,"local_hot_puts":79,"local_hot_put_bytes":80,"local_hot_put_total_ns":81,"local_hot_put_prepare_ns":82,"local_hot_put_write_ns":83,"local_hot_put_sync_ns":84,"local_hot_put_rename_ns":85,"local_hot_put_record_ns":86,"metadata_store":{"get_total":2,"get_user_strong_total":32,"get_write_plan_local_total":33,"get_snapshot_total":34,"scan_total":3,"scan_user_strong_total":35,"scan_write_plan_local_total":36,"scan_snapshot_total":37,"scan_key_visited_total":4,"scan_key_returned_total":5,"history_lookup_total":40,"active_snapshot_pin_total":0,"commit_total":6,"dedupe_hit_total":7,"predicate_total":8,"prefix_empty_predicate_total":9,"current_put_total":10,"current_delete_total":11,"history_write_total":12,"watch_write_total":13,"dedupe_write_total":14,"commit_prepare_ns_total":15,"atomic_apply_total":16,"atomic_apply_command_total":17,"atomic_apply_max_batch":18,"atomic_apply_ns_total":19},"metadata_service":{"path_index_lookup_total":30,"path_index_hit_total":31,"path_index_miss_total":32,"path_index_stale_total":33,"path_index_scan_stale_total":34,"path_index_fallback_total":35,"create_files_batch_total":36,"create_files_entry_total":37,"create_dirs_batch_total":38,"create_dirs_entry_total":39,"read_dir_plus_total":40,"read_dir_plus_entry_total":41,"read_dir_plus_projection_hit_total":42}}"#;
+        let body = r#"{"object_puts":41,"object_put_bytes":42,"object_gets":43,"object_get_bytes":44,"coalesced_gets":45,"coalesced_get_bytes":46,"cache_hits":47,"cache_hit_bytes":48,"prefetch_enqueued":49,"prefetch_dropped":50,"prefetch_completed":51,"prefetch_failed":52,"prefetch_object_gets":53,"prefetch_object_get_bytes":54,"prefetch_cache_hits":55,"prefetch_cache_hit_bytes":56,"read_plan_cache_hits":57,"read_plan_cache_misses":58,"object_writeback_enqueued":59,"object_writeback_inline":60,"object_writeback_completed":62,"object_writeback_failed":63,"object_writeback_staged_bytes":64,"object_writeback_uploaded_bytes":65,"object_writeback_queue_wait_ns":66,"object_writeback_queue_max_wait_ns":67,"object_writeback_upload_ns":68,"object_writeback_upload_max_ns":69,"object_writeback_collect_ns":70,"object_writeback_digest_ns":71,"object_writeback_store_put_ns":72,"object_writeback_cache_put_ns":73,"manifest_chunks":74,"manifest_blocks":75,"tiered_hot_put_ns":76,"tiered_pending_cold_put_ns":77,"tiered_cold_put_enqueue_ns":78,"local_hot_puts":79,"local_hot_put_bytes":80,"local_hot_put_total_ns":81,"local_hot_put_prepare_ns":82,"local_hot_put_write_ns":83,"local_hot_put_sync_ns":84,"local_hot_put_rename_ns":85,"local_hot_put_record_ns":86,"metadata_store":{"get_total":2,"get_user_strong_total":32,"get_write_plan_local_total":33,"get_snapshot_total":34,"scan_total":3,"scan_user_strong_total":35,"scan_write_plan_local_total":36,"scan_snapshot_total":37,"scan_key_visited_total":4,"scan_key_returned_total":5,"history_lookup_total":40,"active_snapshot_pin_total":0,"commit_total":6,"dedupe_hit_total":7,"predicate_total":8,"prefix_empty_predicate_total":9,"current_put_total":10,"current_delete_total":11,"history_write_total":12,"watch_write_total":13,"dedupe_write_total":14,"commit_prepare_ns_total":15,"atomic_apply_total":16,"atomic_apply_command_total":17,"atomic_apply_max_batch":18,"atomic_apply_ns_total":19},"metadata_service":{"path_index_lookup_total":30,"path_index_hit_total":31,"path_index_miss_total":32,"path_index_stale_total":33,"path_index_scan_stale_total":34,"path_index_fallback_total":35,"create_files_batch_total":36,"create_files_entry_total":37,"create_dirs_batch_total":38,"create_dirs_entry_total":39,"read_dir_plus_total":40,"read_dir_plus_entry_total":41,"read_dir_plus_projection_hit_total":42,"metadata_log_segments_archived_total":43,"metadata_log_entries_archived_total":44,"metadata_log_archive_bytes_total":45}}"#;
 
         assert_eq!(json_u64(body, "object_put_bytes").unwrap(), 42);
         assert_eq!(json_u64(body, "object_get_bytes").unwrap(), 44);
@@ -3235,6 +4194,18 @@ mod tests {
         assert_eq!(
             json_u64(body, "read_dir_plus_projection_hit_total").unwrap(),
             42
+        );
+        assert_eq!(
+            json_u64(body, "metadata_log_segments_archived_total").unwrap(),
+            43
+        );
+        assert_eq!(
+            json_u64(body, "metadata_log_entries_archived_total").unwrap(),
+            44
+        );
+        assert_eq!(
+            json_u64(body, "metadata_log_archive_bytes_total").unwrap(),
+            45
         );
         assert!(json_u64(body, "missing_total").is_err());
     }
@@ -3659,6 +4630,8 @@ mod tests {
                 Workload::MetadataNegativeLookup,
                 Workload::ArtifactIndexLookup,
                 Workload::MetadataConcurrentRead,
+                Workload::MetadataDurabilityBatch,
+                Workload::MetadataShardRouting,
                 Workload::CheckpointPublish,
                 Workload::TrainingRead,
                 Workload::NativeLayoutRead,
@@ -3771,9 +4744,52 @@ mod tests {
                 Workload::MdtestEasy,
                 Workload::MdtestHard,
                 Workload::MetadataNegativeLookup,
-                Workload::MetadataConcurrentRead
+                Workload::MetadataConcurrentRead,
+                Workload::MetadataDurabilityBatch,
+                Workload::MetadataShardRouting
             ]
         );
+    }
+
+    #[test]
+    fn parses_metadata_shard_routing_workload() {
+        let config = parse(vec![s("--workload"), s("metadata-shard-routing")]).unwrap();
+        assert_eq!(config.workload, Workload::MetadataShardRouting);
+        // It is its own row (not expanded into other workloads).
+        assert_eq!(
+            expand_workloads(Workload::MetadataShardRouting),
+            vec![Workload::MetadataShardRouting]
+        );
+    }
+
+    #[test]
+    fn shard_routing_paths_spread_evenly_across_shards() {
+        let shape = WorkloadShape {
+            dirs: 8,
+            files_per_dir: 4,
+            shared_files: 0,
+            checkpoints: 0,
+            checkpoint_bytes: 0,
+            dataset_dirs: 0,
+            dataset_files_per_dir: 0,
+            dataset_file_bytes: 0,
+        };
+        let paths = shard_routing_paths(&shape, SHARD_ROUTING_SHARDS);
+        // One top-level dir per subtree shard, `dirs` subdirs, dirs*files leaves.
+        assert_eq!(paths.shard_dirs.len(), SHARD_ROUTING_SHARDS);
+        assert_eq!(paths.dir_paths.len(), shape.dirs);
+        assert_eq!(paths.file_paths.len(), shape.dirs * shape.files_per_dir);
+        // The subdirs distribute round-robin across the shard prefixes, so each
+        // shard owns the same count (8 dirs / 4 shards = 2 each).
+        for shard in 0..SHARD_ROUTING_SHARDS {
+            let prefix = format!("/shard-{shard:02}/");
+            let count = paths
+                .dir_paths
+                .iter()
+                .filter(|path| path.starts_with(&prefix))
+                .count();
+            assert_eq!(count, shape.dirs / SHARD_ROUTING_SHARDS);
+        }
     }
 
     #[test]

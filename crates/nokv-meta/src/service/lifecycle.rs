@@ -8,10 +8,12 @@ where
     pub fn new(mount: MountId, metadata: M, objects: O) -> Self {
         Self {
             mount,
+            shard_index: 0,
             metadata,
             objects,
             allocator_gate: Mutex::new(()),
             backup_gate: Mutex::new(()),
+            epoch_fence: RwLock::new(()),
             path_resolution_cache: new_path_resolution_cache_shards(),
             path_index_lookup_cache: new_path_index_lookup_cache_shards(),
             path_index_validation_cache: new_path_index_validation_cache_shards(),
@@ -21,6 +23,13 @@ where
             next_inode: AtomicU64::new(InodeId::ROOT_RAW + 1),
             reserved_next_inode: AtomicU64::new(InodeId::ROOT_RAW + 1),
             epoch: AtomicU64::new(1),
+            required_owner_epoch: AtomicU64::new(1),
+            lease_deadline_ms: AtomicU64::new(0),
+            clock_override_ms: AtomicU64::new(0),
+            metadata_log_sync: Mutex::new(None),
+            metadata_log_segments_archived_total: AtomicU64::new(0),
+            metadata_log_entries_archived_total: AtomicU64::new(0),
+            metadata_log_archive_bytes_total: AtomicU64::new(0),
             block_cache: MemoryBlockCache::default(),
             block_cache_enabled: AtomicBool::new(true),
             watch_logging_enabled: AtomicBool::new(false),
@@ -50,23 +59,73 @@ where
         }
     }
 
-    pub fn open_existing(mount: MountId, metadata: M, objects: O) -> Result<Self, MetadError> {
-        let allocator = recover_allocator_state(&metadata, mount)?;
+    /// Set the shard index this service owns and seed its inode allocator into
+    /// the shard's high-bit subspace. Builder applied at construction, before the
+    /// service is shared. Idempotent and safe for recovered stores: it only
+    /// raises the allocator floor (`fetch_max`), so a recovered high-water (which
+    /// already carries the shard's high bits) is never regressed, and shard 0 is
+    /// a no-op (`compose(0, 2) == 2`).
+    pub fn with_shard_index(self, shard_index: u16) -> Self {
+        let base = InodeId::compose(shard_index, InodeId::ROOT_RAW + 1)
+            .expect("composed allocator base inode is valid")
+            .get();
+        self.next_inode.fetch_max(base, Ordering::Relaxed);
+        self.reserved_next_inode.fetch_max(base, Ordering::Relaxed);
+        Self {
+            shard_index,
+            ..self
+        }
+    }
+
+    pub fn shard_index(&self) -> u16 {
+        self.shard_index
+    }
+
+    /// Reopen a persisted shard. Recovery is shard-scoped: only inodes minted by
+    /// `shard_index` raise the local allocator high-water (foreign ids embedded
+    /// in this shard's records — e.g. a cross-shard graft target — are excluded),
+    /// and the allocator floor is then seeded into this shard's high-bit subspace
+    /// exactly like [`Self::with_shard_index`]. So callers must NOT chain
+    /// `.with_shard_index(...)` after `open_existing`; pass the index here.
+    pub fn open_existing(
+        mount: MountId,
+        metadata: M,
+        objects: O,
+        shard_index: u16,
+    ) -> Result<Self, MetadError> {
+        let allocator = recover_allocator_state(&metadata, mount, shard_index)?;
+        // Raise the allocator floor into this shard's subspace. `fetch_max`
+        // semantics: a recovered high-water (which already carries the shard's
+        // high bits) is never regressed, and shard 0 is a no-op
+        // (`compose(0, ROOT_RAW + 1) == ROOT_RAW + 1`).
+        let allocator_floor = InodeId::compose(shard_index, InodeId::ROOT_RAW + 1)
+            .expect("composed allocator base inode is valid")
+            .get();
+        let next_inode = allocator.next_inode.max(allocator_floor);
         Ok(Self {
             mount,
+            shard_index,
             metadata,
             objects,
             allocator_gate: Mutex::new(()),
             backup_gate: Mutex::new(()),
+            epoch_fence: RwLock::new(()),
             path_resolution_cache: new_path_resolution_cache_shards(),
             path_index_lookup_cache: new_path_index_lookup_cache_shards(),
             path_index_validation_cache: new_path_index_validation_cache_shards(),
             advisory_locks: Mutex::new(AdvisoryLockTable::default()),
             clock: AtomicU64::new(allocator.last_commit_version),
             reserved_version: AtomicU64::new(allocator.last_commit_version),
-            next_inode: AtomicU64::new(allocator.next_inode),
-            reserved_next_inode: AtomicU64::new(allocator.next_inode),
+            next_inode: AtomicU64::new(next_inode),
+            reserved_next_inode: AtomicU64::new(next_inode),
             epoch: AtomicU64::new(allocator.epoch),
+            required_owner_epoch: AtomicU64::new(allocator.epoch),
+            lease_deadline_ms: AtomicU64::new(0),
+            clock_override_ms: AtomicU64::new(0),
+            metadata_log_sync: Mutex::new(None),
+            metadata_log_segments_archived_total: AtomicU64::new(0),
+            metadata_log_entries_archived_total: AtomicU64::new(0),
+            metadata_log_archive_bytes_total: AtomicU64::new(0),
             block_cache: MemoryBlockCache::default(),
             block_cache_enabled: AtomicBool::new(true),
             watch_logging_enabled: AtomicBool::new(false),
@@ -151,6 +210,15 @@ where
             read_dir_plus_entry_total: self.read_dir_plus_entry_total.load(Ordering::Relaxed),
             read_dir_plus_projection_hit_total: self
                 .read_dir_plus_projection_hit_total
+                .load(Ordering::Relaxed),
+            metadata_log_segments_archived_total: self
+                .metadata_log_segments_archived_total
+                .load(Ordering::Relaxed),
+            metadata_log_entries_archived_total: self
+                .metadata_log_entries_archived_total
+                .load(Ordering::Relaxed),
+            metadata_log_archive_bytes_total: self
+                .metadata_log_archive_bytes_total
                 .load(Ordering::Relaxed),
         }
     }

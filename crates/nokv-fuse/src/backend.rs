@@ -23,6 +23,9 @@ use nokv_types::{
 
 use crate::filesystem::{FuseObjectPipelineStats, FuseOptions, PendingBufferedRange};
 
+const READ_PLAN_CACHE_CAPACITY: usize = 128 * 1024;
+const READ_PLAN_CACHE_SHARDS: usize = 16;
+
 pub(crate) type FuseBackendResult<T> = Result<T, FuseBackendError>;
 
 #[derive(Debug)]
@@ -104,12 +107,19 @@ pub(crate) trait FuseBackend: Send + Sync + 'static {
         new_name: DentryName,
     ) -> FuseBackendResult<RenameReplaceResult>;
     fn read_file(&self, inode: InodeId, offset: u64, len: usize) -> FuseBackendResult<Vec<u8>>;
+    fn read_file_with_known_attr(
+        &self,
+        attr: &InodeAttr,
+        offset: u64,
+        len: usize,
+    ) -> FuseBackendResult<Vec<u8>>;
     fn read_file_with_known_attr_pipeline(
         &self,
         attr: &InodeAttr,
         offset: u64,
         len: usize,
         pipeline: &mut FileReadPipeline,
+        read_plans: &mut ObjectReadPlanCache,
     ) -> FuseBackendResult<Vec<u8>>;
     fn read_file_at_snapshot(
         &self,
@@ -238,7 +248,7 @@ pub(crate) struct ClientFuseBackend<O> {
     metadata: MetadataClient,
     objects: Arc<O>,
     block_cache: Option<ObjectBlockCache>,
-    read_plan_cache: Mutex<ObjectReadPlanCache>,
+    read_plan_cache: ReadPlanCacheShards,
     read_plan_cache_hits: AtomicU64,
     read_plan_cache_misses: AtomicU64,
     foreground_object_gets: AtomicU64,
@@ -255,6 +265,65 @@ pub(crate) struct ClientFuseBackend<O> {
     writeback_cache: Option<WritebackCache>,
     writeback_uploader: Option<ObjectWritebackUploader<Arc<O>>>,
     upload_workers: usize,
+}
+
+#[derive(Debug)]
+struct ReadPlanCacheShards {
+    shards: Vec<Mutex<ObjectReadPlanCache>>,
+}
+
+impl ReadPlanCacheShards {
+    fn new(total_capacity: usize, shard_count: usize) -> Self {
+        let shard_count = shard_count.max(1);
+        let capacity_per_shard = total_capacity.max(1).div_ceil(shard_count);
+        let shards = (0..shard_count)
+            .map(|_| Mutex::new(ObjectReadPlanCache::new(capacity_per_shard)))
+            .collect();
+        Self { shards }
+    }
+
+    fn get(&self, key: &ObjectReadPlanKey) -> Result<Option<ObjectReadPlan>, ObjectError> {
+        let mut shard = self.shard(key).lock().map_err(|err| {
+            ObjectError::Backend(format!("read plan cache shard lock poisoned: {err}"))
+        })?;
+        Ok(shard.get(key))
+    }
+
+    fn insert(&self, key: ObjectReadPlanKey, plan: ObjectReadPlan) -> Result<(), ObjectError> {
+        self.shard(&key)
+            .lock()
+            .map_err(|err| {
+                ObjectError::Backend(format!("read plan cache shard lock poisoned: {err}"))
+            })?
+            .insert(key, plan);
+        Ok(())
+    }
+
+    fn shard(&self, key: &ObjectReadPlanKey) -> &Mutex<ObjectReadPlanCache> {
+        let index = read_plan_cache_shard_index(key, self.shards.len());
+        &self.shards[index]
+    }
+}
+
+fn read_plan_cache_shard_index(key: &ObjectReadPlanKey, shard_count: usize) -> usize {
+    debug_assert!(shard_count > 0);
+    let hash = key.object_id
+        ^ key.generation.rotate_left(17)
+        ^ key.offset.rotate_left(31)
+        ^ (key.len as u64).rotate_left(7);
+    hash as usize % shard_count
+}
+
+fn full_file_read_plan_key(attr: &InodeAttr) -> Option<ObjectReadPlanKey> {
+    if attr.size == 0 {
+        return None;
+    }
+    Some(ObjectReadPlanKey::new(
+        attr.inode.get(),
+        attr.generation,
+        0,
+        usize::try_from(attr.size).ok()?,
+    ))
 }
 
 impl<O> ClientFuseBackend<O>
@@ -304,7 +373,10 @@ where
             metadata,
             objects,
             block_cache,
-            read_plan_cache: Mutex::new(ObjectReadPlanCache::new(4096)),
+            read_plan_cache: ReadPlanCacheShards::new(
+                READ_PLAN_CACHE_CAPACITY,
+                READ_PLAN_CACHE_SHARDS,
+            ),
             read_plan_cache_hits: AtomicU64::new(0),
             read_plan_cache_misses: AtomicU64::new(0),
             foreground_object_gets: AtomicU64::new(0),
@@ -398,6 +470,8 @@ where
                 .transpose()?,
             tiered_object: self.objects.tiered_stats()?,
             local_hot: self.objects.local_hot_stats()?,
+            fuse_read_requests: 0,
+            fuse_read_request_bytes: 0,
             foreground_object_gets: self.foreground_object_gets.load(Ordering::Relaxed),
             foreground_object_get_bytes: self.foreground_object_get_bytes.load(Ordering::Relaxed),
             foreground_coalesced_gets: self.foreground_coalesced_gets.load(Ordering::Relaxed),
@@ -427,11 +501,7 @@ where
         len: usize,
     ) -> FuseBackendResult<ObjectReadPlan> {
         let key = ObjectReadPlanKey::new(inode.get(), generation, offset, len);
-        let cached = self
-            .read_plan_cache
-            .lock()
-            .map_err(|err| ObjectError::Backend(format!("read plan cache lock poisoned: {err}")))?
-            .get(&key);
+        let cached = self.read_plan_cache.get(&key)?;
         if let Some(plan) = cached {
             self.read_plan_cache_hits.fetch_add(1, Ordering::Relaxed);
             return Ok(plan);
@@ -445,16 +515,57 @@ where
         Ok(plan)
     }
 
+    fn cached_read_body_plan_for_handle(
+        &self,
+        attr: &InodeAttr,
+        offset: u64,
+        len: usize,
+        local: &mut ObjectReadPlanCache,
+    ) -> FuseBackendResult<ObjectReadPlan> {
+        let key = ObjectReadPlanKey::new(attr.inode.get(), attr.generation, offset, len);
+        if let Some(plan) = local.get_exact(&key) {
+            self.read_plan_cache_hits.fetch_add(1, Ordering::Relaxed);
+            return Ok(plan);
+        }
+
+        if let Some(full_key) = full_file_read_plan_key(attr) {
+            if full_key != key {
+                if let Some(plan) = local.get_slice_from(full_key, key) {
+                    self.read_plan_cache_hits.fetch_add(1, Ordering::Relaxed);
+                    return Ok(plan);
+                }
+                if let Some(full_plan) = self.read_plan_cache.get(&full_key)? {
+                    local.insert(full_key, full_plan);
+                    if let Some(plan) = local.get_slice_from(full_key, key) {
+                        self.read_plan_cache_hits.fetch_add(1, Ordering::Relaxed);
+                        return Ok(plan);
+                    }
+                }
+            }
+        }
+
+        if let Some(plan) = self.read_plan_cache.get(&key)? {
+            self.read_plan_cache_hits.fetch_add(1, Ordering::Relaxed);
+            local.insert(key, plan.clone());
+            return Ok(plan);
+        }
+
+        self.read_plan_cache_misses.fetch_add(1, Ordering::Relaxed);
+        let plan = self
+            .metadata
+            .read_body_plan(attr.inode, attr.generation, offset, len)
+            .map_err(FuseBackendError::from)?;
+        self.cache_read_body_plan(key, plan.clone())?;
+        local.insert(key, plan.clone());
+        Ok(plan)
+    }
+
     fn cache_read_body_plan(
         &self,
         key: ObjectReadPlanKey,
         plan: ObjectReadPlan,
     ) -> FuseBackendResult<()> {
-        self.read_plan_cache
-            .lock()
-            .map_err(|err| ObjectError::Backend(format!("read plan cache lock poisoned: {err}")))?
-            .insert(key, plan);
-        Ok(())
+        self.read_plan_cache.insert(key, plan).map_err(Into::into)
     }
 
     fn cache_published_staged_read_plan(
@@ -694,7 +805,19 @@ where
         else {
             return Err(FuseBackendError::Metadata(MetadError::NotFound));
         };
-        let plan = self.cached_read_body_plan(inode, attr.generation, offset, len)?;
+        self.read_file_with_known_attr(&attr, offset, len)
+    }
+
+    fn read_file_with_known_attr(
+        &self,
+        attr: &InodeAttr,
+        offset: u64,
+        len: usize,
+    ) -> FuseBackendResult<Vec<u8>> {
+        if len == 0 || offset >= attr.size {
+            return Ok(Vec::new());
+        }
+        let plan = self.cached_read_body_plan(attr.inode, attr.generation, offset, len)?;
         let read = self.objects.read_blocks_with_options(
             self.block_cache.as_ref(),
             plan.output_len,
@@ -711,11 +834,12 @@ where
         offset: u64,
         len: usize,
         pipeline: &mut FileReadPipeline,
+        read_plans: &mut ObjectReadPlanCache,
     ) -> FuseBackendResult<Vec<u8>> {
         if len == 0 || offset >= attr.size {
             return Ok(Vec::new());
         }
-        let plan = self.cached_read_body_plan(attr.inode, attr.generation, offset, len)?;
+        let plan = self.cached_read_body_plan_for_handle(attr, offset, len, read_plans)?;
         let read = pipeline.read_blocks_with_options(
             &self.objects,
             self.block_cache.as_ref(),
@@ -1085,7 +1209,7 @@ mod tests {
 
     use nokv_client::MetadataClientOptions;
     use nokv_object::{MemoryObjectStore, ObjectKey, ObjectStore};
-    use nokv_types::DentryName;
+    use nokv_types::{DentryName, FileType};
 
     use super::*;
 
@@ -1332,6 +1456,83 @@ mod tests {
         let stats = backend.object_pipeline_stats().unwrap();
         assert_eq!(stats.read_plan_cache_hits, 1);
         assert_eq!(stats.read_plan_cache_misses, 0);
+    }
+
+    #[test]
+    fn client_backend_seeds_handle_read_plan_cache_from_full_file_plan() {
+        let metadata = MetadataClient::new(MetadataClientOptions::new(SocketAddr::from((
+            [127, 0, 0, 1],
+            9,
+        ))));
+        let backend =
+            ClientFuseBackend::new(metadata, MemoryObjectStore::new(), &FuseOptions::default())
+                .unwrap();
+        let inode = InodeId::new(42).unwrap();
+        let attr = InodeAttr {
+            inode,
+            file_type: FileType::File,
+            mode: 0o644,
+            uid: 1000,
+            gid: 1000,
+            rdev: 0,
+            nlink: 1,
+            size: 12,
+            generation: 7,
+            mtime_ms: 1,
+            ctime_ms: 1,
+        };
+        backend
+            .cache_read_body_plan(
+                ObjectReadPlanKey::new(inode.get(), attr.generation, 0, attr.size as usize),
+                ObjectReadPlan::new(
+                    attr.size as usize,
+                    vec![ObjectReadBlock {
+                        object_key: "blocks/demo".to_owned(),
+                        digest_uri: "sha256:test".to_owned(),
+                        object_offset: 0,
+                        object_len: attr.size,
+                        len: attr.size as usize,
+                        output_offset: 0,
+                    }],
+                ),
+            )
+            .unwrap();
+
+        let mut local = ObjectReadPlanCache::new(8);
+        let first = backend
+            .cached_read_body_plan_for_handle(&attr, 4, 4, &mut local)
+            .unwrap();
+        assert_eq!(
+            first.blocks,
+            vec![ObjectReadBlock {
+                object_key: "blocks/demo".to_owned(),
+                digest_uri: "sha256:test".to_owned(),
+                object_offset: 4,
+                object_len: attr.size,
+                len: 4,
+                output_offset: 0,
+            }]
+        );
+        assert_eq!(local.len(), 1);
+
+        let second = backend
+            .cached_read_body_plan_for_handle(&attr, 8, 2, &mut local)
+            .unwrap();
+        assert_eq!(
+            second.blocks,
+            vec![ObjectReadBlock {
+                object_key: "blocks/demo".to_owned(),
+                digest_uri: "sha256:test".to_owned(),
+                object_offset: 8,
+                object_len: attr.size,
+                len: 2,
+                output_offset: 0,
+            }]
+        );
+        let stats = backend.object_pipeline_stats().unwrap();
+        assert_eq!(stats.read_plan_cache_hits, 2);
+        assert_eq!(stats.read_plan_cache_misses, 0);
+        assert_eq!(local.len(), 1);
     }
 
     #[test]

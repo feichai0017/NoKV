@@ -15,10 +15,12 @@ the same CLI and canonical CSV schema.
 
 ``training_read`` is the workload that motivated the framework: it is
 read-after-write, so a single number conflates cold object reads with
-cache-served reads. This driver emits BOTH a ``cold`` row (kernel page cache
-bypassed via ``posix_fadvise(DONTNEED)`` on Linux / ``F_NOCACHE`` on macOS, so
-the read reaches the filesystem and exposes block-cache write-through behaviour)
-and a ``warm`` row (served from cache after a warm-up pass).
+cache-served reads. This driver emits a ``cold`` row (kernel page cache bypassed
+via ``posix_fadvise(DONTNEED)`` on Linux / ``F_NOCACHE`` on macOS, so the read
+reaches the filesystem), a ``warm`` row (served from cache after a buffered
+warm-up pass), and an optional ``hot`` row (kernel-cache-bypassed warm-up, then
+kernel-cache-bypassed measured pass, so the filesystem/client cache is warmed
+without letting the kernel page cache hide the mounted data path).
 """
 
 from __future__ import annotations
@@ -33,10 +35,12 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import decompose  # noqa: E402  (local module, after sys.path injection)
 import schema  # noqa: E402  (local module, after sys.path injection)
 
 _F_NOCACHE = getattr(fcntl, "F_NOCACHE", 48)  # macOS fcntl command
 _READ_CHUNK = 1 << 20  # 1 MiB
+_VALID_CACHE_STATES = {"cold", "warm", "hot"}
 
 
 # --------------------------------------------------------------------------- #
@@ -46,13 +50,15 @@ def payload(seed: int, length: int) -> bytes:
     return bytes(((seed + offset) % 251 for offset in range(length)))
 
 
-def write_file(path: Path, data: bytes, do_fsync: bool) -> None:
+def write_file(path: Path, data: bytes, do_fsync: bool, cache_data: bool = True) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("wb") as handle:
+        apply_write_cache_hints(handle.fileno(), cache_data)
         handle.write(data)
         if do_fsync:
             handle.flush()
             os.fsync(handle.fileno())
+        drop_file_cache_hints(handle.fileno(), cache_data)
 
 
 def visible_entries(path: Path):
@@ -63,17 +69,7 @@ def _read_file_loop(path: Path, bypass_kernel_cache: bool) -> int:
     expected_size = path.stat().st_size
     fd = os.open(str(path), os.O_RDONLY)
     try:
-        if bypass_kernel_cache and platform.system() == "Darwin":
-            try:
-                fcntl.fcntl(fd, _F_NOCACHE, 1)
-            except OSError:
-                pass
-        if bypass_kernel_cache and hasattr(os, "posix_fadvise"):
-            try:
-                # Evict any already-cached pages for this file before reading.
-                os.posix_fadvise(fd, 0, 0, os.POSIX_FADV_DONTNEED)
-            except OSError:
-                pass
+        apply_read_cache_hints(fd, bypass_kernel_cache)
         total = 0
         while True:
             try:
@@ -88,6 +84,38 @@ def _read_file_loop(path: Path, bypass_kernel_cache: bool) -> int:
         return total
     finally:
         os.close(fd)
+
+
+def apply_read_cache_hints(fd: int, bypass_kernel_cache: bool) -> None:
+    if bypass_kernel_cache and platform.system() == "Darwin":
+        try:
+            fcntl.fcntl(fd, _F_NOCACHE, 1)
+        except OSError:
+            pass
+    if bypass_kernel_cache and hasattr(os, "posix_fadvise"):
+        try:
+            # Evict any already-cached pages for this file before reading.
+            os.posix_fadvise(fd, 0, 0, os.POSIX_FADV_DONTNEED)
+        except OSError:
+            pass
+
+
+def apply_write_cache_hints(fd: int, cache_data: bool) -> None:
+    if not cache_data and platform.system() == "Darwin":
+        try:
+            fcntl.fcntl(fd, _F_NOCACHE, 1)
+        except OSError:
+            pass
+
+
+def drop_file_cache_hints(fd: int, cache_data: bool) -> None:
+    if cache_data:
+        return
+    if hasattr(os, "posix_fadvise"):
+        try:
+            os.posix_fadvise(fd, 0, 0, os.POSIX_FADV_DONTNEED)
+        except OSError:
+            pass
 
 
 def read_file_warm(path: Path) -> int:
@@ -106,6 +134,53 @@ def _cold_read_mode() -> str:
     if hasattr(os, "posix_fadvise"):
         return "fadvise-dontneed"
     return "buffered-fallback"
+
+
+def _hot_read_mode() -> str:
+    mode = _cold_read_mode()
+    return f"{mode} after_{mode}_warmup=1"
+
+
+def _cache_state_enabled(args, state: str) -> bool:
+    return state in args.cache_states
+
+
+def _stats_snapshot(args) -> dict | None:
+    if not args.stats_url:
+        return None
+    try:
+        return decompose.fetch(args.stats_url)
+    except Exception as err:  # noqa: BLE001 - stats are diagnostic only.
+        print(f"warning: failed to snapshot stats from {args.stats_url}: {err}", file=sys.stderr)
+        return None
+
+
+def _stats_delta(before: dict | None, after: dict | None) -> str | None:
+    if before is None or after is None:
+        return None
+    return decompose.cost_breakdown(before, after) or "none"
+
+
+def _stats_field_delta(before: dict | None, after: dict | None, field: str) -> int | None:
+    if before is None or after is None:
+        return None
+    flat_before = decompose.flatten(before)
+    flat_after = decompose.flatten(after)
+    delta = flat_after.get(field, 0) - flat_before.get(field, 0)
+    return max(0, int(delta))
+
+
+def _stats_read_coverage(
+    before: dict | None,
+    after: dict | None,
+    expected_requests: int,
+) -> str | None:
+    observed = _stats_field_delta(before, after, "fuse_read_requests")
+    if observed is None:
+        return None
+    expected = max(0, expected_requests)
+    coverage = observed / expected if expected else 0.0
+    return f"observed_fuse_read_requests={observed} expected_fuse_read_requests={expected} coverage={coverage:.4f}"
 
 
 # --------------------------------------------------------------------------- #
@@ -234,15 +309,18 @@ def run_checkpoint_write(args, root: Path) -> list[str]:
 
 
 def _seed_training_dataset(args, dataset: Path) -> None:
+    cache_seed = not _cache_state_enabled(args, "cold")
     for shard in range(args.dataset_dirs):
         shard_dir = dataset / f"shard-{shard:04d}"
         shard_dir.mkdir(parents=True, exist_ok=True)
         for file_index in range(args.files_per_dir):
-            # fsync the seed so cold reads can actually evict clean pages.
+            # The seed write is outside the timed phase. Keep cold rows honest
+            # by making the data clean and avoiding kernel-cache residency.
             write_file(
                 shard_dir / f"sample-{file_index:05d}.bin",
                 payload(shard * 31 + file_index * 17, args.sample_bytes),
                 do_fsync=True,
+                cache_data=cache_seed,
             )
 
 
@@ -278,60 +356,378 @@ def run_training_read(args, root: Path) -> list[str]:
 
     rows: list[str] = []
 
-    # Cold: bypass the kernel page cache so the read reaches the filesystem.
-    cold_start = time.perf_counter()
-    cold_samples, cold_bytes, cold_lat = _training_read_pass(args, dataset, read_file_cold)
-    cold_seconds = time.perf_counter() - cold_start
-    p50, p99 = schema.percentiles_us(cold_lat)
-    rows.append(
-        schema.row(
-            boundary=schema.L2_MOUNT,
-            system=args.system,
-            metadata_tier=args.metadata_tier,
-            object_backend=args.object_backend,
-            cache_state="cold",
-            concurrency=1,  # product-thesis workloads are sequential (latency, not a throughput sweep)
-            tool="native",
-            profile=args.profile,
-            workload="training_read",
-            phase="read",
-            operations=cold_samples,
-            seconds=cold_seconds,
-            bytes_total=cold_bytes,
-            p50_us=p50,
-            p99_us=p99,
-            cost_breakdown=f"read_mode={_cold_read_mode()}",
-            shape=shape,
+    if _cache_state_enabled(args, "cold"):
+        # Cold: bypass the kernel page cache so the read reaches the filesystem.
+        cold_start = time.perf_counter()
+        cold_samples, cold_bytes, cold_lat = _training_read_pass(args, dataset, read_file_cold)
+        cold_seconds = time.perf_counter() - cold_start
+        p50, p99 = schema.percentiles_us(cold_lat)
+        rows.append(
+            schema.row(
+                boundary=schema.L2_MOUNT,
+                system=args.system,
+                metadata_tier=args.metadata_tier,
+                object_backend=args.object_backend,
+                cache_state="cold",
+                concurrency=1,  # product-thesis workloads are sequential (latency, not a throughput sweep)
+                tool="native",
+                profile=args.profile,
+                workload="training_read",
+                phase="read",
+                operations=cold_samples,
+                seconds=cold_seconds,
+                bytes_total=cold_bytes,
+                p50_us=p50,
+                p99_us=p99,
+                cost_breakdown=f"read_mode={_cold_read_mode()}",
+                shape=shape,
+            )
         )
+
+    if _cache_state_enabled(args, "warm"):
+        # Warm: a warm-up pass, then time a cache-served pass.
+        _training_read_pass(args, dataset, read_file_warm)
+        warm_start = time.perf_counter()
+        warm_samples, warm_bytes, warm_lat = _training_read_pass(args, dataset, read_file_warm)
+        warm_seconds = time.perf_counter() - warm_start
+        p50, p99 = schema.percentiles_us(warm_lat)
+        rows.append(
+            schema.row(
+                boundary=schema.L2_MOUNT,
+                system=args.system,
+                metadata_tier=args.metadata_tier,
+                object_backend=args.object_backend,
+                cache_state="warm",
+                concurrency=1,  # product-thesis workloads are sequential (latency, not a throughput sweep)
+                tool="native",
+                profile=args.profile,
+                workload="training_read",
+                phase="read",
+                operations=warm_samples,
+                seconds=warm_seconds,
+                bytes_total=warm_bytes,
+                p50_us=p50,
+                p99_us=p99,
+                cost_breakdown="read_mode=buffered",
+                shape=shape,
+            )
+        )
+
+    if _cache_state_enabled(args, "hot"):
+        # Hot: warm filesystem/client caches through the mounted filesystem,
+        # then bypass the kernel page cache again for the measured pass.
+        _training_read_pass(args, dataset, read_file_cold)
+        hot_start = time.perf_counter()
+        hot_samples, hot_bytes, hot_lat = _training_read_pass(args, dataset, read_file_cold)
+        hot_seconds = time.perf_counter() - hot_start
+        p50, p99 = schema.percentiles_us(hot_lat)
+        rows.append(
+            schema.row(
+                boundary=schema.L2_MOUNT,
+                system=args.system,
+                metadata_tier=args.metadata_tier,
+                object_backend=args.object_backend,
+                cache_state="hot",
+                concurrency=1,  # product-thesis workloads are sequential (latency, not a throughput sweep)
+                tool="native",
+                profile=args.profile,
+                workload="training_read",
+                phase="read",
+                operations=hot_samples,
+                seconds=hot_seconds,
+                bytes_total=hot_bytes,
+                p50_us=p50,
+                p99_us=p99,
+                cost_breakdown=f"read_mode={_hot_read_mode()}",
+                shape=shape,
+            )
+        )
+    return rows
+
+
+def _seed_shard_dataset(args, dataset: Path) -> list[Path]:
+    shard_paths: list[Path] = []
+    cache_seed = not _cache_state_enabled(args, "cold")
+    for shard in range(args.dataset_dirs):
+        path = dataset / f"shard-{shard:04d}.bin"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("wb") as handle:
+            apply_write_cache_hints(handle.fileno(), cache_seed)
+            for sample in range(args.files_per_dir):
+                handle.write(payload(shard * 31 + sample * 17, args.sample_bytes))
+            if args.fsync or not cache_seed:
+                handle.flush()
+                os.fsync(handle.fileno())
+            drop_file_cache_hints(handle.fileno(), cache_seed)
+        shard_paths.append(path)
+    return shard_paths
+
+
+def _shard_range_windows(args) -> tuple[list[tuple[int, int]], int]:
+    stride = max(1, args.range_stride)
+    selected = list(range(0, args.files_per_dir, stride))
+    raw = [(sample * args.sample_bytes, args.sample_bytes) for sample in selected]
+    if not raw:
+        return [], 0
+
+    max_gap = max(0, args.range_coalesce_gap_bytes)
+    merged: list[tuple[int, int]] = []
+    start, length = raw[0]
+    end = start + length
+    for next_start, next_length in raw[1:]:
+        next_end = next_start + next_length
+        if next_start - end <= max_gap:
+            end = max(end, next_end)
+        else:
+            merged.append((start, end - start))
+            start, end = next_start, next_end
+    merged.append((start, end - start))
+    return merged, len(selected)
+
+
+def _pread_full(fd: int, offset: int, length: int) -> tuple[int, int]:
+    total = 0
+    checksum = 0
+    while total < length:
+        size = min(_READ_CHUNK, length - total)
+        if hasattr(os, "pread"):
+            data = os.pread(fd, size, offset + total)
+        else:
+            os.lseek(fd, offset + total, os.SEEK_SET)
+            data = os.read(fd, size)
+        if not data:
+            raise OSError(errno.EIO, f"short pread at offset {offset + total}")
+        total += len(data)
+        checksum = (checksum + data[0] + data[-1] + len(data)) & 0xFFFFFFFF
+    return total, checksum
+
+
+def _shard_range_read_pass(
+    shard_paths: list[Path],
+    windows: list[tuple[int, int]],
+    bypass_kernel_cache: bool,
+    concurrency: int,
+) -> tuple[int, int, list[float], int]:
+    def read_shard(path: Path) -> tuple[int, int, list[float], int]:
+        shard_ranges = 0
+        shard_bytes = 0
+        shard_checksum = 0
+        shard_latencies_us: list[float] = []
+        fd = os.open(str(path), os.O_RDONLY)
+        try:
+            apply_read_cache_hints(fd, bypass_kernel_cache)
+            for offset, length in windows:
+                op_start = time.perf_counter()
+                read_bytes, partial = _pread_full(fd, offset, length)
+                shard_latencies_us.append((time.perf_counter() - op_start) * 1e6)
+                shard_ranges += 1
+                shard_bytes += read_bytes
+                shard_checksum = (shard_checksum + partial) & 0xFFFFFFFF
+        finally:
+            os.close(fd)
+        return shard_ranges, shard_bytes, shard_latencies_us, shard_checksum
+
+    if concurrency <= 1:
+        results = [read_shard(path) for path in shard_paths]
+    else:
+        from concurrent.futures import ThreadPoolExecutor
+
+        with ThreadPoolExecutor(max_workers=concurrency) as pool:
+            results = list(pool.map(read_shard, shard_paths))
+
+    physical_ranges = 0
+    physical_bytes = 0
+    checksum = 0
+    latencies_us: list[float] = []
+    for ranges, bytes_read, shard_latencies_us, partial in results:
+        physical_ranges += ranges
+        physical_bytes += bytes_read
+        latencies_us.extend(shard_latencies_us)
+        checksum = (checksum + partial) & 0xFFFFFFFF
+    return physical_ranges, physical_bytes, latencies_us, checksum
+
+
+def _ai_shard_range_row(
+    args,
+    cache_state: str,
+    logical_samples: int,
+    logical_bytes: int,
+    seconds: float,
+    latencies_us: list[float],
+    read_mode: str,
+    shape: str,
+    physical_ranges: int,
+    physical_bytes: int,
+    checksum: int,
+    warmup_physical_ranges: int | None = None,
+    warmup_physical_bytes: int | None = None,
+    warmup_checksum: int | None = None,
+    warmup_stats: str | None = None,
+    measured_stats: str | None = None,
+    warmup_stats_coverage: str | None = None,
+    measured_stats_coverage: str | None = None,
+) -> str:
+    p50, p99 = schema.percentiles_us(latencies_us)
+    amplification = physical_bytes / logical_bytes if logical_bytes else 0.0
+    cost_parts = [
+        f"read_mode={read_mode}",
+        f"physical_ranges={physical_ranges}",
+        f"physical_read_bytes={physical_bytes}",
+        f"read_amplification={amplification:.4f}",
+        f"checksum={checksum}",
+    ]
+    if warmup_physical_ranges is not None:
+        cost_parts.extend([
+            f"warmup_physical_ranges={warmup_physical_ranges}",
+            f"warmup_physical_read_bytes={warmup_physical_bytes or 0}",
+            f"warmup_checksum={warmup_checksum or 0}",
+        ])
+    if warmup_stats is not None:
+        cost_parts.append(f"warmup_stats=[{warmup_stats}]")
+    if warmup_stats_coverage is not None:
+        cost_parts.append(f"warmup_stats_coverage=[{warmup_stats_coverage}]")
+    if measured_stats is not None:
+        cost_parts.append(f"measured_stats=[{measured_stats}]")
+    if measured_stats_coverage is not None:
+        cost_parts.append(f"measured_stats_coverage=[{measured_stats_coverage}]")
+    return schema.row(
+        boundary=schema.L2_MOUNT,
+        system=args.system,
+        metadata_tier=args.metadata_tier,
+        object_backend=args.object_backend,
+        cache_state=cache_state,
+        concurrency=args.concurrency,
+        tool="native",
+        profile=args.profile,
+        workload="ai_shard_range_read",
+        phase="read",
+        operations=logical_samples,
+        seconds=seconds,
+        bytes_total=logical_bytes,
+        p50_us=p50,
+        p99_us=p99,
+        cost_breakdown=" ".join(cost_parts),
+        shape=shape,
     )
 
-    # Warm: a warm-up pass, then time a cache-served pass.
-    _training_read_pass(args, dataset, read_file_warm)
-    warm_start = time.perf_counter()
-    warm_samples, warm_bytes, warm_lat = _training_read_pass(args, dataset, read_file_warm)
-    warm_seconds = time.perf_counter() - warm_start
-    p50, p99 = schema.percentiles_us(warm_lat)
-    rows.append(
-        schema.row(
-            boundary=schema.L2_MOUNT,
-            system=args.system,
-            metadata_tier=args.metadata_tier,
-            object_backend=args.object_backend,
-            cache_state="warm",
-            concurrency=1,  # product-thesis workloads are sequential (latency, not a throughput sweep)
-            tool="native",
-            profile=args.profile,
-            workload="training_read",
-            phase="read",
-            operations=warm_samples,
-            seconds=warm_seconds,
-            bytes_total=warm_bytes,
-            p50_us=p50,
-            p99_us=p99,
-            cost_breakdown="read_mode=buffered",
-            shape=shape,
-        )
+
+def run_ai_shard_range_read(args, root: Path) -> list[str]:
+    dataset = root / "shards"
+    dataset.mkdir()
+    shard_paths = _seed_shard_dataset(args, dataset)
+    windows, selected_per_shard = _shard_range_windows(args)
+    logical_samples = len(shard_paths) * selected_per_shard
+    logical_bytes = logical_samples * args.sample_bytes
+    shape = (
+        f"shard_count={len(shard_paths)} samples_per_shard={args.files_per_dir} "
+        f"selected_samples_per_shard={selected_per_shard} sample_bytes={args.sample_bytes} "
+        f"range_stride={max(1, args.range_stride)} "
+        f"max_gap_bytes={max(0, args.range_coalesce_gap_bytes)} "
+        f"posix_pread_windows_per_shard={len(windows)} "
+        f"shard_read_workers={max(1, args.concurrency)}"
     )
+
+    rows: list[str] = []
+    if _cache_state_enabled(args, "cold"):
+        cold_start = time.perf_counter()
+        physical_ranges, physical_bytes, cold_lat, checksum = _shard_range_read_pass(
+            shard_paths,
+            windows,
+            bypass_kernel_cache=True,
+            concurrency=max(1, args.concurrency),
+        )
+        rows.append(
+            _ai_shard_range_row(
+                args,
+                "cold",
+                logical_samples,
+                logical_bytes,
+                time.perf_counter() - cold_start,
+                cold_lat,
+                _cold_read_mode(),
+                shape,
+                physical_ranges,
+                physical_bytes,
+                checksum,
+            )
+        )
+
+    if _cache_state_enabled(args, "warm"):
+        _shard_range_read_pass(
+            shard_paths,
+            windows,
+            bypass_kernel_cache=False,
+            concurrency=max(1, args.concurrency),
+        )
+        warm_start = time.perf_counter()
+        physical_ranges, physical_bytes, warm_lat, checksum = _shard_range_read_pass(
+            shard_paths,
+            windows,
+            bypass_kernel_cache=False,
+            concurrency=max(1, args.concurrency),
+        )
+        rows.append(
+            _ai_shard_range_row(
+                args,
+                "warm",
+                logical_samples,
+                logical_bytes,
+                time.perf_counter() - warm_start,
+                warm_lat,
+                "buffered",
+                shape,
+                physical_ranges,
+                physical_bytes,
+                checksum,
+            )
+        )
+    if _cache_state_enabled(args, "hot"):
+        stats_before_warmup = _stats_snapshot(args)
+        warmup_physical_ranges, warmup_physical_bytes, _, warmup_checksum = _shard_range_read_pass(
+            shard_paths,
+            windows,
+            bypass_kernel_cache=True,
+            concurrency=max(1, args.concurrency),
+        )
+        stats_before_measured = _stats_snapshot(args)
+        hot_start = time.perf_counter()
+        physical_ranges, physical_bytes, hot_lat, checksum = _shard_range_read_pass(
+            shard_paths,
+            windows,
+            bypass_kernel_cache=True,
+            concurrency=max(1, args.concurrency),
+        )
+        stats_after_measured = _stats_snapshot(args)
+        rows.append(
+            _ai_shard_range_row(
+                args,
+                "hot",
+                logical_samples,
+                logical_bytes,
+                time.perf_counter() - hot_start,
+                hot_lat,
+                _hot_read_mode(),
+                shape,
+                physical_ranges,
+                physical_bytes,
+                checksum,
+                warmup_physical_ranges,
+                warmup_physical_bytes,
+                warmup_checksum,
+                _stats_delta(stats_before_warmup, stats_before_measured),
+                _stats_delta(stats_before_measured, stats_after_measured),
+                _stats_read_coverage(
+                    stats_before_warmup,
+                    stats_before_measured,
+                    warmup_physical_ranges,
+                ),
+                _stats_read_coverage(
+                    stats_before_measured,
+                    stats_after_measured,
+                    physical_ranges,
+                ),
+            )
+        )
     return rows
 
 
@@ -399,15 +795,22 @@ def _fsprim_row(args, workload, phase, cache_state, operations, seconds, latenci
 
 
 def _read_phases(args, files, total_bytes, workload, shape):
-    """Cold (page-cache bypass) then warm read rows shared by big/small file."""
+    """Cold, warm, and hot read rows shared by big/small file."""
     rows = []
-    csec, clat = run_pool(files, read_file_cold, args.concurrency)
-    rows.append(_fsprim_row(args, workload, "read", "cold", len(files), csec, clat,
-                            total_bytes, cost=f"read_mode={_cold_read_mode()}", extra_shape=shape))
-    run_pool(files, read_file_warm, args.concurrency)  # warm-up
-    wsec, wlat = run_pool(files, read_file_warm, args.concurrency)
-    rows.append(_fsprim_row(args, workload, "read", "warm", len(files), wsec, wlat,
-                            total_bytes, cost="read_mode=buffered", extra_shape=shape))
+    if _cache_state_enabled(args, "cold"):
+        csec, clat = run_pool(files, read_file_cold, args.concurrency)
+        rows.append(_fsprim_row(args, workload, "read", "cold", len(files), csec, clat,
+                                total_bytes, cost=f"read_mode={_cold_read_mode()}", extra_shape=shape))
+    if _cache_state_enabled(args, "warm"):
+        run_pool(files, read_file_warm, args.concurrency)  # warm-up
+        wsec, wlat = run_pool(files, read_file_warm, args.concurrency)
+        rows.append(_fsprim_row(args, workload, "read", "warm", len(files), wsec, wlat,
+                                total_bytes, cost="read_mode=buffered", extra_shape=shape))
+    if _cache_state_enabled(args, "hot"):
+        run_pool(files, read_file_cold, args.concurrency)  # filesystem/client cache warm-up
+        hsec, hlat = run_pool(files, read_file_cold, args.concurrency)
+        rows.append(_fsprim_row(args, workload, "read", "hot", len(files), hsec, hlat,
+                                total_bytes, cost=f"read_mode={_hot_read_mode()}", extra_shape=shape))
     return rows
 
 
@@ -519,6 +922,7 @@ WORKLOADS = {
     "metadata_create_list": run_metadata_create_list,
     "checkpoint": run_checkpoint_write,
     "training_read": run_training_read,
+    "ai_shard_range_read": run_ai_shard_range_read,
     # FS-primitive family (juicefs-bench-shaped; selected via --workloads).
     "bigfile": run_bigfile,
     "smallfile": run_smallfile,
@@ -547,9 +951,27 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--sample-bytes", type=int, required=True)
     parser.add_argument("--checkpoint-bytes", type=int, required=True)
     parser.add_argument("--checkpoint-steps", type=int, required=True)
+    parser.add_argument("--range-stride", type=int, default=2)
+    parser.add_argument("--range-coalesce-gap-bytes", type=int, default=512)
+    parser.add_argument(
+        "--cache-states",
+        default="cold,warm",
+        help="comma-separated read cache states to emit: cold,warm,hot",
+    )
     parser.add_argument("--fsync", type=int, default=0)
     parser.add_argument("--emit-header", type=int, default=1)
-    return parser.parse_args(argv)
+    parser.add_argument(
+        "--stats-url",
+        default="",
+        help="optional NoKV stats endpoint for hot-row warmup/measured diagnostics",
+    )
+    args = parser.parse_args(argv)
+    states = [state.strip() for state in args.cache_states.split(",") if state.strip()]
+    unknown = [state for state in states if state not in _VALID_CACHE_STATES]
+    if not states or unknown:
+        parser.error("--cache-states must be a non-empty subset of: cold,warm,hot")
+    args.cache_states = frozenset(states)
+    return args
 
 
 def main(argv: list[str]) -> int:

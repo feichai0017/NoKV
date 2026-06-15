@@ -9,7 +9,12 @@ authors.workspace = true
 repository.workspace = true
 homepage.workspace = true
 
+[features]
+default = []
+etcd = ["nokv-control/etcd"]
+
 [dependencies]
+nokv-control.workspace = true
 nokv-meta.workspace = true
 nokv-object.workspace = true
 nokv-protocol.workspace = true
@@ -17,4 +22,5 @@ nokv-types.workspace = true
 sha2.workspace = true
 
 [dev-dependencies]
+nokv-client.workspace = true
 tempfile.workspace = true

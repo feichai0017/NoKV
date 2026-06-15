@@ -22,7 +22,7 @@ CANONICAL_COLUMNS: Sequence[str] = (
     "system",          # nokv | juicefs
     "metadata_tier",   # nokv-direct-wal-async | nokv-raft-none | juicefs-redis | ...
     "object_backend",  # rustfs | s3 | local
-    "cache_state",     # cold | warm
+    "cache_state",     # cold | warm | hot
     "concurrency",     # integer worker count for this row
     "tool",            # native | fio | mdtest | juicefs-bench | objbench
     "profile",         # smoke | standard | long

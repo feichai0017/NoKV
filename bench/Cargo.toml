@@ -13,6 +13,7 @@ homepage.workspace = true
 [dependencies]
 flate2 = "1"
 nokv-client.workspace = true
+nokv-control.workspace = true
 nokv-meta.workspace = true
 nokv-object.workspace = true
 nokv-server.workspace = true

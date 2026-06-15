@@ -31,8 +31,10 @@ PRODUCT_WORKLOADS_OVERRIDE=""
 PRIMITIVE_WORKLOADS_OVERRIDE=""
 CONCURRENCY_OVERRIDE=""
 TIERS_OVERRIDE=""
+CACHE_STATES_OVERRIDE=""
 REPEATS="${NOKV_BENCH_REPEATS:-1}"
 DECOMPOSE=0
+SKIP_REAL_TOOLS=0
 
 usage() {
     cat <<EOF
@@ -47,13 +49,17 @@ Usage: scripts/run-fs-benchmark.sh [--matrix|--quick] [options]
   --decompose-csv PATH     also write decompose sidecar CSV here
   --repeats N              repeat the selected grid N times (default: $REPEATS)
   --baseline PATH          compare against a baseline CSV and fail on regression
-  --product-workloads LIST product workloads run once at p=1
+  --product-workloads LIST product workloads
+                           metadata/checkpoint/training_read run once at p=1;
+                           ai_shard_range_read is swept across concurrency
                            (default: metadata_create_list,checkpoint,training_read; use none to skip)
   --primitive-workloads LIST
                            primitive workloads swept across concurrency
                            (default: bigfile,smallfile,metadata; use none to skip)
+  --skip-real-tools        skip fio/mdtest/juicefs-bench rows
   --concurrency "1 4 16"   override the concurrency sweep
   --tiers "local"          override NoKV tiers (current CLI supports local)
+  --cache-states LIST      read phases to emit: cold,warm,hot (default: cold,warm)
 
 Configuration is via NOKV_BENCH_* env vars; see scripts/lib/fs-bench-common.sh.
 Profile: NOKV_BENCH_PROFILE=smoke|standard|long (default smoke).
@@ -73,8 +79,10 @@ while [[ $# -gt 0 ]]; do
     --baseline) BASELINE="$2"; shift ;;
     --product-workloads) PRODUCT_WORKLOADS_OVERRIDE="$2"; shift ;;
     --primitive-workloads) PRIMITIVE_WORKLOADS_OVERRIDE="$2"; shift ;;
+    --skip-real-tools) SKIP_REAL_TOOLS=1 ;;
     --concurrency) CONCURRENCY_OVERRIDE="$2"; shift ;;
     --tiers) TIERS_OVERRIDE="$2"; shift ;;
+    --cache-states) CACHE_STATES_OVERRIDE="$2"; shift ;;
     -h | --help) usage; exit 0 ;;
     *) echo "error: unknown argument: $1" >&2; usage; exit 2 ;;
     esac
@@ -85,6 +93,8 @@ done
 
 # shellcheck source=scripts/lib/fs-bench-common.sh
 source "$ROOT_DIR/scripts/lib/fs-bench-common.sh"
+[[ -n "$CACHE_STATES_OVERRIDE" ]] && CACHE_STATES="$CACHE_STATES_OVERRIDE"
+export NOKV_BENCH_CACHE_STATES="$CACHE_STATES"
 
 # Profile-derived workload shape (drives the native driver's product-thesis set).
 case "$PROFILE" in
@@ -95,13 +105,43 @@ long) DATASET_DIRS=64 FILES_PER_DIR=1024 SAMPLE_BYTES=$((256 * 1024)) CHECKPOINT
 esac
 export DATASET_DIRS FILES_PER_DIR SAMPLE_BYTES CHECKPOINT_BYTES CHECKPOINT_STEPS
 
-# Matrix dimensions. Product-thesis workloads are sequential (latency, not a
-# throughput sweep) so they always run once at p=1; only the FS-primitive set and
-# the real tools are swept across the concurrency levels.
+# Matrix dimensions. Most product-thesis workloads are latency rows and run once
+# at p=1. `ai_shard_range_read` is a training data-plane throughput row, so it
+# follows the same concurrency sweep as FS primitives and real tools.
 PRODUCT_WORKLOADS="${PRODUCT_WORKLOADS_OVERRIDE:-metadata_create_list,checkpoint,training_read}"
 PRIMITIVE_WORKLOADS="${PRIMITIVE_WORKLOADS_OVERRIDE:-bigfile,smallfile,metadata}"
 [[ "$PRODUCT_WORKLOADS" == "none" ]] && PRODUCT_WORKLOADS=""
 [[ "$PRIMITIVE_WORKLOADS" == "none" ]] && PRIMITIVE_WORKLOADS=""
+bench_without_workloads() {
+    local input="$1" excluded="$2" result="" raw name
+    IFS=',' read -ra names <<<"$input"
+    for raw in "${names[@]}"; do
+        name="${raw//[[:space:]]/}"
+        [[ -z "$name" ]] && continue
+        case ",$excluded," in
+        *,"$name",*) ;;
+        *) [[ -z "$result" ]] && result="$name" || result="${result},${name}" ;;
+        esac
+    done
+    echo "$result"
+}
+
+bench_only_workloads() {
+    local input="$1" included="$2" result="" raw name
+    IFS=',' read -ra names <<<"$input"
+    for raw in "${names[@]}"; do
+        name="${raw//[[:space:]]/}"
+        [[ -z "$name" ]] && continue
+        case ",$included," in
+        *,"$name",*) [[ -z "$result" ]] && result="$name" || result="${result},${name}" ;;
+        *) ;;
+        esac
+    done
+    echo "$result"
+}
+
+PRODUCT_THROUGHPUT_WORKLOADS="$(bench_only_workloads "$PRODUCT_WORKLOADS" "ai_shard_range_read")"
+PRODUCT_LATENCY_WORKLOADS="$(bench_without_workloads "$PRODUCT_WORKLOADS" "ai_shard_range_read")"
 NOKV_TOOLS="fio,mdtest"
 JUICEFS_TOOLS="fio,mdtest,juicefs-bench"
 if [[ "$MODE" == "matrix" ]]; then
@@ -112,6 +152,8 @@ else
     NOKV_TIERS="${TIERS_OVERRIDE:-local}"
 fi
 [[ "$PROFILE" == "smoke" && -z "$CONCURRENCY_OVERRIDE" && "$MODE" == "matrix" ]] && CONCURRENCY_SWEEP="1 4"
+REAL_TOOLS_MODE="default"
+[[ "$SKIP_REAL_TOOLS" == "1" ]] && REAL_TOOLS_MODE="skip"
 
 HOST_LABEL="$(hostname -s 2>/dev/null || hostname 2>/dev/null || echo host)"
 ENV_ID="${NOKV_BENCH_ENV_ID:-$(date -u +%Y%m%dT%H%M%SZ)-${HOST_LABEL}}"
@@ -130,6 +172,9 @@ ENV_JSON_RUN="$WORKDIR/env.json"
     --out "$ENV_JSON_RUN" --env-id "$ENV_ID" --mode "$MODE" --profile "$PROFILE" \
     --tiers "$NOKV_TIERS" --concurrency "$CONCURRENCY_SWEEP" \
     --product-workloads "$PRODUCT_WORKLOADS" --primitive-workloads "$PRIMITIVE_WORKLOADS" \
+    --real-tools "$REAL_TOOLS_MODE" \
+    --range-stride "$RANGE_STRIDE" --range-coalesce-gap-bytes "$RANGE_COALESCE_GAP_BYTES" \
+    --cache-states "$CACHE_STATES" \
     --repeats "$REPEATS"
 
 DECOMPOSE_RUN_CSV="$WORKDIR/decompose.csv"
@@ -143,7 +188,7 @@ if [[ "$DECOMPOSE" == "1" ]]; then
 fi
 
 echo "Running NoKV-FS benchmark mode=$MODE profile=$PROFILE repeats=$REPEATS tiers='$NOKV_TIERS' concurrency='$CONCURRENCY_SWEEP'" >&2
-echo "Native workloads product='$PRODUCT_WORKLOADS' primitive='$PRIMITIVE_WORKLOADS'" >&2
+echo "Native workloads product='$PRODUCT_WORKLOADS' product_throughput='$PRODUCT_THROUGHPUT_WORKLOADS' primitive='$PRIMITIVE_WORKLOADS' real_tools=$REAL_TOOLS_MODE" >&2
 
 bench_run_phase() {
     local system="$1" tier="$2" concurrency="$3" tool="$4" workloads="$5"
@@ -194,21 +239,29 @@ run_nokv_tier() {
     tier="$(bench_tier_label "$mode" "$sync")"
     bench_start_nokv_server "$mode" "$sync"
     bench_mount_nokv warm
-    # Sequential product-thesis workloads: run once at p=1.
-    if [[ -n "$PRODUCT_WORKLOADS" ]]; then
+    # Latency product-thesis workloads: run once at p=1.
+    if [[ -n "$PRODUCT_LATENCY_WORKLOADS" ]]; then
         bench_drop_caches
-        bench_run_phase "nokv" "$tier" 1 "native" "$PRODUCT_WORKLOADS" \
-            bench_run_native "nokv" "$NOKV_MOUNT" "$tier" 1 0 "$PRODUCT_WORKLOADS" >>"$RUN_CSV"
+        bench_run_phase "nokv" "$tier" 1 "native" "$PRODUCT_LATENCY_WORKLOADS" \
+            bench_run_native "nokv" "$NOKV_MOUNT" "$tier" 1 0 "$PRODUCT_LATENCY_WORKLOADS" >>"$RUN_CSV"
     fi
-    # FS-primitive + real tools: concurrency sweep.
+    # Throughput product-thesis workloads + FS primitives + real tools:
+    # concurrency sweep.
     for c in $CONCURRENCY_SWEEP; do
+        if [[ -n "$PRODUCT_THROUGHPUT_WORKLOADS" ]]; then
+            bench_drop_caches
+            bench_run_phase "nokv" "$tier" "$c" "native" "$PRODUCT_THROUGHPUT_WORKLOADS" \
+                bench_run_native "nokv" "$NOKV_MOUNT" "$tier" "$c" 0 "$PRODUCT_THROUGHPUT_WORKLOADS" >>"$RUN_CSV"
+        fi
         if [[ -n "$PRIMITIVE_WORKLOADS" ]]; then
             bench_drop_caches
             bench_run_phase "nokv" "$tier" "$c" "native" "$PRIMITIVE_WORKLOADS" \
                 bench_run_native "nokv" "$NOKV_MOUNT" "$tier" "$c" 0 "$PRIMITIVE_WORKLOADS" >>"$RUN_CSV"
         fi
-        bench_run_phase "nokv" "$tier" "$c" "real-tools" "$NOKV_TOOLS" \
-            bench_run_real_tools "nokv" "$NOKV_MOUNT" "$tier" "$c" "$NOKV_TOOLS" 0 >>"$RUN_CSV"
+        if [[ "$SKIP_REAL_TOOLS" != "1" ]]; then
+            bench_run_phase "nokv" "$tier" "$c" "real-tools" "$NOKV_TOOLS" \
+                bench_run_real_tools "nokv" "$NOKV_MOUNT" "$tier" "$c" "$NOKV_TOOLS" 0 >>"$RUN_CSV"
+        fi
     done
     bench_unmount_nokv
     bench_stop_nokv_server
@@ -222,16 +275,22 @@ for repeat in $(seq 1 "$REPEATS"); do
     done
 
     bench_mount_juicefs
-    if [[ -n "$PRODUCT_WORKLOADS" ]]; then
+    if [[ -n "$PRODUCT_LATENCY_WORKLOADS" ]]; then
         bench_drop_caches
-        bench_run_native "juicefs" "$JUICEFS_MOUNT" "juicefs-redis" 1 0 "$PRODUCT_WORKLOADS" >>"$RUN_CSV"
+        bench_run_native "juicefs" "$JUICEFS_MOUNT" "juicefs-redis" 1 0 "$PRODUCT_LATENCY_WORKLOADS" >>"$RUN_CSV"
     fi
     for c in $CONCURRENCY_SWEEP; do
+        if [[ -n "$PRODUCT_THROUGHPUT_WORKLOADS" ]]; then
+            bench_drop_caches
+            bench_run_native "juicefs" "$JUICEFS_MOUNT" "juicefs-redis" "$c" 0 "$PRODUCT_THROUGHPUT_WORKLOADS" >>"$RUN_CSV"
+        fi
         if [[ -n "$PRIMITIVE_WORKLOADS" ]]; then
             bench_drop_caches
             bench_run_native "juicefs" "$JUICEFS_MOUNT" "juicefs-redis" "$c" 0 "$PRIMITIVE_WORKLOADS" >>"$RUN_CSV"
         fi
-        bench_run_real_tools "juicefs" "$JUICEFS_MOUNT" "juicefs-redis" "$c" "$JUICEFS_TOOLS" 0 >>"$RUN_CSV"
+        if [[ "$SKIP_REAL_TOOLS" != "1" ]]; then
+            bench_run_real_tools "juicefs" "$JUICEFS_MOUNT" "juicefs-redis" "$c" "$JUICEFS_TOOLS" 0 >>"$RUN_CSV"
+        fi
     done
     bench_unmount_juicefs
 done

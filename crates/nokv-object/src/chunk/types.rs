@@ -6,7 +6,8 @@ use nokv_types::ChunkManifest;
 
 use super::manifest::chunk_manifests_from_stored_chunks;
 use super::read::{
-    read_object_blocks_with_cache_options, BlockReadOptions, BlockReadOutcome, ObjectReadBlock,
+    read_object_blocks_into_with_cache_options, read_object_blocks_with_cache_options,
+    BlockReadIntoOutcome, BlockReadOptions, BlockReadOutcome, ObjectReadBlock,
 };
 use super::write::{
     delete_staged_objects, put_chunked_object, put_chunked_ranges_with_block_index_base,
@@ -45,6 +46,16 @@ pub trait ChunkStore {
         blocks: &[ObjectReadBlock],
         options: BlockReadOptions,
     ) -> Result<BlockReadOutcome, ObjectError>
+    where
+        C: BlockCache + ?Sized;
+
+    fn read_blocks_into_with_options<C>(
+        &self,
+        cache: Option<&C>,
+        output: &mut [u8],
+        blocks: &[ObjectReadBlock],
+        options: BlockReadOptions,
+    ) -> Result<BlockReadIntoOutcome, ObjectError>
     where
         C: BlockCache + ?Sized;
 
@@ -245,6 +256,19 @@ where
         C: BlockCache + ?Sized,
     {
         read_object_blocks_with_cache_options(self, cache, output_len, blocks, options)
+    }
+
+    fn read_blocks_into_with_options<C>(
+        &self,
+        cache: Option<&C>,
+        output: &mut [u8],
+        blocks: &[ObjectReadBlock],
+        options: BlockReadOptions,
+    ) -> Result<BlockReadIntoOutcome, ObjectError>
+    where
+        C: BlockCache + ?Sized,
+    {
+        read_object_blocks_into_with_cache_options(self, cache, output, blocks, options)
     }
 
     fn delete_staged(&self, staged: &StagedObjectSet) -> Result<ObjectCleanupOutcome, ObjectError> {

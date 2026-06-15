@@ -21,24 +21,25 @@ pub use chunk::{
     chunk_write_ranges_block_count, delete_staged_objects, manifest_digest_uri,
     plan_chunk_manifest_reads, plan_slice_reads, put_chunked_object, put_chunked_ranges_parallel,
     put_chunked_ranges_with_block_index_base, put_chunked_reader,
-    read_object_blocks_with_cache_options, BlockReadOptions, BlockReadOutcome, ChunkStore,
-    ChunkWriteOptions, ChunkWriteRange, ChunkedWrite, DirtyChunkExtent, ObjectCleanupOutcome,
-    ObjectReadBlock, ObjectReadCoordinator, ReadCacheFillMode, SliceReadPlan, StagedObject,
-    StagedObjectSet, StoredBlock, StoredChunk, StoredSlice, DEFAULT_BLOCK_SIZE, DEFAULT_CHUNK_SIZE,
+    read_object_blocks_into_with_cache_options, read_object_blocks_with_cache_options,
+    BlockReadIntoOutcome, BlockReadOptions, BlockReadOutcome, ChunkStore, ChunkWriteOptions,
+    ChunkWriteRange, ChunkedWrite, DirtyChunkExtent, ObjectCleanupOutcome, ObjectReadBlock,
+    ObjectReadCoordinator, ReadCacheFillMode, SliceReadPlan, StagedObject, StagedObjectSet,
+    StoredBlock, StoredChunk, StoredSlice, DEFAULT_BLOCK_SIZE, DEFAULT_CHUNK_SIZE,
 };
 pub use fabric::{
     resolve_block_placements, BlockPlacement, DataFabricReadStats, DataTransport, HotFillMode,
-    LayoutReadExecutor, LayoutReadOutcome, LocalObjectStore, LocalObjectStoreOptions,
-    LocalObjectStoreStats, TieredObjectStore, TieredObjectStoreOptions, TieredObjectStoreStats,
-    TieredPutPolicy,
+    LayoutReadExecutor, LayoutReadIntoOutcome, LayoutReadOutcome, LayoutReadRequest,
+    LocalObjectStore, LocalObjectStoreOptions, LocalObjectStoreStats, TieredObjectStore,
+    TieredObjectStoreOptions, TieredObjectStoreStats, TieredPutPolicy,
 };
 pub use pipeline::{
-    FileReadOutcome, FileReadPipeline, FileReadPipelineOptions, FileReadPipelineStats,
-    FileReadRequest, FileWritePipeline, FileWriteUpload, ObjectPrefetchOptions,
-    ObjectPrefetchRequest, ObjectPrefetchStats, ObjectPrefetcher, ObjectReadPlan,
-    ObjectReadPlanCache, ObjectReadPlanKey, ObjectSliceWriter, ObjectWritebackOptions,
-    ObjectWritebackRequest, ObjectWritebackStats, ObjectWritebackUploader, PendingChunkedWrite,
-    ReadAheadHint, WritebackUploadRange,
+    FileReadIntoOutcome, FileReadOutcome, FileReadPipeline, FileReadPipelineOptions,
+    FileReadPipelineStats, FileReadRequest, FileWritePipeline, FileWriteUpload,
+    ObjectPrefetchOptions, ObjectPrefetchRequest, ObjectPrefetchStats, ObjectPrefetcher,
+    ObjectReadPlan, ObjectReadPlanCache, ObjectReadPlanKey, ObjectSliceWriter,
+    ObjectWritebackOptions, ObjectWritebackRequest, ObjectWritebackStats, ObjectWritebackUploader,
+    PendingChunkedWrite, ReadAheadHint, WritebackUploadRange,
 };
 pub use store::{
     ConfiguredObjectStore, MemoryObjectStore, ObjectBytes, ObjectCapabilities, ObjectError,

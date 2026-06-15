@@ -10,6 +10,7 @@ pub mod command;
 pub mod gc;
 pub mod holtstore;
 pub mod layout;
+pub mod log;
 pub mod service;
 
 pub use backup::{MetadataBackupOptions, MetadataBackupWorker, MetadataBackupWorkerState};
@@ -24,10 +25,16 @@ pub use gc::{
     ObjectGcWorkerState,
 };
 pub use holtstore::HoltMetadataStore;
+pub use log::{
+    metadata_log_replay_entries, MetadataLogEntry, MetadataLogError, MetadataLogSegment,
+    METADATA_LOG_ZERO_DIGEST,
+};
 pub use service::{
     BodyReadPlan, CheckpointHandle, CheckpointShard, CloneHandle, CreateInDirPathBatch,
     CreatedPreparedArtifact, DanglingBlock, DentryWithAttr, FsckReport, MetadError,
-    MetadataArchiveConfig, MetadataBackupOutcome, MetadataRestoreOutcome, MetadataServiceStats,
+    MetadataArchiveConfig, MetadataBackupOutcome, MetadataLogArchiveConfig,
+    MetadataLogRestoreOutcome, MetadataLogSegmentArchiveOutcome, MetadataLogSegmentPointer,
+    MetadataLogSyncConfig, MetadataLogSyncSnapshot, MetadataRestoreOutcome, MetadataServiceStats,
     NamespaceAggregateGroup, NamespaceAggregateMeasure, NamespaceAggregateOp,
     NamespaceAggregateOutputMeasure, NamespaceAggregateRequest, NamespaceAggregateResult,
     NamespaceAggregateSample, NamespaceAggregateSort, NamespaceAggregateValue,
@@ -40,8 +47,8 @@ pub use service::{
     NamespacePredicateValue, NamespaceQueryCatalog, NamespaceReadFormat, NamespaceReadItem,
     NamespaceReadOptions, NamespaceReadPage, NamespaceRecordCount, NamespaceRecordType,
     NamespaceSchema, NamespaceSort, NamespaceSortDirection, NamespaceSortField, NoKvFs,
-    ObjectTransferStats, OpenPathReadPlan, PendingObjectCleanupOutcome, PreparedArtifact,
-    PublishArtifact, PublishArtifactRange, PublishArtifactSession, PublishArtifactStagedSession,
-    ReadDirPlusPage, RecordCountProvenance, RenameReplaceResult, SubtreeDelta, SubtreeDeltaKind,
-    UpdateAttr, XattrSetMode, DEFAULT_SNAPSHOT_LEASE_MS,
+    ObjectTransferStats, OpenPathReadPlan, OpenPathReadPlanRequest, PendingObjectCleanupOutcome,
+    PreparedArtifact, PublishArtifact, PublishArtifactRange, PublishArtifactSession,
+    PublishArtifactStagedSession, ReadDirPlusPage, RecordCountProvenance, RenameReplaceResult,
+    SubtreeDelta, SubtreeDeltaKind, UpdateAttr, XattrSetMode, DEFAULT_SNAPSHOT_LEASE_MS,
 };

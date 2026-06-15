@@ -57,7 +57,14 @@ scripts/run-rustfs-e2e.sh
 
 Use `NOKV_E2E_PROFILE`, `NOKV_E2E_WORKLOAD`, and
 `NOKV_E2E_OBJECT_CONCURRENCY` to change the benchmark shape without editing the
-script.
+script. Use `NOKV_E2E_CARGO_TARGET_DIR` when a run needs an isolated Cargo
+target directory.
+
+For the packed-shard AI data path, run `scripts/run-ai-shard-range-matrix.sh`.
+It exercises exact sparse reads, gap-coalesced sparse reads, and the MB-scale
+read-ahead admission smoke over disposable RustFS instances. The script writes
+per-case logs plus a combined CSV; use `NOKV_AI_SHARD_MATRIX_OUTPUT_DIR` or
+`NOKV_AI_SHARD_MATRIX_CSV` to choose the artifact location.
 
 ## Use RustFS With NoKV
 
@@ -99,7 +106,9 @@ cargo run --release -p nokv-bench --bin nokv-bench -- \
 
 `mdtest-easy` and `mdtest-hard` are metadata-only and do not exercise object
 storage. `checkpoint-publish` and `training-read` are the useful object-backed
-workloads for RustFS. The benchmark harness uses the deployable single-node
+workloads for RustFS. `metadata-durability-batch` has metadata-only file bodies,
+but its `sync-shared-log` phase writes grouped metadata log segments to the
+configured object backend. The benchmark harness uses the deployable single-node
 `metad` service boundary by default. Use `--block-cache off` as a control run
 when measuring object backend latency instead of NoKV cache reuse.
 

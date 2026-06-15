@@ -10,8 +10,8 @@ pub use prefetch::{
 };
 pub use read_plan::{ObjectReadPlan, ObjectReadPlanCache, ObjectReadPlanKey};
 pub use reader::{
-    FileReadOutcome, FileReadPipeline, FileReadPipelineOptions, FileReadPipelineStats,
-    FileReadRequest, ReadAheadHint,
+    FileReadIntoOutcome, FileReadOutcome, FileReadPipeline, FileReadPipelineOptions,
+    FileReadPipelineStats, FileReadRequest, ReadAheadHint,
 };
 pub use slice_writer::ObjectSliceWriter;
 pub use writeback::{

@@ -1,6 +1,7 @@
 use super::*;
 use crate::command::{ReadItem, ScanItem};
 use crate::holtstore::HoltMetadataStore;
+use crate::{MetadataLogEntry, MetadataLogSegment, METADATA_LOG_ZERO_DIGEST};
 use nokv_object::{MemoryObjectStore, ObjectBytes};
 use nokv_types::{AdvisoryLockKind, AdvisoryLockRequest};
 use std::sync::Arc;
@@ -2253,6 +2254,63 @@ fn open_path_read_plan_uses_dentry_projection_body_descriptor() {
 }
 
 #[test]
+fn open_path_read_plan_batch_uses_one_read_version() {
+    let metadata = PurposeTrackingStore::new();
+    let service = NoKvFs::new(
+        MountId::new(1).unwrap(),
+        metadata.clone(),
+        MemoryObjectStore::new(),
+    );
+    service.bootstrap_root(0o755, 1000, 1000).unwrap();
+    let first = service
+        .publish_artifact(artifact_request(
+            DentryName::new(b"sample-0.bin".to_vec()).unwrap(),
+            "dataset/sample-0",
+            b"abcdefgh",
+        ))
+        .unwrap();
+    let second = service
+        .publish_artifact(artifact_request(
+            DentryName::new(b"sample-1.bin".to_vec()).unwrap(),
+            "dataset/sample-1",
+            b"uvwxyz",
+        ))
+        .unwrap();
+
+    let before = metadata.counts();
+    let opens = service
+        .open_path_read_plan_batch(&[
+            OpenPathReadPlanRequest {
+                path: "/sample-0.bin".to_owned(),
+                offset: 1,
+                len: 3,
+                expected_generation: Some(first.attr.generation),
+            },
+            OpenPathReadPlanRequest {
+                path: "/sample-1.bin".to_owned(),
+                offset: 2,
+                len: 2,
+                expected_generation: Some(second.attr.generation),
+            },
+        ])
+        .unwrap();
+    let after = metadata.counts();
+
+    assert_eq!(opens.len(), 2);
+    assert_eq!(opens[0].metadata.attr.inode, first.attr.inode);
+    assert_eq!(opens[1].metadata.attr.inode, second.attr.inode);
+    assert_eq!(opens[0].lease.read_version, opens[1].lease.read_version);
+    assert_eq!(opens[0].plan.output_len, 3);
+    assert_eq!(opens[1].plan.output_len, 2);
+    assert_eq!(
+        after.user_strong_gets - before.user_strong_gets,
+        4,
+        "batch open should read each dentry projection and chunk manifest once"
+    );
+    assert_eq!(after.write_plan_gets, before.write_plan_gets);
+}
+
+#[test]
 fn open_path_read_plan_returns_zero_write_lease_and_projected_plan() {
     let metadata = PurposeTrackingStore::new();
     let service = NoKvFs::new(
@@ -3413,7 +3471,7 @@ fn watch_replay_survives_service_reopen() {
         .unwrap();
     drop(service);
 
-    let reopened = NoKvFs::open_existing(MountId::new(1).unwrap(), metadata, objects).unwrap();
+    let reopened = NoKvFs::open_existing(MountId::new(1).unwrap(), metadata, objects, 0).unwrap();
     let events = reopened.replay_watch(InodeId::root(), cursor, 100).unwrap();
     assert_eq!(events.len(), 1);
     assert_eq!(events[0].event.kind, WatchEventKind::Create);
@@ -3439,7 +3497,7 @@ fn open_existing_recovers_inode_and_version_allocators() {
         .unwrap();
     drop(service);
 
-    let reopened = NoKvFs::open_existing(MountId::new(1).unwrap(), metadata, objects).unwrap();
+    let reopened = NoKvFs::open_existing(MountId::new(1).unwrap(), metadata, objects, 0).unwrap();
     let second = reopened
         .create_dir(
             InodeId::root(),
@@ -3461,7 +3519,7 @@ fn refresh_allocator_state_advances_live_read_version_after_external_commit() {
     let original = NoKvFs::new(MountId::new(1).unwrap(), metadata.clone(), objects.clone());
     original.bootstrap_root(0o755, 1000, 1000).unwrap();
 
-    let external = NoKvFs::open_existing(MountId::new(1).unwrap(), metadata, objects).unwrap();
+    let external = NoKvFs::open_existing(MountId::new(1).unwrap(), metadata, objects, 0).unwrap();
     let external_file = external
         .create_file_path("/external.bin", 0o644, 1000, 1000)
         .unwrap();
@@ -3503,7 +3561,7 @@ fn open_existing_recovers_after_dentry_only_rename() {
     assert_eq!(renamed.attr.inode, created.attr.inode);
     drop(service);
 
-    let reopened = NoKvFs::open_existing(MountId::new(1).unwrap(), metadata, objects).unwrap();
+    let reopened = NoKvFs::open_existing(MountId::new(1).unwrap(), metadata, objects, 0).unwrap();
     assert!(reopened
         .lookup_plus(InodeId::root(), &old_name)
         .unwrap()
@@ -3530,7 +3588,7 @@ fn open_existing_does_not_reuse_removed_inode() {
     service.remove_file(InodeId::root(), &first_name).unwrap();
     drop(service);
 
-    let reopened = NoKvFs::open_existing(MountId::new(1).unwrap(), metadata, objects).unwrap();
+    let reopened = NoKvFs::open_existing(MountId::new(1).unwrap(), metadata, objects, 0).unwrap();
     let second = reopened
         .create_file(InodeId::root(), second_name.clone(), 0o644, 1000, 1000)
         .unwrap();
@@ -3563,7 +3621,7 @@ fn pending_object_gc_survives_service_reopen() {
     drop(service);
 
     let reopened =
-        NoKvFs::open_existing(MountId::new(1).unwrap(), metadata, objects.clone()).unwrap();
+        NoKvFs::open_existing(MountId::new(1).unwrap(), metadata, objects.clone(), 0).unwrap();
     let cleanup = reopened.cleanup_pending_objects(100).unwrap();
     assert_eq!(cleanup.deleted, 1);
     assert_eq!(cleanup.records_removed, 1);
@@ -3580,7 +3638,7 @@ fn snapshot_pin_survives_service_reopen() {
     let snapshot = service.snapshot_subtree(InodeId::root()).unwrap();
     drop(service);
 
-    let reopened = NoKvFs::open_existing(MountId::new(1).unwrap(), metadata, objects).unwrap();
+    let reopened = NoKvFs::open_existing(MountId::new(1).unwrap(), metadata, objects, 0).unwrap();
     assert_eq!(
         reopened.snapshot_pin(snapshot.snapshot_id).unwrap(),
         Some(snapshot)
@@ -3630,7 +3688,7 @@ fn failed_publish_returns_staged_objects_for_cleanup_and_does_not_reuse_identity
     }
     drop(service);
 
-    let reopened = NoKvFs::open_existing(MountId::new(1).unwrap(), metadata, objects).unwrap();
+    let reopened = NoKvFs::open_existing(MountId::new(1).unwrap(), metadata, objects, 0).unwrap();
     let next_name = DentryName::new(b"next.bin".to_vec()).unwrap();
     let next = reopened
         .publish_artifact(artifact_request(next_name, "next", b"next"))
@@ -4155,6 +4213,443 @@ fn metadata_backup_retains_only_keep_last_checkpoints() {
     );
     let restored = recovered.restore_metadata(&config).unwrap().unwrap();
     assert_eq!(restored.checkpoint_key, b3.checkpoint_key);
+}
+
+fn log_test_command(request_id: &[u8], commit_version: u64) -> MetadataCommand {
+    MetadataCommand {
+        request_id: request_id.to_vec(),
+        kind: CommandKind::CreateFile,
+        read_version: Version::new(commit_version - 1).unwrap(),
+        commit_version: Version::new(commit_version).unwrap(),
+        primary_family: RecordFamily::Dentry,
+        primary_key: b"log-primary".to_vec(),
+        predicates: vec![PredicateRef {
+            family: RecordFamily::Dentry,
+            key: b"log-primary".to_vec(),
+            predicate: Predicate::NotExists,
+        }],
+        mutations: vec![Mutation {
+            family: RecordFamily::Dentry,
+            key: b"log-primary".to_vec(),
+            op: MutationOp::Put,
+            value: Some(Value(b"log-value".to_vec())),
+        }],
+        watch: Vec::new(),
+    }
+}
+
+fn log_test_entry(
+    request_id: &[u8],
+    lsn: u64,
+    commit_version: u64,
+    prev_digest: [u8; 32],
+) -> MetadataLogEntry {
+    MetadataLogEntry::seal(
+        "mount-1:/runs",
+        1,
+        lsn,
+        log_test_command(request_id, commit_version),
+        CommitResult {
+            commit_version: Version::new(commit_version).unwrap(),
+            applied_mutations: 1,
+            watch_events: 0,
+        },
+        prev_digest,
+    )
+    .unwrap()
+}
+
+fn snapshot_segment_keys(snapshot: &MetadataLogSyncSnapshot) -> Vec<String> {
+    snapshot
+        .segments
+        .iter()
+        .map(|segment| segment.segment_key.clone())
+        .collect()
+}
+
+fn log_replay_command(
+    request_id: &[u8],
+    key: &[u8],
+    value: &[u8],
+    read_version: u64,
+    commit_version: u64,
+) -> MetadataCommand {
+    MetadataCommand {
+        request_id: request_id.to_vec(),
+        kind: CommandKind::RegisterNamespaceIndex,
+        read_version: Version::new(read_version).unwrap(),
+        commit_version: Version::new(commit_version).unwrap(),
+        primary_family: RecordFamily::System,
+        primary_key: key.to_vec(),
+        predicates: vec![PredicateRef {
+            family: RecordFamily::System,
+            key: key.to_vec(),
+            predicate: Predicate::NotExists,
+        }],
+        mutations: vec![Mutation {
+            family: RecordFamily::System,
+            key: key.to_vec(),
+            op: MutationOp::Put,
+            value: Some(Value(value.to_vec())),
+        }],
+        watch: Vec::new(),
+    }
+}
+
+#[test]
+fn metadata_log_segment_archive_round_trips_through_object_store() {
+    let (service, objects) = service_with_objects();
+    let first = log_test_entry(b"req-log-1", 1, 11, METADATA_LOG_ZERO_DIGEST);
+    let second = log_test_entry(b"req-log-2", 2, 12, first.digest);
+    let segment = MetadataLogSegment::seal(vec![first, second]).unwrap();
+    let config = MetadataLogArchiveConfig::new("meta/shared-log");
+
+    let archived = service
+        .archive_metadata_log_segment(&config, &segment)
+        .unwrap();
+
+    assert!(archived.segment_key.starts_with("meta/shared-log/log/"));
+    assert!(archived
+        .segment_key
+        .contains("/00000000000000000001-00000000000000000002-"));
+    assert!(archived.segment_key.ends_with(".segment"));
+    assert_eq!(archived.first_lsn, 1);
+    assert_eq!(archived.last_lsn, 2);
+    assert_eq!(
+        archived.encoded_bytes,
+        segment.encode().unwrap().len() as u64
+    );
+    assert!(objects
+        .head(&ObjectKey::new(archived.segment_key.clone()).unwrap())
+        .unwrap()
+        .is_some());
+
+    let loaded = service
+        .load_metadata_log_segment(&archived.segment_key)
+        .unwrap();
+    assert_eq!(loaded, segment);
+}
+
+#[test]
+fn metadata_log_segment_load_rejects_corrupted_object() {
+    let (service, objects) = service_with_objects();
+    let first = log_test_entry(b"req-log-1", 1, 11, METADATA_LOG_ZERO_DIGEST);
+    let segment = MetadataLogSegment::seal(vec![first]).unwrap();
+    let config = MetadataLogArchiveConfig::new("meta/shared-log");
+    let archived = service
+        .archive_metadata_log_segment(&config, &segment)
+        .unwrap();
+    let key = ObjectKey::new(archived.segment_key.clone()).unwrap();
+    objects.put(&key, b"corrupted-segment".to_vec()).unwrap();
+
+    assert!(matches!(
+        service.load_metadata_log_segment(&archived.segment_key),
+        Err(MetadError::Codec(_))
+    ));
+}
+
+#[test]
+fn restore_metadata_with_archived_log_segments_replays_after_checkpoint() {
+    let (service, objects) = service_with_objects();
+    let checkpoint_config = MetadataArchiveConfig::new("meta/ck-log-replay", 2);
+    let checkpoint = service.backup_metadata(&checkpoint_config).unwrap();
+
+    let key = b"log-replay-system-key".to_vec();
+    let value = b"after-checkpoint".to_vec();
+    let commit_version = checkpoint.commit_version + 1;
+    let command = log_replay_command(
+        b"req-log-replay",
+        &key,
+        &value,
+        checkpoint.commit_version,
+        commit_version,
+    );
+    let result = service.commit_metadata(command.clone()).unwrap();
+    let entry =
+        MetadataLogEntry::seal("mount-1:/", 1, 1, command, result, METADATA_LOG_ZERO_DIGEST)
+            .unwrap();
+    let segment = MetadataLogSegment::seal(vec![entry.clone()]).unwrap();
+    let log_config = MetadataLogArchiveConfig::new("meta/shared-log-replay");
+    let archived = service
+        .archive_metadata_log_segment(&log_config, &segment)
+        .unwrap();
+
+    let recovered = NoKvFs::new(
+        MountId::new(1).unwrap(),
+        HoltMetadataStore::open_memory().unwrap(),
+        objects.clone(),
+    );
+    let outcome = recovered
+        .restore_metadata_with_archived_log_segments(
+            &checkpoint_config,
+            std::slice::from_ref(&archived.segment_key),
+            0,
+            METADATA_LOG_ZERO_DIGEST,
+        )
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(outcome.checkpoint.checkpoint_key, checkpoint.checkpoint_key);
+    assert_eq!(outcome.replayed_entries, 1);
+    assert_eq!(outcome.durable_lsn, 1);
+    assert_eq!(outcome.last_digest, entry.digest);
+    assert!(recovered.read_version().unwrap().get() >= commit_version);
+    assert_eq!(
+        recovered
+            .metadata
+            .get(
+                RecordFamily::System,
+                &key,
+                Version::new(commit_version).unwrap(),
+                ReadPurpose::UserStrong
+            )
+            .unwrap(),
+        Some(Value(value))
+    );
+}
+
+#[test]
+fn restore_metadata_with_log_segments_rejects_chain_gap_before_restore() {
+    let (service, objects) = service_with_objects();
+    let checkpoint_config = MetadataArchiveConfig::new("meta/ck-log-gap", 2);
+    let checkpoint = service.backup_metadata(&checkpoint_config).unwrap();
+
+    let command = log_replay_command(
+        b"req-log-gap",
+        b"log-gap-system-key",
+        b"value",
+        checkpoint.commit_version,
+        checkpoint.commit_version + 1,
+    );
+    let result = service.commit_metadata(command.clone()).unwrap();
+    let entry =
+        MetadataLogEntry::seal("mount-1:/", 1, 2, command, result, METADATA_LOG_ZERO_DIGEST)
+            .unwrap();
+    let segment = MetadataLogSegment::seal(vec![entry]).unwrap();
+    let recovered = NoKvFs::new(
+        MountId::new(1).unwrap(),
+        HoltMetadataStore::open_memory().unwrap(),
+        objects.clone(),
+    );
+
+    let err = recovered
+        .restore_metadata_with_log_segments(
+            &checkpoint_config,
+            &[segment],
+            0,
+            METADATA_LOG_ZERO_DIGEST,
+        )
+        .unwrap_err();
+
+    assert!(matches!(err, MetadError::Codec(message) if message.contains("lsn gap")));
+}
+
+#[test]
+fn sync_metadata_log_archives_commit_before_recovery_ack() {
+    let (service, objects) = service_with_objects();
+    let checkpoint_config = MetadataArchiveConfig::new("meta/ck-sync-log", 2);
+    let checkpoint = service.backup_metadata(&checkpoint_config).unwrap();
+    service
+        .enable_sync_metadata_log(MetadataLogSyncConfig::new(
+            "meta/sync-log",
+            "mount-1:/",
+            1,
+            0,
+            METADATA_LOG_ZERO_DIGEST,
+        ))
+        .unwrap();
+
+    let key = b"sync-log-system-key".to_vec();
+    let value = b"sync-after-checkpoint".to_vec();
+    let commit_version = checkpoint.commit_version + 1;
+    let command = log_replay_command(
+        b"req-sync-log",
+        &key,
+        &value,
+        checkpoint.commit_version,
+        commit_version,
+    );
+    let result = service.commit_metadata(command).unwrap();
+    assert_eq!(result.commit_version.get(), commit_version);
+    let snapshot = service.sync_metadata_log_snapshot().unwrap();
+    assert_eq!(snapshot.durable_lsn, 1);
+    assert_eq!(snapshot.segments.len(), 1);
+    let segment_pointer = snapshot.segments.last().unwrap();
+    assert!(segment_pointer
+        .segment_key
+        .starts_with("meta/sync-log/log/"));
+
+    let loaded = service
+        .load_metadata_log_segment(&segment_pointer.segment_key)
+        .unwrap();
+    assert_eq!(loaded.first_lsn, 1);
+    assert_eq!(loaded.last_lsn, 1);
+    assert_eq!(loaded.last_digest, snapshot.last_digest);
+
+    let segment_keys = snapshot_segment_keys(&snapshot);
+    let recovered = NoKvFs::new(
+        MountId::new(1).unwrap(),
+        HoltMetadataStore::open_memory().unwrap(),
+        objects.clone(),
+    );
+    recovered
+        .restore_metadata_with_archived_log_segments(
+            &checkpoint_config,
+            &segment_keys,
+            0,
+            METADATA_LOG_ZERO_DIGEST,
+        )
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(
+        recovered
+            .metadata
+            .get(
+                RecordFamily::System,
+                &key,
+                Version::new(commit_version).unwrap(),
+                ReadPurpose::UserStrong
+            )
+            .unwrap(),
+        Some(Value(value))
+    );
+}
+
+#[test]
+fn restore_metadata_with_sync_log_advances_allocator_after_replay() {
+    let (service, objects) = service_with_objects();
+    service.create_dir_path("/runs", 0o755, 1000, 1000).unwrap();
+    let checkpoint_config = MetadataArchiveConfig::new("meta/ck-sync-allocator", 2);
+    service.backup_metadata(&checkpoint_config).unwrap();
+    service
+        .enable_sync_metadata_log(MetadataLogSyncConfig::new(
+            "meta/sync-allocator-log",
+            "mount-1:/",
+            1,
+            0,
+            METADATA_LOG_ZERO_DIGEST,
+        ))
+        .unwrap();
+
+    let post_checkpoint = service
+        .create_dir_path("/runs/post-checkpoint", 0o755, 1000, 1000)
+        .unwrap();
+    let snapshot = service.sync_metadata_log_snapshot().unwrap();
+    let segment_keys = snapshot_segment_keys(&snapshot);
+
+    let recovered = NoKvFs::new(
+        MountId::new(1).unwrap(),
+        HoltMetadataStore::open_memory().unwrap(),
+        objects,
+    );
+    recovered
+        .restore_metadata_with_archived_log_segments(
+            &checkpoint_config,
+            &segment_keys,
+            0,
+            METADATA_LOG_ZERO_DIGEST,
+        )
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(
+        recovered
+            .lookup_path("/runs/post-checkpoint")
+            .unwrap()
+            .unwrap()
+            .attr
+            .inode,
+        post_checkpoint.attr.inode
+    );
+
+    let after_failover = recovered
+        .create_dir_path("/after-failover", 0o755, 1000, 1000)
+        .unwrap();
+    assert!(
+        after_failover.attr.inode.get() > post_checkpoint.attr.inode.get(),
+        "failover replay must advance allocator past replayed namespace state"
+    );
+    assert_eq!(
+        recovered
+            .lookup_path("/runs/post-checkpoint")
+            .unwrap()
+            .unwrap()
+            .attr
+            .inode,
+        post_checkpoint.attr.inode
+    );
+}
+
+#[test]
+fn sync_metadata_log_archives_independent_batch_as_one_segment() {
+    let (service, objects) = service_with_objects();
+    service.create_dir_path("/left", 0o755, 1000, 1000).unwrap();
+    service
+        .create_dir_path("/right", 0o755, 1000, 1000)
+        .unwrap();
+    let checkpoint_config = MetadataArchiveConfig::new("meta/ck-sync-batch-log", 2);
+    service.backup_metadata(&checkpoint_config).unwrap();
+    service
+        .enable_sync_metadata_log(MetadataLogSyncConfig::new(
+            "meta/sync-batch-log",
+            "mount-1:/",
+            1,
+            0,
+            METADATA_LOG_ZERO_DIGEST,
+        ))
+        .unwrap();
+
+    let results = service.create_file_batches_in_dir_path(vec![
+        CreateInDirPathBatch {
+            parent_path: "/left".to_owned(),
+            names: vec![DentryName::new(b"a.bin".to_vec()).unwrap()],
+            mode: 0o644,
+            uid: 1000,
+            gid: 1000,
+        },
+        CreateInDirPathBatch {
+            parent_path: "/right".to_owned(),
+            names: vec![DentryName::new(b"b.bin".to_vec()).unwrap()],
+            mode: 0o644,
+            uid: 1000,
+            gid: 1000,
+        },
+    ]);
+
+    assert_eq!(results.len(), 2);
+    for result in &results {
+        assert_eq!(result.as_ref().unwrap().len(), 1);
+    }
+    let snapshot = service.sync_metadata_log_snapshot().unwrap();
+    assert_eq!(snapshot.durable_lsn, 2);
+    assert_eq!(snapshot.segments.len(), 1);
+    let segment = service
+        .load_metadata_log_segment(&snapshot.segments.last().unwrap().segment_key)
+        .unwrap();
+    assert_eq!(segment.first_lsn, 1);
+    assert_eq!(segment.last_lsn, 2);
+    assert_eq!(segment.entries.len(), 2);
+
+    let segment_keys = snapshot_segment_keys(&snapshot);
+    let recovered = NoKvFs::new(
+        MountId::new(1).unwrap(),
+        HoltMetadataStore::open_memory().unwrap(),
+        objects.clone(),
+    );
+    let outcome = recovered
+        .restore_metadata_with_archived_log_segments(
+            &checkpoint_config,
+            &segment_keys,
+            0,
+            METADATA_LOG_ZERO_DIGEST,
+        )
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(outcome.replayed_entries, 2);
+    assert!(recovered.lookup_path("/left/a.bin").unwrap().is_some());
+    assert!(recovered.lookup_path("/right/b.bin").unwrap().is_some());
 }
 
 use nokv_object::{ObjectInfo, ObjectRange};
@@ -4702,4 +5197,884 @@ fn allocator_epoch_recovers_monotonically_via_fetch_max() {
         5,
         "epoch must be monotonic across refresh (fetch_max, not store)"
     );
+}
+
+#[test]
+fn owner_epoch_fence_rejects_single_metadata_commit() {
+    let service = service();
+    service.observe_required_owner_epoch(2).unwrap();
+    let before = service.metadata_store_stats();
+
+    let err = service
+        .create_dir_path("/stale-owner", 0o755, 1000, 1000)
+        .unwrap_err();
+
+    assert!(matches!(
+        err,
+        MetadError::StaleOwnerEpoch {
+            owner_epoch: 1,
+            required_epoch: 2
+        }
+    ));
+    assert_eq!(
+        service.metadata_store_stats().commit_total,
+        before.commit_total,
+        "stale-owner commit must be rejected before durable metadata apply"
+    );
+}
+
+#[test]
+fn owner_epoch_fence_rejects_independent_batch_commit() {
+    let service = service();
+    service.create_dir_path("/runs", 0o755, 1000, 1000).unwrap();
+    service.observe_required_owner_epoch(2).unwrap();
+    let before = service.metadata_store_stats();
+
+    let results = service.create_file_batches_in_dir_path(vec![CreateInDirPathBatch {
+        parent_path: "/runs".to_owned(),
+        names: vec![
+            DentryName::new(b"a.bin".to_vec()).unwrap(),
+            DentryName::new(b"b.bin".to_vec()).unwrap(),
+        ],
+        mode: 0o644,
+        uid: 1000,
+        gid: 1000,
+    }]);
+
+    assert_eq!(results.len(), 1);
+    assert!(matches!(
+        results[0].as_ref().unwrap_err(),
+        MetadError::StaleOwnerEpoch {
+            owner_epoch: 1,
+            required_epoch: 2
+        }
+    ));
+    assert_eq!(
+        service.metadata_store_stats().commit_total,
+        before.commit_total,
+        "stale-owner batch must be rejected before durable metadata apply"
+    );
+}
+
+#[test]
+fn installed_owner_epoch_allows_new_owner_commit() {
+    let service = service();
+    service.observe_required_owner_epoch(5).unwrap();
+    assert!(matches!(
+        service.create_dir_path("/blocked", 0o755, 1000, 1000),
+        Err(MetadError::StaleOwnerEpoch {
+            owner_epoch: 1,
+            required_epoch: 5
+        })
+    ));
+
+    service.install_owner_epoch(5).unwrap();
+    let created = service
+        .create_dir_path("/new-owner", 0o755, 1000, 1000)
+        .unwrap();
+
+    assert_eq!(created.dentry.name.as_bytes(), b"new-owner");
+    assert_eq!(service.allocator_epoch(), 5);
+    assert_eq!(service.required_owner_epoch(), 5);
+}
+
+#[test]
+fn lease_deadline_fences_commit_when_passed() {
+    let service = service();
+    service.set_clock_override_ms(1_000);
+    service.set_lease_deadline(5_000);
+    // Within the lease window the commit succeeds.
+    service
+        .create_dir_path("/within-lease", 0o755, 1000, 1000)
+        .unwrap();
+
+    // The clock advances past the deadline with no renewal: the owner
+    // self-fences here even though no higher epoch was ever observed (the
+    // partition split-brain case the epoch fence alone cannot catch).
+    service.set_clock_override_ms(6_000);
+    let err = service
+        .create_dir_path("/after-deadline", 0o755, 1000, 1000)
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        MetadError::LeaseExpired {
+            now_ms: 6_000,
+            deadline_ms: 5_000
+        }
+    ));
+}
+
+#[test]
+fn lease_deadline_fences_independent_batch_commit() {
+    let service = service();
+    service.create_dir_path("/runs", 0o755, 1000, 1000).unwrap();
+    service.set_clock_override_ms(1_000);
+    service.set_lease_deadline(2_000);
+    service.set_clock_override_ms(3_000);
+
+    let results = service.create_file_batches_in_dir_path(vec![CreateInDirPathBatch {
+        parent_path: "/runs".to_owned(),
+        names: vec![DentryName::new(b"a.bin".to_vec()).unwrap()],
+        mode: 0o644,
+        uid: 1000,
+        gid: 1000,
+    }]);
+
+    assert_eq!(results.len(), 1);
+    assert!(matches!(
+        results[0].as_ref().unwrap_err(),
+        MetadError::LeaseExpired {
+            now_ms: 3_000,
+            deadline_ms: 2_000
+        }
+    ));
+}
+
+#[test]
+fn lease_deadline_zero_disables_self_fence() {
+    let service = service();
+    // No deadline armed (0): single-node/manual owners are never time-fenced.
+    assert_eq!(service.lease_deadline_ms(), 0);
+    service.set_clock_override_ms(1_000_000);
+    service
+        .create_dir_path("/no-deadline", 0o755, 1000, 1000)
+        .unwrap();
+}
+
+#[test]
+fn with_shard_index_mints_inodes_in_shard_subspace() {
+    let shard3 = service().with_shard_index(3);
+    assert_eq!(shard3.shard_index(), 3);
+    // A newly minted inode carries this shard's index in its high bits, so it is
+    // globally unique across shards and self-routing.
+    let dir = shard3.create_dir_path("/d", 0o755, 1000, 1000).unwrap();
+    assert_eq!(dir.attr.inode.shard_index(), 3);
+    // The default shard is the identity (no high bits).
+    let shard0 = service().with_shard_index(0);
+    let dir0 = shard0.create_dir_path("/d", 0o755, 1000, 1000).unwrap();
+    assert_eq!(dir0.attr.inode.shard_index(), 0);
+}
+
+#[test]
+fn same_shard_rename_and_link_are_unaffected_by_cross_shard_fence() {
+    // On a non-default shard, every inode carries this shard's index, so the
+    // cross-shard fence is a no-op: same-shard rename and hardlink still work.
+    let service = service().with_shard_index(2);
+    let dir = service.create_dir_path("/d", 0o755, 1000, 1000).unwrap();
+    let old_name = DentryName::new(b"a".to_vec()).unwrap();
+    let new_name = DentryName::new(b"b".to_vec()).unwrap();
+    let created = service
+        .create_file(dir.attr.inode, old_name.clone(), 0o644, 1000, 1000)
+        .unwrap();
+    assert_eq!(created.attr.inode.shard_index(), 2);
+
+    // Rename within the shard succeeds and keeps the inode.
+    let renamed = service
+        .rename(dir.attr.inode, &old_name, dir.attr.inode, new_name.clone())
+        .unwrap();
+    assert_eq!(renamed.attr.inode, created.attr.inode);
+
+    // Hardlink within the shard succeeds and bumps nlink.
+    let link_name = DentryName::new(b"b.link".to_vec()).unwrap();
+    let linked = service
+        .link(created.attr.inode, dir.attr.inode, link_name.clone())
+        .unwrap();
+    assert_eq!(linked.attr.inode, created.attr.inode);
+    assert_eq!(linked.attr.nlink, 2);
+}
+
+#[test]
+fn inode_rename_to_foreign_shard_parent_is_cross_shard_no_op() {
+    // This service owns shard 1; a `new_parent` carrying shard index 0 addresses a
+    // foreign namespace. The rename must reject with `CrossShard` before any
+    // mutation, not resolve the foreign parent as `NotFound`.
+    let service = service().with_shard_index(1);
+    let dir = service.create_dir_path("/d", 0o755, 1000, 1000).unwrap();
+    let name = DentryName::new(b"a".to_vec()).unwrap();
+    let created = service
+        .create_file(dir.attr.inode, name.clone(), 0o644, 1000, 1000)
+        .unwrap();
+    assert_eq!(dir.attr.inode.shard_index(), 1);
+
+    // A directory inode minted by shard 0 (the default shard): foreign to shard 1.
+    let foreign_parent = InodeId::compose(0, 99).unwrap();
+    assert_eq!(foreign_parent.shard_index(), 0);
+    let new_name = DentryName::new(b"moved".to_vec()).unwrap();
+
+    let err = service
+        .rename(dir.attr.inode, &name, foreign_parent, new_name)
+        .unwrap_err();
+    assert!(
+        matches!(
+            err,
+            MetadError::CrossShard {
+                source_shard: 1,
+                dest_shard: 0
+            }
+        ),
+        "expected CrossShard, got {err:?}"
+    );
+
+    // No namespace change: the source dentry still resolves to the same inode.
+    assert_eq!(
+        service
+            .lookup_plus(dir.attr.inode, &name)
+            .unwrap()
+            .unwrap()
+            .attr
+            .inode,
+        created.attr.inode
+    );
+}
+
+#[test]
+fn inode_link_to_foreign_shard_parent_is_cross_shard_no_op() {
+    // Hardlinking a shard-1 inode into a shard-0 directory crosses a boundary and
+    // must reject with `CrossShard` before bumping nlink.
+    let service = service().with_shard_index(1);
+    let dir = service.create_dir_path("/d", 0o755, 1000, 1000).unwrap();
+    let name = DentryName::new(b"a".to_vec()).unwrap();
+    let created = service
+        .create_file(dir.attr.inode, name.clone(), 0o644, 1000, 1000)
+        .unwrap();
+    let before_nlink = created.attr.nlink;
+
+    let foreign_parent = InodeId::compose(0, 7).unwrap();
+    let link_name = DentryName::new(b"x.link".to_vec()).unwrap();
+
+    let err = service
+        .link(created.attr.inode, foreign_parent, link_name)
+        .unwrap_err();
+    assert!(
+        matches!(
+            err,
+            MetadError::CrossShard {
+                source_shard: 1,
+                dest_shard: 0
+            }
+        ),
+        "expected CrossShard, got {err:?}"
+    );
+
+    // No mutation: nlink is unchanged.
+    assert_eq!(
+        service
+            .lookup_plus(dir.attr.inode, &name)
+            .unwrap()
+            .unwrap()
+            .attr
+            .nlink,
+        before_nlink
+    );
+}
+
+/// Build a shard service over a freshly held in-memory store, with its root
+/// bootstrapped at the global root inode. Returns the store handle so a test can
+/// drive `recover_allocator_state` against it directly. `shard_index` seeds the
+/// inode allocator into the shard's high-bit subspace, exactly like a fleet node.
+fn shard_service(
+    shard_index: u16,
+) -> (
+    NoKvFs<HoltMetadataStore, MemoryObjectStore>,
+    HoltMetadataStore,
+) {
+    let store = HoltMetadataStore::open_memory().unwrap();
+    let service = NoKvFs::new(
+        MountId::new(1).unwrap(),
+        store.clone(),
+        MemoryObjectStore::new(),
+    )
+    .with_shard_index(shard_index);
+    service.bootstrap_root(0o755, 1000, 1000).unwrap();
+    (service, store)
+}
+
+#[test]
+fn cross_shard_graft_is_traversable_without_inode_record() {
+    // Two independent shards, each bootstrapping its namespace root at the global
+    // root inode (== 1). Shard 1 owns the `/dataset` subtree; shard 0 only needs a
+    // graft dentry pointing at it so FUSE traversal `lookup(root, "dataset")`
+    // (which routes by the parent inode 1 -> shard 0) resolves instead of ENOENT.
+    let (shard0, _store0) = shard_service(0);
+    let (shard1, _store1) = shard_service(1);
+    let dataset = DentryName::new(b"dataset".to_vec()).unwrap();
+
+    // The subtree dir is created on its owning shard with a real inode that
+    // carries shard 1's index in its high bits.
+    let subtree = shard1
+        .create_dir(InodeId::root(), dataset.clone(), 0o755, 1000, 1000)
+        .unwrap();
+    let foreign_inode = subtree.attr.inode;
+    assert_eq!(foreign_inode.shard_index(), 1);
+
+    // Shard 0 installs the graft: dentry only, pointing at the foreign inode.
+    let graft = shard0
+        .create_graft(
+            InodeId::root(),
+            dataset.clone(),
+            foreign_inode,
+            0o755,
+            1000,
+            1000,
+        )
+        .unwrap();
+    assert_eq!(graft.dentry.child, foreign_inode);
+    assert_eq!(graft.attr.inode, foreign_inode);
+    assert_eq!(graft.dentry.child_type, FileType::Directory);
+
+    // FUSE-style lookup by parent inode on shard 0 now resolves to the foreign
+    // subtree inode, with the embedded directory attr served from the projection.
+    let looked_up = shard0
+        .lookup_plus(InodeId::root(), &dataset)
+        .unwrap()
+        .expect("graft dentry must resolve on the parent shard");
+    assert_eq!(looked_up.dentry.child, foreign_inode);
+    assert_eq!(looked_up.attr.inode, foreign_inode);
+    assert_eq!(looked_up.attr.file_type, FileType::Directory);
+
+    // readdir on the parent shard includes exactly the graft entry.
+    let entries = shard0.read_dir_plus(InodeId::root()).unwrap();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].dentry.name, dataset);
+    assert_eq!(entries[0].dentry.child, foreign_inode);
+
+    // The allocator-safety invariant: shard 0 holds NO Inode record for the
+    // foreign inode. `get_attr` fetches `inode_key`, so it must be absent — the
+    // graft is a pure dentry projection.
+    assert!(
+        shard0.get_attr(foreign_inode).unwrap().is_none(),
+        "graft must not write an Inode record for the foreign child"
+    );
+}
+
+/// A minimal read-only `MetadataStore` that serves a fixed set of records to the
+/// allocator recovery fold. It has NO durable allocator System record, so
+/// recovery always takes the scan-and-fold FALLBACK path — the path the
+/// shard-index guard lives on. It serves exactly the Inode/Dentry rows under
+/// test and nothing else, isolating the guard logic from any other family.
+/// (The fallback path is also covered against a real, fully-populated Holt store
+/// by `fallback_recovery_survives_command_dedupe_rows_on_real_store`.)
+struct FixedRecoveryStore {
+    rows: Vec<ScanItem>,
+    row_family: Vec<RecordFamily>,
+}
+
+impl FixedRecoveryStore {
+    fn new() -> Self {
+        Self {
+            rows: Vec::new(),
+            row_family: Vec::new(),
+        }
+    }
+
+    fn push(&mut self, family: RecordFamily, key: Vec<u8>, value: Vec<u8>, version: u64) {
+        // Recovery never inspects the key bytes (only the family it scanned and
+        // the decoded value), so the stored key is kept verbatim.
+        self.rows.push(ScanItem {
+            key,
+            value: Value(value),
+            version: Version::new(version).unwrap(),
+        });
+        self.row_family.push(family);
+    }
+}
+
+impl MetadataStore for FixedRecoveryStore {
+    fn get_versioned(
+        &self,
+        _family: RecordFamily,
+        _key: &[u8],
+        _version: Version,
+        _purpose: ReadPurpose,
+    ) -> Result<Option<ReadItem>, MetadataError> {
+        // No durable allocator record -> recovery falls through to the scan path.
+        Ok(None)
+    }
+
+    fn scan(&self, request: ScanRequest) -> Result<Vec<ScanItem>, MetadataError> {
+        Ok(self
+            .rows
+            .iter()
+            .zip(self.row_family.iter())
+            .filter(|(_, family)| **family == request.family)
+            .map(|(row, _)| row.clone())
+            .collect())
+    }
+
+    fn commit_metadata(&self, _command: MetadataCommand) -> Result<CommitResult, MetadataError> {
+        unreachable!("recovery is read-only")
+    }
+
+    fn prune_history(
+        &self,
+        _request: HistoryPruneRequest,
+    ) -> Result<HistoryPruneOutcome, MetadataError> {
+        unreachable!("recovery does not prune")
+    }
+}
+
+#[test]
+fn cross_shard_graft_does_not_poison_parent_allocator() {
+    // After a graft, a fallback allocator rebuild on the parent shard must not be
+    // dragged up to the foreign child's id. The foreign inode lives in shard 1's
+    // subspace (>> shard 0's), so folding it would make shard 0 hand out ids it
+    // does not own.
+    let (shard0, _store0) = shard_service(0);
+    let (shard1, _store1) = shard_service(1);
+    let dataset = DentryName::new(b"dataset".to_vec()).unwrap();
+
+    let subtree = shard1
+        .create_dir(InodeId::root(), dataset.clone(), 0o755, 1000, 1000)
+        .unwrap();
+    let foreign_inode = subtree.attr.inode;
+    assert_eq!(foreign_inode.shard_index(), 1);
+    let graft = shard0
+        .create_graft(InodeId::root(), dataset, foreign_inode, 0o755, 1000, 1000)
+        .unwrap();
+
+    // Reconstruct, from real encoded records, the exact rows a fallback rebuild
+    // of shard 0's allocator would scan: shard 0's own root Inode record, and the
+    // graft's Dentry projection (which embeds the FOREIGN child + attr, and which
+    // — by the graft invariant — is the ONLY record carrying that foreign id;
+    // there is no Inode record for it).
+    let root_attr = shard0
+        .get_attr(InodeId::root())
+        .unwrap()
+        .expect("shard 0 root inode record exists");
+    let graft_projection = DentryProjection {
+        dentry: graft.dentry.clone(),
+        attr: graft.attr.clone(),
+        body: None,
+    };
+
+    let build_store = || {
+        let mut store = FixedRecoveryStore::new();
+        store.push(
+            RecordFamily::Inode,
+            inode_key(MountId::new(1).unwrap(), InodeId::root()),
+            encode_inode_attr(&root_attr),
+            root_attr.generation,
+        );
+        store.push(
+            RecordFamily::Dentry,
+            dentry_key(
+                MountId::new(1).unwrap(),
+                InodeId::root(),
+                &graft.dentry.name,
+            ),
+            encode_dentry_projection(&graft_projection),
+            graft.attr.generation,
+        );
+        store
+    };
+
+    // Shard-aware fallback recovery AS shard 0: the foreign graft child (shard
+    // index 1) is excluded from the high-water, so next_inode stays in shard 0's
+    // subspace and does NOT jump to foreign_inode + 1. Shard 0 minted no local
+    // inodes here, so the high-water stays at the root => next_inode = ROOT + 1.
+    let recovered = recover_allocator_state(&build_store(), MountId::new(1).unwrap(), 0).unwrap();
+    assert!(
+        recovered.next_inode <= foreign_inode.get(),
+        "shard 0 allocator was poisoned by the foreign graft child: \
+         next_inode={} foreign_inode={}",
+        recovered.next_inode,
+        foreign_inode.get()
+    );
+    assert_eq!(recovered.next_inode, InodeId::ROOT_RAW + 1);
+
+    // Control case proving the guard is shard-scoped, not a blanket skip: with the
+    // SAME records, recovering AS shard 1 DOES fold the (now-owned) child and
+    // lands at foreign_inode + 1.
+    let as_shard1 = recover_allocator_state(&build_store(), MountId::new(1).unwrap(), 1).unwrap();
+    assert_eq!(as_shard1.next_inode, foreign_inode.get() + 1);
+}
+
+/// Delete the durable allocator `System` record so the next recovery is forced
+/// down the scan-and-fold FALLBACK path on a real, populated store.
+fn drop_allocator_record(service: &NoKvFs<HoltMetadataStore, MemoryObjectStore>) {
+    let commit_version = service.next_version().unwrap();
+    let key = allocator_key(service.mount_id());
+    service
+        .commit_metadata(MetadataCommand {
+            request_id: request_id(
+                b"test-drop-allocator",
+                service.mount_id(),
+                InodeId::root(),
+                commit_version,
+            ),
+            kind: CommandKind::ReserveAllocator,
+            read_version: predecessor(commit_version).unwrap(),
+            commit_version,
+            primary_family: RecordFamily::System,
+            primary_key: key.clone(),
+            predicates: Vec::new(),
+            mutations: vec![delete_mutation(RecordFamily::System, key)],
+            watch: Vec::new(),
+        })
+        .unwrap();
+    assert!(
+        service
+            .metadata_store()
+            .get(
+                RecordFamily::System,
+                &allocator_key(service.mount_id()),
+                Version::new(u64::MAX).unwrap(),
+                ReadPurpose::UserStrong,
+            )
+            .unwrap()
+            .is_none(),
+        "allocator System record must be gone so recovery takes the fallback path"
+    );
+}
+
+#[test]
+fn fallback_recovery_survives_command_dedupe_rows_on_real_store() {
+    // Regression: the fallback scan used to fold `RecordFamily::CommandDedupe`,
+    // whose values are header-less dedupe-result payloads the scan codec cannot
+    // decode ("unknown kind"). On any store that had taken real commits — which
+    // populate the dedupe tree — the fallback rebuild therefore PANICKED. This
+    // exercises the fixed path against a genuine `HoltMetadataStore`.
+    let (service, store) = shard_service(0);
+
+    // Several commits, each of which writes a `CommandDedupe` row keyed by its
+    // request id. Mix dirs and files so multiple families carry the high-water.
+    let dir = service
+        .create_dir(
+            InodeId::root(),
+            DentryName::new(b"dir".to_vec()).unwrap(),
+            0o755,
+            1000,
+            1000,
+        )
+        .unwrap();
+    let mut last_file_inode = dir.attr.inode;
+    for n in 0..5 {
+        let entry = service
+            .create_file(
+                dir.attr.inode,
+                DentryName::new(format!("f{n}").into_bytes()).unwrap(),
+                0o644,
+                1000,
+                1000,
+            )
+            .unwrap();
+        last_file_inode = entry.attr.inode;
+    }
+    // The live allocator floor the durable record would have carried.
+    let live_next_inode = service.next_inode().unwrap().get() + 1;
+    let live_commit_version = service.read_version().unwrap().get();
+    assert!(last_file_inode.get() < live_next_inode);
+
+    // Sanity: the dedupe tree is genuinely populated, so a fallback that still
+    // scanned it would hit the undecodable rows. The dedupe family stores
+    // header-less result payloads and is INTENTIONALLY not standard-scannable
+    // (that is the whole bug), so prove population through its dedicated lookup
+    // path instead of a raw `scan`.
+    let probe_version = service.next_version().unwrap();
+    let probe_request = request_id(
+        b"dedupe-probe",
+        service.mount_id(),
+        InodeId::root(),
+        probe_version,
+    );
+    service
+        .commit_metadata(MetadataCommand {
+            request_id: probe_request.clone(),
+            kind: CommandKind::UpdateAttr,
+            read_version: predecessor(probe_version).unwrap(),
+            commit_version: probe_version,
+            primary_family: RecordFamily::Inode,
+            primary_key: inode_key(service.mount_id(), InodeId::root()),
+            predicates: vec![PredicateRef {
+                family: RecordFamily::Inode,
+                key: inode_key(service.mount_id(), InodeId::root()),
+                predicate: Predicate::Exists,
+            }],
+            mutations: Vec::new(),
+            watch: Vec::new(),
+        })
+        .unwrap();
+    assert!(
+        store
+            .committed_request_result(&probe_request)
+            .unwrap()
+            .is_some(),
+        "a committed command must leave a CommandDedupe row"
+    );
+
+    // Force the fallback: remove the durable allocator record.
+    drop_allocator_record(&service);
+
+    // The fix: recovery scans the standard-encoded families and SKIPS
+    // CommandDedupe, so this returns instead of panicking on "unknown kind".
+    let recovered = recover_allocator_state(&store, service.mount_id(), 0).unwrap();
+
+    // It must not regress below any minted inode / observed commit version.
+    assert!(
+        recovered.next_inode > last_file_inode.get(),
+        "fallback next_inode {} must cover the last minted inode {}",
+        recovered.next_inode,
+        last_file_inode.get()
+    );
+    assert!(
+        recovered.next_inode <= live_next_inode,
+        "fallback next_inode {} must not exceed the durable floor {} (reservation skips ids on crash, never on a clean fold)",
+        recovered.next_inode,
+        live_next_inode
+    );
+    assert!(
+        recovered.last_commit_version <= live_commit_version,
+        "recovered commit version {} must not exceed the live clock {}",
+        recovered.last_commit_version,
+        live_commit_version
+    );
+    assert!(
+        recovered.last_commit_version >= dir.attr.generation,
+        "recovered commit version {} must cover committed generations (e.g. {})",
+        recovered.last_commit_version,
+        dir.attr.generation
+    );
+
+    // And the recovered floor must let the shard be reopened and keep minting
+    // ids above everything it already handed out — the end-to-end contract.
+    let reopened =
+        NoKvFs::open_existing(service.mount_id(), store, MemoryObjectStore::new(), 0).unwrap();
+    let minted = reopened
+        .create_file(
+            dir.attr.inode,
+            DentryName::new(b"after-recovery".to_vec()).unwrap(),
+            0o644,
+            1000,
+            1000,
+        )
+        .unwrap();
+    assert!(
+        minted.attr.inode.get() > last_file_inode.get(),
+        "a reopened shard must mint ids above the pre-crash high-water"
+    );
+    assert_eq!(minted.attr.inode.shard_index(), 0);
+}
+
+/// Install `/dataset` as a cross-shard graft on shard 0 pointing at a real
+/// subtree dir owned by shard 1, returning both shards and the graft name. The
+/// child subtree dir already holds a file so any blind emptiness check on the
+/// parent would be wrong.
+fn grafted_pair() -> (
+    NoKvFs<HoltMetadataStore, MemoryObjectStore>,
+    NoKvFs<HoltMetadataStore, MemoryObjectStore>,
+    DentryName,
+    InodeId,
+) {
+    let (shard0, _store0) = shard_service(0);
+    let (shard1, _store1) = shard_service(1);
+    let dataset = DentryName::new(b"dataset".to_vec()).unwrap();
+
+    let subtree = shard1
+        .create_dir(InodeId::root(), dataset.clone(), 0o755, 1000, 1000)
+        .unwrap();
+    let foreign_inode = subtree.attr.inode;
+    assert_eq!(foreign_inode.shard_index(), 1);
+    // Populate the child subtree so its contents live on shard 1, invisible to
+    // shard 0's dentry subspace.
+    shard1
+        .create_file(
+            foreign_inode,
+            DentryName::new(b"inside.txt".to_vec()).unwrap(),
+            0o644,
+            1000,
+            1000,
+        )
+        .unwrap();
+    shard0
+        .create_graft(
+            InodeId::root(),
+            dataset.clone(),
+            foreign_inode,
+            0o755,
+            1000,
+            1000,
+        )
+        .unwrap();
+    (shard0, shard1, dataset, foreign_inode)
+}
+
+#[test]
+fn remove_empty_dir_rejects_graft_point() {
+    let (shard0, shard1, dataset, foreign_inode) = grafted_pair();
+
+    // rmdir of the graft must be rejected, NOT silently succeed against the
+    // locally-empty (foreign) subtree.
+    assert!(matches!(
+        shard0.remove_empty_dir(InodeId::root(), &dataset),
+        Err(MetadError::GraftPoint)
+    ));
+
+    // The graft dentry still resolves on the parent and the child subtree + its
+    // contents are untouched on shard 1 (no orphaning).
+    assert!(shard0
+        .lookup_plus(InodeId::root(), &dataset)
+        .unwrap()
+        .is_some());
+    assert!(shard1.get_attr(foreign_inode).unwrap().is_some());
+    let inside = shard1
+        .lookup_plus(
+            foreign_inode,
+            &DentryName::new(b"inside.txt".to_vec()).unwrap(),
+        )
+        .unwrap();
+    assert!(inside.is_some(), "child subtree contents must survive");
+}
+
+#[test]
+fn remove_file_rejects_graft_point() {
+    let (shard0, _shard1, dataset, _foreign) = grafted_pair();
+    // `unlink` of the graft reports the actionable graft-point error (ahead of
+    // the generic is-a-directory error) and does not touch the dentry.
+    assert!(matches!(
+        shard0.remove_file(InodeId::root(), &dataset),
+        Err(MetadError::GraftPoint)
+    ));
+    assert!(shard0
+        .lookup_plus(InodeId::root(), &dataset)
+        .unwrap()
+        .is_some());
+}
+
+#[test]
+fn rename_rejects_graft_point_source_and_destination() {
+    let (shard0, _shard1, dataset, _foreign) = grafted_pair();
+    let elsewhere = DentryName::new(b"elsewhere".to_vec()).unwrap();
+
+    // Graft as the rename SOURCE: moving it would detach the projection.
+    assert!(matches!(
+        shard0.rename(
+            InodeId::root(),
+            &dataset,
+            InodeId::root(),
+            elsewhere.clone()
+        ),
+        Err(MetadError::GraftPoint)
+    ));
+    // Still in place after the rejected move.
+    assert!(shard0
+        .lookup_plus(InodeId::root(), &dataset)
+        .unwrap()
+        .is_some());
+
+    // Graft as the rename DESTINATION: create a local file, then try to clobber
+    // the graft with it. `rename_replace` reaches the destination-graft guard.
+    let victim = DentryName::new(b"victim".to_vec()).unwrap();
+    shard0
+        .create_file(InodeId::root(), victim.clone(), 0o644, 1000, 1000)
+        .unwrap();
+    assert!(matches!(
+        shard0.rename_replace(InodeId::root(), &victim, InodeId::root(), dataset.clone()),
+        Err(MetadError::GraftPoint)
+    ));
+    assert!(shard0
+        .lookup_plus(InodeId::root(), &dataset)
+        .unwrap()
+        .is_some());
+
+    // A graft self-rename (same parent + name) is a harmless no-op and still
+    // succeeds — the guard only fires on an actual move.
+    let same = shard0
+        .rename(InodeId::root(), &dataset, InodeId::root(), dataset.clone())
+        .unwrap();
+    assert_eq!(same.attr.inode.shard_index(), 1);
+}
+
+#[test]
+fn normal_empty_dir_removal_still_works_after_graft_guard() {
+    // The guard must be inert for a same-shard child. On shard 0 every child is
+    // local (`compose(0, x) == x`), so a plain empty-dir removal is unaffected.
+    let (shard0, _store0) = shard_service(0);
+    let local = DentryName::new(b"local".to_vec()).unwrap();
+    let dir = shard0
+        .create_dir(InodeId::root(), local.clone(), 0o755, 1000, 1000)
+        .unwrap();
+    assert_eq!(dir.attr.inode.shard_index(), 0);
+    let removed = shard0.remove_empty_dir(InodeId::root(), &local).unwrap();
+    assert_eq!(removed.attr.inode, dir.attr.inode);
+    assert!(shard0
+        .lookup_plus(InodeId::root(), &local)
+        .unwrap()
+        .is_none());
+}
+
+#[test]
+fn child_gc_preserves_grafted_subtree_root_and_contents() {
+    // A grafted subtree's root dir is created on its OWNING (child) shard by the
+    // mkdir half of register_graft, so it has a LIVE local dentry (child root ->
+    // "dataset") and a live Inode record. NoKV-FS GC has no logical orphan
+    // collector — the reachable passes only reclaim object-block GC-queue
+    // entries, expired snapshot pins, prunable history, and unreachable Holt
+    // storage frames — none of which can touch a live current-tree record. This
+    // locks that the subtree root and its contents survive a full GC sweep on
+    // the child shard. (Runs entirely on the child shard; the parent's graft
+    // dentry is irrelevant to child-side GC.)
+    let (child, store) = shard_service(1);
+    let dataset = DentryName::new(b"dataset".to_vec()).unwrap();
+    let subtree = child
+        .create_dir(InodeId::root(), dataset.clone(), 0o755, 1000, 1000)
+        .unwrap();
+    let subtree_root = subtree.attr.inode;
+    assert_eq!(subtree_root.shard_index(), 1);
+
+    // Populate the subtree: a nested dir and a file with real body content (so
+    // the object-block GC path has something to consider).
+    let nested = child
+        .create_dir(
+            subtree_root,
+            DentryName::new(b"nested".to_vec()).unwrap(),
+            0o755,
+            1000,
+            1000,
+        )
+        .unwrap();
+    let file_name = DentryName::new(b"keep.txt".to_vec()).unwrap();
+    child
+        .publish_artifact(PublishArtifact {
+            parent: subtree_root,
+            name: file_name.clone(),
+            producer: "test".to_owned(),
+            digest_uri: body_digest_uri(b"hello graft"),
+            content_type: "application/octet-stream".to_owned(),
+            manifest_id: "graft/keep".to_owned(),
+            bytes: b"hello graft".to_vec(),
+            mode: 0o644,
+            uid: 1000,
+            gid: 1000,
+        })
+        .unwrap();
+
+    // Run every reachable GC pass on the child shard.
+    child.cleanup_pending_objects(1000).unwrap();
+    child.cleanup_history(1000).unwrap();
+    // Holt physical-frame GC (folds the WAL into a checkpoint, then reclaims
+    // unreachable storage frames). This is the deepest reclaimer in the stack.
+    store.checkpoint().unwrap();
+    store.reclaim_unreachable_storage().unwrap();
+    child.cleanup_pending_objects(1000).unwrap();
+
+    // The subtree root, the nested dir, and the file all survive: they are
+    // referenced by live dentries, so no GC pass can reclaim them.
+    assert!(
+        child.get_attr(subtree_root).unwrap().is_some(),
+        "grafted subtree root inode must survive child GC"
+    );
+    let looked_up_root = child
+        .lookup_plus(InodeId::root(), &dataset)
+        .unwrap()
+        .expect("subtree root dentry must survive");
+    assert_eq!(looked_up_root.attr.inode, subtree_root);
+
+    assert!(child.get_attr(nested.attr.inode).unwrap().is_some());
+    let kept = child
+        .lookup_plus(subtree_root, &file_name)
+        .unwrap()
+        .expect("file under subtree root must survive");
+    // Body still readable end-to-end after GC.
+    let bytes = child.read_file(kept.attr.inode, 0, 64).unwrap();
+    assert_eq!(bytes, b"hello graft");
 }
