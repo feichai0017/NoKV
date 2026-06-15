@@ -548,9 +548,20 @@ where
         else {
             return Ok(None);
         };
+        // Clamp the requested length to what the handle's known size can serve
+        // before EITHER backend path. A read that starts before EOF but extends
+        // past `attr.size` must be a short read, not a backend range error
+        // (mirrors the write-handle read path in this file).
+        if offset >= handle.attr.size {
+            return Ok(Some(Vec::new()));
+        }
+        let len = u64::from(size)
+            .min(handle.attr.size - offset)
+            .try_into()
+            .map_err(|_| Errno::EINVAL)?;
         if !self.options.prefetch.enabled {
             let bytes = self
-                .service_read_file_with_known_attr(&handle.attr, offset, size as usize)
+                .service_read_file_with_known_attr(&handle.attr, offset, len)
                 .map_err(errno)?;
             return Ok(Some(bytes));
         }
@@ -560,7 +571,7 @@ where
             .service_read_file_with_known_attr_pipeline(
                 &handle.attr,
                 offset,
-                size as usize,
+                len,
                 reader,
                 read_plans,
             )

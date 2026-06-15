@@ -30,6 +30,35 @@ _DEFAULT_FILE_MODE = 0o644
 _DEFAULT_DIR_MODE = 0o755
 
 
+def _validate_open_mode(mode: str) -> None:
+    """Reject open modes NoKV cannot honor.
+
+    NoKV artifacts are immutable per generation: a write publishes one whole new
+    generation atomically on close. There is no in-place mutation, so append
+    (``a``/``ab``) and read-update (``r+``/``w+``/``rb+`` ...) modes cannot be
+    supported — silently accepting them would replace the object with only the
+    freshly written bytes, dropping the prior contents the caller expected to
+    extend. Only whole-object read (``rb``) and whole-object write
+    (``wb``/``xb``) are allowed. Raises ``ValueError`` otherwise.
+    """
+    flags = str(mode)
+    # Update mode (``+``) means in-place read/write, which immutability forbids.
+    if "+" in flags:
+        raise ValueError(
+            f"unsupported open mode {mode!r}: NoKV artifacts are immutable per "
+            "generation, so read-update ('+') modes are not supported"
+        )
+    base = flags.replace("b", "").replace("t", "")
+    if base == "a":
+        raise ValueError(
+            f"unsupported open mode {mode!r}: NoKV artifacts are immutable per "
+            "generation, so append is not supported (write a new generation "
+            "with 'wb' instead)"
+        )
+    if base not in ("r", "w", "x"):
+        raise ValueError(f"unsupported open mode {mode!r}")
+
+
 class NoKVFileSystem(AbstractFileSystem):
     """fsspec-compatible filesystem backed by the NoKV SDK."""
 
@@ -216,6 +245,7 @@ class NoKVFileSystem(AbstractFileSystem):
 
     # ------------------------------------------------------------------- open
     def _open(self, path, mode="rb", block_size=None, autocommit=True, cache_options=None, **kwargs):
+        _validate_open_mode(mode)
         return NoKVBufferedFile(
             self,
             self._strip_protocol(path),

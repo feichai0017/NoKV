@@ -3331,4 +3331,58 @@ mod fleet_e2e {
         server_a.shutdown();
         server_b.shutdown();
     }
+
+    /// reconcile_grafts heals the DE-registration side too: an `unregister_graft`
+    /// that crashed after clearing the control record (and reaping the child) but
+    /// before removing the parent dentry leaves an orphan parent graft dentry
+    /// pointing at a reaped subtree. Reconcile removes it because the control
+    /// record's `subtree_root_inode` is now None.
+    #[test]
+    fn fleet_reconcile_removes_orphan_graft_after_deregistration() {
+        let dir_a = tempdir().unwrap();
+        let dir_b = tempdir().unwrap();
+        let (client, server_a, server_b, control) = graft_fleet(dir_a.path(), dir_b.path());
+        let metadata = client.metadata();
+
+        let dataset = DentryName::new(b"dataset".to_vec()).unwrap();
+        metadata
+            .register_graft("/dataset", MODE_DIR, 1000, 1000)
+            .unwrap();
+        assert!(metadata
+            .lookup_plus(InodeId::root(), dataset.clone())
+            .unwrap()
+            .is_some());
+
+        // Simulate the crash window in unregister_graft: the control record was
+        // de-registered (step 1) but the parent graft dentry write (step 3) never
+        // happened. The orphan parent dentry still resolves on shard 0.
+        control
+            .set_subtree_root_inode(&ShardId::new("mount-1:/dataset"), None)
+            .unwrap();
+        assert!(
+            metadata
+                .lookup_plus(InodeId::root(), dataset.clone())
+                .unwrap()
+                .is_some(),
+            "the orphan parent graft dentry is still present before reconcile"
+        );
+
+        // Reconcile removes the orphan because the control record says None.
+        let reconciled = metadata.reconcile_grafts().unwrap();
+        assert_eq!(reconciled, vec!["/dataset".to_owned()]);
+        assert!(
+            metadata
+                .lookup_plus(InodeId::root(), dataset.clone())
+                .unwrap()
+                .is_none(),
+            "reconcile removed the orphan parent graft dentry"
+        );
+
+        // Idempotent: a second pass finds nothing to heal.
+        assert!(metadata.reconcile_grafts().unwrap().is_empty());
+
+        drop(client);
+        server_a.shutdown();
+        server_b.shutdown();
+    }
 }

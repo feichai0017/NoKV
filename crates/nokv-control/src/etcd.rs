@@ -83,12 +83,17 @@ impl ControlStore for EtcdControlStore {
         self.block_on(async move {
             let record_key = options.shard_record_key(&shard_id);
             let current = ensure_shard_record(&mut client, &options, shard_id.clone()).await?;
-            // Identity is only (re)assigned while the shard is unowned, and only
-            // when it actually changes — a live owner keeps its routing.
-            if current.record.owner.is_some()
-                || (current.record.prefix == prefix && current.record.shard_index == shard_index)
-            {
+            // Re-registering the same identity is always idempotent.
+            if current.record.prefix == prefix && current.record.shard_index == shard_index {
                 return Ok(current.record);
+            }
+            // Identity is mutable ONLY while the record is pristine (never leased:
+            // epoch == 0 and unowned). Once a shard has served, its index is baked
+            // into inode high bits and the client routing map, so a drift after a
+            // release would misroute existing data. Reject the change. Mirrors
+            // `register_shard_identity` in the in-memory backend.
+            if current.record.epoch != 0 || current.record.owner.is_some() {
+                return Err(ControlError::ShardIdentityLocked { shard_id });
             }
             let mut next = current.record.clone();
             next.prefix = prefix;
@@ -180,7 +185,20 @@ impl ControlStore for EtcdControlStore {
         let options = self.options.clone();
         self.block_on(async move {
             let record_key = options.shard_record_key(&shard_id);
-            let current = ensure_shard_record(&mut client, &options, shard_id.clone()).await?;
+            // A non-default shard MUST be registered first: auto-creating it here
+            // would default `shard_index` to 0 and collide with the root shard.
+            // The default/root shard keeps its bootstrap path (auto-create).
+            let current = if crate::store::is_default_shard(&shard_id) {
+                ensure_shard_record(&mut client, &options, shard_id.clone()).await?
+            } else {
+                match fetch_shard_record(&mut client, record_key.clone(), &shard_id).await {
+                    Ok(current) => current,
+                    Err(ControlError::ShardNotFound(_)) => {
+                        return Err(ControlError::ShardNotRegistered { shard_id });
+                    }
+                    Err(err) => return Err(err),
+                }
+            };
             if let Some(existing_owner) = current.record.owner.clone() {
                 return Err(ControlError::ShardAlreadyOwned {
                     shard_id,
@@ -647,6 +665,11 @@ mod etcd_session_tests {
         let owner_a = NodeId::new("node-a");
         let owner_b = NodeId::new("node-b");
 
+        // A non-default shard must be registered before it can be acquired.
+        store
+            .register_shard(shard_id.clone(), format!("/{unique}"), 7)
+            .expect("register non-default shard identity");
+
         // Owner A acquires the unassigned shard.
         let lease_a = store
             .acquire_unassigned(shard_id.clone(), owner_a.clone())
@@ -722,6 +745,102 @@ mod etcd_session_tests {
             let lease_id = lease_id_i64(lease_id).expect("lease id fits i64");
             client.lease_revoke(lease_id).await.expect("revoke lease");
         });
+    }
+
+    /// Endpoints for the live-etcd tests, or `None` to skip (the CI default-test
+    /// run skips it; the parent validates against a real etcd).
+    fn live_etcd_endpoints() -> Option<Vec<String>> {
+        let raw = std::env::var("NOKV_ETCD_ENDPOINTS").ok()?;
+        let endpoints: Vec<String> = raw
+            .split(',')
+            .map(str::trim)
+            .filter(|endpoint| !endpoint.is_empty())
+            .map(ToOwned::to_owned)
+            .collect();
+        (!endpoints.is_empty()).then_some(endpoints)
+    }
+
+    fn unique_key_prefix() -> String {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        format!("/nokv/test/control/{}/{}", process::id(), unique)
+    }
+
+    /// Live-etcd parity for `register_shard_identity`: a shard's identity is frozen
+    /// once it has taken a lease, even after a release leaves it unowned.
+    #[test]
+    fn etcd_register_shard_freezes_identity_after_first_lease() {
+        let Some(endpoints) = live_etcd_endpoints() else {
+            return;
+        };
+        let key_prefix = unique_key_prefix();
+        let options = EtcdControlStoreOptions::new(endpoints.clone())
+            .with_key_prefix(key_prefix.clone())
+            .with_lease_ttl_seconds(30);
+        let store = EtcdControlStore::connect(options).expect("connect etcd control store");
+        let shard_id = ShardId::new(format!("{key_prefix}:/runs"));
+
+        store
+            .register_shard(shard_id.clone(), "/runs".to_owned(), 2)
+            .expect("register pristine identity");
+        let lease = store
+            .acquire_unassigned(shard_id.clone(), NodeId::new("node-a"))
+            .expect("acquire registered shard");
+        // Re-registering the SAME identity stays idempotent while owned.
+        store
+            .register_shard(shard_id.clone(), "/runs".to_owned(), 2)
+            .expect("same-identity re-register is idempotent");
+        store.release(&lease).expect("release shard");
+
+        // After a lease, a DIFFERENT identity is rejected even though unowned.
+        let err = store
+            .register_shard(shard_id.clone(), "/runs".to_owned(), 9)
+            .expect_err("identity must be frozen after first lease");
+        assert!(
+            matches!(err, ControlError::ShardIdentityLocked { .. }),
+            "got {err:?}"
+        );
+        assert_eq!(store.get_shard(&shard_id).unwrap().shard_index, 2);
+
+        cleanup_keys(&endpoints, &key_prefix);
+    }
+
+    /// Live-etcd parity for the acquire-requires-registration rule: a non-default
+    /// shard cannot be acquired unless registered first, while the default/root
+    /// shard keeps its bootstrap path.
+    #[test]
+    fn etcd_acquire_unassigned_requires_registration_for_non_default_shard() {
+        let Some(endpoints) = live_etcd_endpoints() else {
+            return;
+        };
+        let key_prefix = unique_key_prefix();
+        let options = EtcdControlStoreOptions::new(endpoints.clone())
+            .with_key_prefix(key_prefix.clone())
+            .with_lease_ttl_seconds(30);
+        let store = EtcdControlStore::connect(options).expect("connect etcd control store");
+
+        // Unregistered non-default shard: acquisition refused.
+        let non_default = ShardId::new(format!("{key_prefix}:/runs"));
+        let err = store
+            .acquire_unassigned(non_default.clone(), NodeId::new("node-a"))
+            .expect_err("unregistered non-default shard must be refused");
+        assert!(
+            matches!(err, ControlError::ShardNotRegistered { .. }),
+            "got {err:?}"
+        );
+
+        // Default/root shard: bootstraps without registration, index 0.
+        let default_shard = ShardId::new(format!("{key_prefix}:/"));
+        let lease = store
+            .acquire_unassigned(default_shard.clone(), NodeId::new("node-a"))
+            .expect("default shard bootstraps without registration");
+        assert_eq!(lease.epoch, 1);
+        assert_eq!(store.get_shard(&default_shard).unwrap().shard_index, 0);
+        let _ = store.release(&lease);
+
+        cleanup_keys(&endpoints, &key_prefix);
     }
 
     fn cleanup_keys(endpoints: &[String], key_prefix: &str) {

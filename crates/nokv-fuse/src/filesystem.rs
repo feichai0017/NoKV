@@ -2256,6 +2256,35 @@ mod tests {
     }
 
     #[test]
+    fn read_handle_clamps_read_past_eof_to_short_read() {
+        // A read that starts before EOF (size 16) but whose length runs past it
+        // must come back as a short read, not a backend range error. Exercised on
+        // both the prefetch-disabled and pipeline paths.
+        for prefetch_enabled in [false, true] {
+            let fuse = NoKvFuse::from_backend(
+                UnsupportedTestBackend::default(),
+                FuseOptions {
+                    prefetch: FusePrefetchOptions {
+                        enabled: prefetch_enabled,
+                        ..FusePrefetchOptions::default()
+                    },
+                    ..FuseOptions::default()
+                },
+            );
+            let fh = fuse.allocate_read_handle(test_file_attr(7)).unwrap();
+            // offset 14 + size 8 would reach 22 > size 16 without clamping.
+            let bytes = fuse.read_from_read_handle(fh, 14, 8).unwrap().unwrap();
+            assert_eq!(bytes, b"op", "prefetch_enabled={prefetch_enabled}");
+            // A read fully at/after EOF is an empty short read, never an error.
+            assert!(fuse
+                .read_from_read_handle(fh, 16, 8)
+                .unwrap()
+                .unwrap()
+                .is_empty());
+        }
+    }
+
+    #[test]
     fn attr_cache_tracks_entries_and_inode_forgets() {
         let fuse =
             NoKvFuse::from_backend(UnsupportedTestBackend::default(), FuseOptions::default());

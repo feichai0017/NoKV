@@ -28,6 +28,29 @@ MANIFEST_VERSION = 1
 _DEFAULT_BASE = "checkpoints"
 
 
+def _validate_shard_name(name: str) -> None:
+    """Reject a shard ``name`` that would escape the step dir or clobber the
+    commit manifest.
+
+    A shard is written at ``{step_dir}/{name}``. A ``name`` equal to
+    ``_manifest.json`` would overwrite the commit point (making a partial
+    checkpoint look committed), and a ``name`` containing a path separator or
+    ``..`` would write outside the step dir entirely. Both must be rejected
+    before any artifact is published.
+    """
+    if not isinstance(name, str) or name == "":
+        raise ValueError("shard name must be a non-empty string")
+    if name == MANIFEST_NAME:
+        raise ValueError(
+            f"shard name {name!r} is reserved for the checkpoint manifest"
+        )
+    if "/" in name or name in (".", "..") or "\x00" in name:
+        raise ValueError(
+            f"shard name {name!r} must be a single path component "
+            "(no '/', '..', or NUL)"
+        )
+
+
 def step_dir(base: str, run: str, step: int) -> str:
     return f"/{base}/{run}/step_{int(step)}"
 
@@ -60,6 +83,7 @@ def publish_shard(
     meta: Optional[Mapping] = None,
 ) -> dict:
     """Publish one shard as an immutable artifact and return its manifest entry."""
+    _validate_shard_name(name)
     ensure_dirs(client, step_dir(base, run, step))
     data = bytes(data)
     path = shard_path(base, run, step, name)

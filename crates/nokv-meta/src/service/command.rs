@@ -124,7 +124,10 @@ where
         let deadline_ms = self.lease_deadline_ms.load(Ordering::Relaxed);
         if deadline_ms != 0 {
             let now_ms = self.now_ms();
-            if now_ms > deadline_ms {
+            // `>=`: a commit at exactly the deadline is rejected. The control
+            // plane treats the lease as expired at `deadline_ms`, so the owner
+            // must stop one tick earlier to stay strictly inside the window.
+            if now_ms >= deadline_ms {
                 return Err(OwnerLeaseFault::LeaseExpired {
                     now_ms,
                     deadline_ms,

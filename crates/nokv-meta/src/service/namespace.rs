@@ -99,6 +99,17 @@ where
         uid: u32,
         gid: u32,
     ) -> Result<DentryWithAttr, MetadError> {
+        // A graft MUST point at a foreign (child-shard) inode. A same-shard
+        // "graft" would write a projection-only dentry with no backing Inode
+        // record in this shard — a dangling entry that `remove_graft` would then
+        // be required to clean up via the cross-shard path. Refuse it here, the
+        // mirror of the same-shard refusal `remove_graft`/`is_graft_child` apply.
+        if target_inode.shard_index() == self.shard_index() {
+            return Err(MetadError::InvalidPath(
+                "create_graft target must be a foreign child-shard inode, not a same-shard inode"
+                    .to_owned(),
+            ));
+        }
         let version = self.next_version()?;
         let attr = directory_attr(target_inode, mode, uid, gid, version.get());
         let projection = projection(parent, name, attr, None);
@@ -144,7 +155,7 @@ where
         }
         let version = self.next_version()?;
         let key = dentry_key(self.mount, parent, name);
-        self.commit_metadata(MetadataCommand {
+        let commit = self.commit_metadata(MetadataCommand {
             request_id: request_id(b"remove-graft", self.mount, entry.attr.inode, version),
             kind: CommandKind::RemoveEmptyDir,
             read_version: predecessor(version)?,
@@ -153,7 +164,7 @@ where
             primary_key: key.clone(),
             // Only the dentry version is guarded: there is no Inode record and no
             // local subtree to assert empty (the child's contents live on the
-            // owning shard). A lost idempotent re-run surfaces as PredicateFailed.
+            // owning shard).
             predicates: vec![PredicateRef {
                 family: RecordFamily::Dentry,
                 key: key.clone(),
@@ -173,8 +184,23 @@ where
                 )
                 .into_iter()
                 .collect(),
-        })?;
-        Ok(Some(entry))
+        });
+        match commit {
+            Ok(_) => Ok(Some(entry)),
+            // Idempotency under concurrent teardown: a racing remover (or a
+            // re-driven retry of this same call) can delete the dentry between
+            // our read and this commit, so the version predicate fails. If the
+            // dentry is genuinely gone now, the desired post-state already holds,
+            // so report success rather than surfacing a spurious conflict.
+            Err(MetadError::Metadata(MetadataError::PredicateFailed)) => {
+                if self.lookup_plus_for_write_plan(parent, name)?.is_none() {
+                    Ok(None)
+                } else {
+                    Err(MetadError::Metadata(MetadataError::PredicateFailed))
+                }
+            }
+            Err(err) => Err(err),
+        }
     }
 
     pub fn create_file(

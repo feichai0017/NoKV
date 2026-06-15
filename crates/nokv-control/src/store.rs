@@ -53,6 +53,45 @@ pub trait ControlStore: Send + Sync {
     fn release(&self, lease: &ShardLease) -> Result<ShardRecord, ControlError>;
 }
 
+/// Apply a `register_shard` to a record in place, enforcing that a shard's stable
+/// identity (`prefix`, `shard_index`) can only be set while the record is pristine
+/// — never leased (`epoch == 0`). Once a shard has taken a lease its identity is
+/// frozen: it is encoded in inode high bits and the client routing map, so a drift
+/// after a release would misroute existing data. Idempotent: re-registering the
+/// same identity always succeeds. Shared by both control-store backends.
+pub(crate) fn register_shard_identity(
+    record: &mut ShardRecord,
+    prefix: String,
+    shard_index: u16,
+) -> Result<(), ControlError> {
+    if record.prefix == prefix && record.shard_index == shard_index {
+        return Ok(());
+    }
+    // Pristine == never owned and never leased. `epoch == 0` is the durable
+    // marker (acquire bumps it to >= 1 and release does not reset it).
+    if record.epoch == 0 && record.owner.is_none() {
+        record.prefix = prefix;
+        record.shard_index = shard_index;
+        return Ok(());
+    }
+    Err(ControlError::ShardIdentityLocked {
+        shard_id: record.shard_id.clone(),
+    })
+}
+
+/// Whether a shard id denotes the default/root shard (prefix `/`), which is the
+/// single shard allowed to be acquired without a prior `register_shard` — its
+/// identity (prefix `/`, index 0) is the unambiguous bootstrap default. Every
+/// non-root shard must be registered first so its index cannot silently be 0.
+pub(crate) fn is_default_shard(shard_id: &ShardId) -> bool {
+    shard_id
+        .as_str()
+        .split_once(':')
+        .map(|(_, path)| path)
+        .unwrap_or("/")
+        == "/"
+}
+
 #[derive(Default)]
 pub struct InMemoryControlStore {
     shards: Mutex<BTreeMap<ShardId, ShardRecord>>,
@@ -103,11 +142,7 @@ impl ControlStore for InMemoryControlStore {
         let record = shards
             .entry(shard_id.clone())
             .or_insert_with(|| ShardRecord::unassigned(shard_id));
-        // Only (re)assign identity while unowned; a live owner keeps its routing.
-        if record.owner.is_none() {
-            record.prefix = prefix;
-            record.shard_index = shard_index;
-        }
+        register_shard_identity(record, prefix, shard_index)?;
         Ok(record.clone())
     }
 
@@ -143,9 +178,19 @@ impl ControlStore for InMemoryControlStore {
         owner: NodeId,
     ) -> Result<ShardLease, ControlError> {
         let mut shards = self.shards.lock().expect("control store mutex poisoned");
-        let record = shards
-            .entry(shard_id.clone())
-            .or_insert_with(|| ShardRecord::unassigned(shard_id.clone()));
+        // A non-default shard MUST be registered first: auto-creating it here via
+        // `unassigned` would default its `shard_index` to 0 and collide with the
+        // root shard, breaking shard-index uniqueness and inode routing. The
+        // default/root shard keeps its bootstrap path (auto-create with index 0).
+        let record = match shards.get_mut(&shard_id) {
+            Some(record) => record,
+            None if is_default_shard(&shard_id) => shards
+                .entry(shard_id.clone())
+                .or_insert_with(|| ShardRecord::unassigned(shard_id.clone())),
+            None => {
+                return Err(ControlError::ShardNotRegistered { shard_id });
+            }
+        };
         if let Some(existing_owner) = record.owner.clone() {
             return Err(ControlError::ShardAlreadyOwned {
                 shard_id,
@@ -254,9 +299,20 @@ mod tests {
         NodeId::new(raw)
     }
 
+    /// A store with the non-default test shard already registered, matching the
+    /// production precondition that every non-root shard is registered before it
+    /// is acquired.
+    fn registered_store() -> InMemoryControlStore {
+        let store = InMemoryControlStore::new();
+        store
+            .register_shard(shard(), "/runs".to_owned(), 2)
+            .unwrap();
+        store
+    }
+
     #[test]
     fn fresh_acquire_sets_owner_epoch_and_lease() {
-        let store = InMemoryControlStore::new();
+        let store = registered_store();
         let lease = store.acquire_unassigned(shard(), node("node-a")).unwrap();
 
         assert_eq!(lease.epoch, 1);
@@ -265,11 +321,14 @@ mod tests {
         let record = store.get_shard(&lease.shard_id).unwrap();
         assert_eq!(record.owner, Some(node("node-a")));
         assert_eq!(record.state, ShardState::Serving);
+        // Registered identity survives acquisition.
+        assert_eq!(record.shard_index, 2);
+        assert_eq!(record.prefix, "/runs");
     }
 
     #[test]
     fn second_fresh_owner_is_rejected() {
-        let store = InMemoryControlStore::new();
+        let store = registered_store();
         let _lease = store.acquire_unassigned(shard(), node("node-a")).unwrap();
 
         let err = store
@@ -288,7 +347,7 @@ mod tests {
 
     #[test]
     fn failover_bumps_epoch_and_fences_old_lease() {
-        let store = InMemoryControlStore::new();
+        let store = registered_store();
         let old = store.acquire_unassigned(shard(), node("node-a")).unwrap();
         let new = store
             .acquire_after_failure(shard(), node("node-b"), old.epoch)
@@ -305,7 +364,7 @@ mod tests {
 
     #[test]
     fn mark_serving_requires_current_lease() {
-        let store = InMemoryControlStore::new();
+        let store = registered_store();
         let old = store.acquire_unassigned(shard(), node("node-a")).unwrap();
         let new = store
             .acquire_after_failure(shard(), node("node-b"), old.epoch)
@@ -320,7 +379,7 @@ mod tests {
 
     #[test]
     fn mark_serving_preserves_recovery_refs_when_not_replaced() {
-        let store = InMemoryControlStore::new();
+        let store = registered_store();
         let lease = store.acquire_unassigned(shard(), node("node-a")).unwrap();
         let log = LogRef {
             segments: vec![LogSegmentRef {
@@ -386,7 +445,7 @@ mod tests {
 
     #[test]
     fn release_requires_current_lease() {
-        let store = InMemoryControlStore::new();
+        let store = registered_store();
         let old = store.acquire_unassigned(shard(), node("node-a")).unwrap();
         let new = store
             .acquire_after_failure(shard(), node("node-b"), old.epoch)
@@ -398,5 +457,68 @@ mod tests {
         assert_eq!(released.owner, None);
         assert_eq!(released.state, ShardState::Unassigned);
         assert_eq!(released.epoch, new.epoch);
+    }
+
+    #[test]
+    fn register_shard_freezes_identity_after_first_lease() {
+        let store = registered_store();
+        // Re-registering the SAME identity is idempotent, even while owned.
+        let lease = store.acquire_unassigned(shard(), node("node-a")).unwrap();
+        store
+            .register_shard(shard(), "/runs".to_owned(), 2)
+            .unwrap();
+
+        // Releasing leaves epoch > 0; identity must stay frozen so a later
+        // re-register cannot drift the index a live client routes by.
+        store.release(&lease).unwrap();
+        let record = store.get_shard(&shard()).unwrap();
+        assert!(record.owner.is_none());
+        assert!(record.epoch > 0);
+
+        let err = store
+            .register_shard(shard(), "/runs".to_owned(), 9)
+            .unwrap_err();
+        assert!(matches!(err, ControlError::ShardIdentityLocked { .. }));
+        // The original index is unchanged.
+        assert_eq!(store.get_shard(&shard()).unwrap().shard_index, 2);
+    }
+
+    #[test]
+    fn register_shard_assigns_identity_while_pristine() {
+        let store = InMemoryControlStore::new();
+        // Before any lease, identity is freely (re)assignable.
+        store
+            .register_shard(shard(), "/runs".to_owned(), 2)
+            .unwrap();
+        let record = store
+            .register_shard(shard(), "/runs".to_owned(), 5)
+            .unwrap();
+        assert_eq!(record.shard_index, 5);
+        assert_eq!(record.epoch, 0);
+    }
+
+    #[test]
+    fn acquire_unassigned_requires_registration_for_non_default_shard() {
+        let store = InMemoryControlStore::new();
+        // No register_shard: a non-default shard cannot be acquired (would
+        // otherwise auto-create with shard_index 0 and collide with root).
+        let err = store
+            .acquire_unassigned(shard(), node("node-a"))
+            .unwrap_err();
+        assert!(matches!(err, ControlError::ShardNotRegistered { .. }));
+        assert!(store.get_shard(&shard()).is_err());
+    }
+
+    #[test]
+    fn acquire_unassigned_bootstraps_default_shard_without_registration() {
+        let store = InMemoryControlStore::new();
+        let default_shard = ShardId::new("mount-1:/");
+        let lease = store
+            .acquire_unassigned(default_shard.clone(), node("node-a"))
+            .unwrap();
+        assert_eq!(lease.epoch, 1);
+        let record = store.get_shard(&default_shard).unwrap();
+        assert_eq!(record.shard_index, 0);
+        assert_eq!(record.prefix, "/");
     }
 }

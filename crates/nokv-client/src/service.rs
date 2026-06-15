@@ -40,9 +40,9 @@ use nokv_protocol::{
     WireNamespaceSortField, WireOpenPathReadPlanRequest, WireRecordCountProvenance,
 };
 use nokv_types::{
-    AdvisoryLock, AdvisoryLockRequest, BodyDescriptor, ChunkManifest, DentryName, InodeAttr,
-    InodeId, MountId, PathMetadata, ReadLease, ShardMap, ShardPrefix, ShardRoute, SnapshotPin,
-    SpecialNodeSpec, DEFAULT_SHARD_INDEX,
+    AdvisoryLock, AdvisoryLockRequest, BodyDescriptor, ChunkManifest, DentryName, FileType,
+    InodeAttr, InodeId, MountId, PathMetadata, ReadLease, ShardMap, ShardPrefix, ShardRoute,
+    SnapshotPin, SpecialNodeSpec, DEFAULT_SHARD_INDEX,
 };
 
 use crate::ClientError;
@@ -779,15 +779,23 @@ impl MetadataClient {
         }
     }
 
-    /// Re-create any graft dentry that the control plane says should exist but
-    /// the parent shard is missing. Reads `list_shards` and, for every subtree
-    /// shard carrying a durable `subtree_root_inode`, idempotently ensures the
-    /// parent graft dentry is present (tolerating already-exists). This heals a
-    /// graft whose parent-dentry write was lost AFTER the control record landed
-    /// (the registration point), making `register_graft` self-healing across a
-    /// crash. Wire it into a parent shard's startup so it reconciles on boot.
+    /// Reconcile every cross-shard graft dentry against the control plane, which
+    /// is the source of truth. Reads `list_shards` and, for each non-default
+    /// subtree shard, drives the parent graft dentry to match the shard's durable
+    /// `subtree_root_inode`:
     ///
-    /// Returns the prefixes whose graft dentry was (re)created this pass.
+    ///   * `Some(inode)` (registered): idempotently ensure the parent graft
+    ///     dentry is PRESENT — heals a `register_graft` whose parent-dentry write
+    ///     was lost after the control record landed.
+    ///   * `None` (de-registered): idempotently ensure any stale parent graft
+    ///     dentry into this shard is REMOVED — heals an `unregister_graft` that
+    ///     crashed after the child `rmdir` but before `remove_graft`, which would
+    ///     otherwise leave an orphan parent dentry pointing at a reaped subtree.
+    ///
+    /// Both directions are idempotent, so this is safe to run on a parent shard's
+    /// startup. It closes the documented crash gap; it is not a cross-shard 2PC.
+    ///
+    /// Returns the prefixes whose graft dentry was changed (created or removed).
     pub fn reconcile_grafts(&self) -> Result<Vec<String>, ClientError> {
         let control = self.fleet_control()?;
         let records = control
@@ -795,30 +803,66 @@ impl MetadataClient {
             .map_err(|err| ClientError::Protocol(format!("control list_shards failed: {err}")))?;
         let mut reconciled = Vec::new();
         for record in records {
-            // Only subtree shards with a durably-registered graft target. The
-            // default/root shard is never a graft child.
+            // The default/root shard is never a graft child.
             if record.shard_index == DEFAULT_SHARD_INDEX {
                 continue;
             }
-            let Some(subtree_root_raw) = record.subtree_root_inode else {
-                continue;
-            };
-            let child_inode = InodeId::new(subtree_root_raw)
-                .map_err(|err| ClientError::Protocol(err.to_string()))?;
             let prefix_path = record.prefix.clone();
-            let (parent_inode, name) = self.graft_parent_inode_and_name(&prefix_path)?;
-            // Idempotent: present already -> nothing to do; absent -> (re)create.
-            // `create_graft` surfaces an existing dentry as PredicateFailed.
-            // The graft dentry is a stub projection; on traversal the real
-            // subtree-dir attrs are served from the owning shard, so these stub
-            // mode/owner bits are cosmetic. Use the standard directory defaults.
-            match self.create_graft(parent_inode, name, child_inode, 0o755, 0, 0) {
-                Ok(_) => reconciled.push(prefix_path),
-                Err(err) if crate::is_metadata_predicate_failed(&err) => {}
-                Err(err) => return Err(err),
+            match record.subtree_root_inode {
+                Some(subtree_root_raw) => {
+                    let child_inode = InodeId::new(subtree_root_raw)
+                        .map_err(|err| ClientError::Protocol(err.to_string()))?;
+                    let (parent_inode, name) = self.graft_parent_inode_and_name(&prefix_path)?;
+                    // Idempotent: present already -> nothing to do; absent ->
+                    // (re)create. `create_graft` surfaces an existing dentry as
+                    // PredicateFailed. The graft dentry is a stub projection; on
+                    // traversal the real subtree-dir attrs are served from the
+                    // owning shard, so these stub mode/owner bits are cosmetic.
+                    match self.create_graft(parent_inode, name, child_inode, 0o755, 0, 0) {
+                        Ok(_) => reconciled.push(prefix_path),
+                        Err(err) if crate::is_metadata_predicate_failed(&err) => {}
+                        Err(err) => return Err(err),
+                    }
+                }
+                None => {
+                    if self.reconcile_remove_stale_graft(&record)? {
+                        reconciled.push(prefix_path);
+                    }
+                }
             }
         }
         Ok(reconciled)
+    }
+
+    /// De-registration side of [`Self::reconcile_grafts`]: remove a parent graft
+    /// dentry left behind by an `unregister_graft` that crashed after the child
+    /// `rmdir` but before `remove_graft`. Conservative — it only removes a dentry
+    /// that still resolves AND is a graft into THIS subtree shard, so it never
+    /// touches a live local entry or a graft owned by another shard. Idempotent:
+    /// returns `false` (nothing changed) when there is no stale dentry to heal.
+    fn reconcile_remove_stale_graft(&self, record: &ShardRecord) -> Result<bool, ClientError> {
+        let prefix_path = record.prefix.clone();
+        // If the parent directory itself is gone there is nothing to heal.
+        let (parent_inode, name) = match self.graft_parent_inode_and_name(&prefix_path) {
+            Ok(resolved) => resolved,
+            Err(_) => return Ok(false),
+        };
+        let Some(entry) = self.lookup_plus(parent_inode, name.clone())? else {
+            return Ok(false);
+        };
+        // Only a directory dentry pointing INTO this subtree shard is a stale
+        // graft for this record. A non-graft local dentry, or a graft into a
+        // different shard, is left untouched (the latter is healed by that
+        // shard's own record).
+        if entry.dentry.child_type != FileType::Directory
+            || entry.dentry.child.shard_index() != record.shard_index
+        {
+            return Ok(false);
+        }
+        // `remove_graft` is idempotent (Ok(None) if already gone) and refuses a
+        // same-shard/non-graft dentry, so this can only drop a genuine orphan.
+        self.remove_graft(parent_inode, name)?;
+        Ok(true)
     }
 
     /// Tear down a cross-shard graft for `prefix_path`: remove the parent graft
@@ -868,16 +912,19 @@ impl MetadataClient {
             Ok(_) => {}
             // Already gone (idempotent re-run, or never created): fine.
             Err(err) if crate::is_not_found(&err) => {}
-            // Non-empty: restore the registration and surface DirectoryNotEmpty
-            // with the graft fully intact.
-            Err(err) if crate::is_directory_not_empty(&err) => {
+            // ANY other child-removal failure (non-empty, transport, fence, ...)
+            // means the subtree still exists, so the graft must stay registered:
+            // restore the durable target we cleared in step 1 and surface the
+            // error with the graft fully intact. Otherwise we would leave the
+            // control plane de-registered while the child subtree is still live,
+            // and a later reconcile could not heal it (no target to rebuild from).
+            Err(err) => {
                 if let Some(record) = &subtree_record {
                     let _ =
                         control.set_subtree_root_inode(&record.shard_id, record.subtree_root_inode);
                 }
                 return Err(err);
             }
-            Err(err) => return Err(err),
         }
 
         // 3. Remove the parent graft dentry (idempotent: None when already gone).

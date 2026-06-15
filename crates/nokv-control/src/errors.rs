@@ -18,6 +18,19 @@ pub enum ControlError {
     NotOwner {
         shard_id: ShardId,
     },
+    /// A `register_shard` tried to change a shard's stable identity (`prefix` or
+    /// `shard_index`) after it had already taken a lease (epoch > 0). Identity is
+    /// baked into inode high bits and client routing, so it is frozen once the
+    /// shard has ever served.
+    ShardIdentityLocked {
+        shard_id: ShardId,
+    },
+    /// A non-default shard was acquired without first being registered. The
+    /// stable shard index must be seeded by `register_shard` before acquisition
+    /// so it does not silently default to 0 and collide with the root shard.
+    ShardNotRegistered {
+        shard_id: ShardId,
+    },
     StaleLease {
         shard_id: ShardId,
         epoch: u64,
@@ -57,6 +70,16 @@ impl fmt::Display for ControlError {
             Self::NotOwner { shard_id } => {
                 write!(f, "lease holder does not own shard {}", shard_id.as_str())
             }
+            Self::ShardIdentityLocked { shard_id } => write!(
+                f,
+                "shard {} identity is locked after its first lease",
+                shard_id.as_str()
+            ),
+            Self::ShardNotRegistered { shard_id } => write!(
+                f,
+                "shard {} must be registered before it can be acquired",
+                shard_id.as_str()
+            ),
             Self::StaleLease {
                 shard_id,
                 epoch,

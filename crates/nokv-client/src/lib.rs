@@ -134,7 +134,3 @@ fn is_not_found(err: &ClientError) -> bool {
         ClientError::NotFound(_) | ClientError::Metadata(MetadError::NotFound)
     )
 }
-
-fn is_directory_not_empty(err: &ClientError) -> bool {
-    matches!(err, ClientError::Metadata(MetadError::DirectoryNotEmpty))
-}

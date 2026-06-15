@@ -5305,6 +5305,31 @@ fn lease_deadline_fences_commit_when_passed() {
 }
 
 #[test]
+fn lease_deadline_fences_commit_at_exact_deadline() {
+    let service = service();
+    service.set_clock_override_ms(1_000);
+    service.set_lease_deadline(5_000);
+    // A commit strictly inside the window still succeeds.
+    service
+        .create_dir_path("/before-deadline", 0o755, 1000, 1000)
+        .unwrap();
+
+    // At exactly the deadline the control plane already considers the lease
+    // expired, so the owner must reject rather than racing the handoff.
+    service.set_clock_override_ms(5_000);
+    let err = service
+        .create_dir_path("/at-deadline", 0o755, 1000, 1000)
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        MetadError::LeaseExpired {
+            now_ms: 5_000,
+            deadline_ms: 5_000
+        }
+    ));
+}
+
+#[test]
 fn lease_deadline_fences_independent_batch_commit() {
     let service = service();
     service.create_dir_path("/runs", 0o755, 1000, 1000).unwrap();
@@ -5896,6 +5921,68 @@ fn grafted_pair() -> (
         )
         .unwrap();
     (shard0, shard1, dataset, foreign_inode)
+}
+
+#[test]
+fn create_graft_rejects_same_shard_target() {
+    // A graft must point at a FOREIGN (child-shard) inode. Pointing it at an
+    // inode this shard owns would write a projection-only dentry with no backing
+    // Inode record here — a dangling entry. The control-plane mints such inodes
+    // with this shard's index, so reject them up front.
+    let (shard0, _store0) = shard_service(0);
+    let same_shard_dir = shard0
+        .create_dir(
+            InodeId::root(),
+            DentryName::new(b"local".to_vec()).unwrap(),
+            0o755,
+            1000,
+            1000,
+        )
+        .unwrap();
+    assert_eq!(same_shard_dir.attr.inode.shard_index(), 0);
+
+    let err = shard0
+        .create_graft(
+            InodeId::root(),
+            DentryName::new(b"bad-graft".to_vec()).unwrap(),
+            same_shard_dir.attr.inode,
+            0o755,
+            1000,
+            1000,
+        )
+        .unwrap_err();
+    assert!(matches!(err, MetadError::InvalidPath(_)), "got {err:?}");
+    // No dentry was written for the rejected graft.
+    assert!(shard0
+        .lookup_plus(
+            InodeId::root(),
+            &DentryName::new(b"bad-graft".to_vec()).unwrap()
+        )
+        .unwrap()
+        .is_none());
+}
+
+#[test]
+fn remove_graft_is_idempotent_when_dentry_already_gone() {
+    // First teardown removes the graft dentry and returns the removed entry.
+    let (shard0, _shard1, dataset, foreign_inode) = grafted_pair();
+    let removed = shard0.remove_graft(InodeId::root(), &dataset).unwrap();
+    assert_eq!(
+        removed.expect("first remove returns the entry").attr.inode,
+        foreign_inode
+    );
+    assert!(shard0
+        .lookup_plus(InodeId::root(), &dataset)
+        .unwrap()
+        .is_none());
+
+    // A racing/re-driven second teardown must be a no-op success, not an error:
+    // the desired post-state (dentry absent) already holds.
+    let second = shard0.remove_graft(InodeId::root(), &dataset).unwrap();
+    assert!(
+        second.is_none(),
+        "idempotent re-run must return Ok(None), got {second:?}"
+    );
 }
 
 #[test]

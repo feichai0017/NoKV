@@ -151,6 +151,20 @@ def test_resolve_missing_raises():
         checkpoint.resolve_checkpoint(client, "nope")
 
 
+def test_publish_shard_rejects_manifest_and_escaping_names():
+    """A shard name must be a single component and must not be the manifest, so
+    a malicious/buggy name cannot clobber the commit point or escape the step."""
+    client = FakeClient()
+    for bad in ("_manifest.json", "../escape", "a/b", "..", "", "x\x00y"):
+        with pytest.raises(ValueError):
+            checkpoint.publish_shard(client, "run", 1, bad, b"data")
+    # publish_checkpoint funnels through the same validation.
+    with pytest.raises(ValueError):
+        checkpoint.publish_checkpoint(client, "run", 1, {"_manifest.json": b"x"})
+    # Nothing was written for the rejected names: the step has no manifest.
+    assert checkpoint.latest_step(client, "run") is None
+
+
 if __name__ == "__main__":
     failures = 0
     for _name, _fn in sorted(globals().items()):

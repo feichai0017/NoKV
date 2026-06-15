@@ -307,10 +307,11 @@ impl ReadPlanCacheShards {
 
 fn read_plan_cache_shard_index(key: &ObjectReadPlanKey, shard_count: usize) -> usize {
     debug_assert!(shard_count > 0);
-    let hash = key.object_id
-        ^ key.generation.rotate_left(17)
-        ^ key.offset.rotate_left(31)
-        ^ (key.len as u64).rotate_left(7);
+    // Hash only the (inode, generation) identity, NOT offset/len: every plan for
+    // one (inode, generation) must land on the same shard so the covering
+    // full-file plan can be reused for slice reads. Mixing offset/len in would
+    // scatter full-file and slice keys across shards and defeat that reuse.
+    let hash = key.object_id ^ key.generation.rotate_left(17);
     hash as usize % shard_count
 }
 
@@ -1456,6 +1457,34 @@ mod tests {
         let stats = backend.object_pipeline_stats().unwrap();
         assert_eq!(stats.read_plan_cache_hits, 1);
         assert_eq!(stats.read_plan_cache_misses, 0);
+    }
+
+    #[test]
+    fn read_plan_cache_shard_index_groups_one_generation_on_one_shard() {
+        // The full-file covering plan and every slice lookup for the same
+        // (inode, generation) must hash to the same shard, otherwise a slice read
+        // can't find the covering plan another offset seeded.
+        let shard_count = 16;
+        let full = ObjectReadPlanKey::new(42, 7, 0, 4096);
+        let slice_a = ObjectReadPlanKey::new(42, 7, 512, 256);
+        let slice_b = ObjectReadPlanKey::new(42, 7, 3000, 1096);
+        let full_shard = read_plan_cache_shard_index(&full, shard_count);
+        assert_eq!(
+            read_plan_cache_shard_index(&slice_a, shard_count),
+            full_shard
+        );
+        assert_eq!(
+            read_plan_cache_shard_index(&slice_b, shard_count),
+            full_shard
+        );
+
+        // A different generation of the same inode is allowed to land elsewhere;
+        // we only require offset/len to be irrelevant to the shard choice.
+        let next_gen = ObjectReadPlanKey::new(42, 8, 0, 4096);
+        assert_eq!(
+            read_plan_cache_shard_index(&next_gen, shard_count),
+            read_plan_cache_shard_index(&ObjectReadPlanKey::new(42, 8, 99, 1), shard_count),
+        );
     }
 
     #[test]

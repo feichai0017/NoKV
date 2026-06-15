@@ -335,6 +335,14 @@ class NoKVStorageReader(_StorageReader):  # type: ignore[misc,valid-type]
             path = f"{step_dir(self.base, self.run, self.step)}/{relative}"
             ranges = [(int(info.offset), int(info.length)) for _, info in reqs]
             blobs = self.client.read_ranges_batch([(path, ranges, None, None)])[0]
+            # The batch read must return exactly one blob per requested range. A
+            # short list would otherwise be silently truncated by zip(), leaving
+            # some ReadItems unloaded and corrupting the restored checkpoint.
+            if len(blobs) != len(reqs):
+                raise RuntimeError(
+                    f"read_ranges_batch returned {len(blobs)} blobs for "
+                    f"{len(reqs)} requested ranges of {path!r}"
+                )
             for (read_item, _info), blob in zip(reqs, blobs):
                 if read_item.type == write_item_type.BYTE_IO:
                     planner.load_bytes(read_item, io.BytesIO(blob))
@@ -373,12 +381,13 @@ def load_checkpoint(state_dict, client, run: str, step: int, *, base: str = "che
 
 
 def _global_rank() -> int:
-    try:
-        if torch.distributed.is_available() and torch.distributed.is_initialized():
-            return torch.distributed.get_rank()
-    except Exception:  # pragma: no cover - defensive
-        pass
-    return 0
+    # Rank 0 is the correct answer ONLY for the non-distributed case (no process
+    # group), so single-process callers get a stable filename. If a process group
+    # IS initialized, let get_rank() errors propagate: silently collapsing to 0
+    # would map every rank's shard onto rank 0's filename and clobber the others.
+    if not torch.distributed.is_available() or not torch.distributed.is_initialized():
+        return 0
+    return torch.distributed.get_rank()
 
 
 def _write_result(item, length, storage_info):

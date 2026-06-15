@@ -2636,7 +2636,7 @@ fn fleet_refreshes_and_retries_against_new_owner_on_not_owner() {
             }
         );
         response_body(
-            r#"{"ok":false,"error":"not owner","error_kind":{"type":"not_owner","shard_id":"mount-1:#shard-1","endpoint":null}}"#,
+            r#"{"ok":false,"error":"not owner","error_kind":{"type":"not_owner","shard_id":"mount-1:/dataset","endpoint":null}}"#,
         )
     });
     let new_owner = serve_one_request(|request| {
