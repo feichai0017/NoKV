@@ -1887,6 +1887,8 @@ where
                 content_type: metadata.content_type,
                 manifest_id: written.manifest_id,
                 generation: prepared.generation,
+                // Fresh client-side write: self-contained, no fallthrough base.
+                base_generation: 0,
                 chunk_size: written.chunk_size,
                 block_size: written.block_size,
             },

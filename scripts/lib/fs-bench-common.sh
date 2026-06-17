@@ -91,7 +91,7 @@ bench_require_tools() {
 
 bench_nokv_object_backend_label() {
     if [[ -n "$NOKV_HOT_OBJECT_ROOT" && "$NOKV_HOT_OBJECT_ROOT" != "none" ]]; then
-        echo "rustfs+local-hot"
+        echo "rustfs+local-hot+put=cold-then-hot"
     else
         echo "rustfs"
     fi

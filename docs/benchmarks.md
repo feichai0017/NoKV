@@ -636,6 +636,13 @@ force a local hot tier for other object-backed workloads as well.
 visible in `local_hot_evictions`;
 `--hot-fill-mode inline|background` selects whether cold-read hot fills happen
 before the read returns or in a coalesced background worker.
+When a row uses a local hot tier, the `object_backend` label includes the write
+durability policy, for example `rustfs+local-hot+put=cold-only` for read
+workloads that seed durable cold objects before measuring hot reads,
+`rustfs+local-hot+put=cold-then-hot` for production-style tiered writes that
+acknowledge after the cold object store, and
+`rustfs+local-hot+put=hot-background` for cache-first write workloads that return
+after local hot staging and enqueue the cold put in the background.
 
 For tiered object backends, the `tiered_*` columns report the object's real
 hot/cold backend activity: hot probes and hits, cold gets and bytes, hot fills,

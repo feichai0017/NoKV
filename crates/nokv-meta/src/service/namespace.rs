@@ -550,6 +550,8 @@ where
                     .map(|body| body.manifest_id.clone())
                     .unwrap_or_else(|| format!("metadata/{}/{}", parent.get(), attr.inode.get())),
                 generation: version.get(),
+                // Self-contained: merge_session_chunks re-materializes every chunk.
+                base_generation: 0,
                 chunk_size: DEFAULT_CHUNK_SIZE,
                 block_size: DEFAULT_BLOCK_SIZE as u64,
             });
@@ -2053,24 +2055,22 @@ where
             ));
         }
         if let Some(body) = &projection.body {
-            if let Some(old_generation) = old_generation {
+            // Only reclaim the prior generation when this one is self-contained
+            // (base_generation == 0: a fresh write or a compaction that
+            // re-materialized every chunk). A delta/sparse generation falls
+            // through to its base, which must survive until chain collapse
+            // (compaction reclaims it then, see Phase 4 GC predicate).
+            if let Some(old_generation) = old_generation.filter(|_| body.base_generation == 0) {
                 let retained_object_keys = chunk_object_keys(chunks);
-                if old_chunks.is_empty() {
-                    mutations.extend(self.chunk_manifest_delete_and_gc_mutations(
-                        inode,
-                        old_generation,
-                        version,
-                        &retained_object_keys,
-                    )?);
-                } else {
-                    mutations.extend(self.chunk_manifest_delete_and_gc_mutations_from_manifests(
-                        inode,
-                        old_generation,
-                        old_chunks,
-                        version,
-                        &retained_object_keys,
-                    ));
-                }
+                // A self-contained generation supersedes the ENTIRE old chain,
+                // not just its top — reclaim every now-unreachable generation.
+                mutations.extend(self.collapse_chain_gc_mutations(
+                    inode,
+                    old_generation,
+                    old_chunks,
+                    version,
+                    &retained_object_keys,
+                )?);
             }
             mutations.push(Mutation {
                 family: RecordFamily::ChunkManifest,

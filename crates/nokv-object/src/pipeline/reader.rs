@@ -205,6 +205,31 @@ impl FileReadPipeline {
         })
     }
 
+    pub fn needs_stateful_pipeline(&self, offset: u64, output_len: usize) -> bool {
+        if output_len == 0 {
+            return false;
+        }
+        let starts_stream = self.last_read_end.is_none() && offset == 0;
+        let continued_stream = self.last_read_end == Some(offset);
+        starts_stream || continued_stream || self.is_sparse_forward_candidate(offset, output_len)
+    }
+
+    pub fn observe_unpipelined_read(
+        &mut self,
+        offset: u64,
+        output_len: usize,
+    ) -> Result<(), ObjectError> {
+        let read_end = offset
+            .checked_add(u64::try_from(output_len).map_err(|_| ObjectError::InvalidRange)?)
+            .ok_or(ObjectError::InvalidRange)?;
+        self.last_read_end = Some(read_end);
+        self.prefetch_until = read_end;
+        self.readahead_bytes = 0;
+        self.sequential_stream_bytes = output_len as u64;
+        self.sparse_forward_reads = 0;
+        Ok(())
+    }
+
     pub fn read_blocks_into_with_options<S, C>(
         &mut self,
         store: &S,
@@ -329,6 +354,19 @@ impl FileReadPipeline {
 
     pub fn stats(&self) -> FileReadPipelineStats {
         self.stats
+    }
+
+    fn is_sparse_forward_candidate(&self, offset: u64, output_len: usize) -> bool {
+        let Some(previous_read_end) = self.last_read_end else {
+            return false;
+        };
+        if offset <= previous_read_end {
+            return false;
+        }
+        if output_len == 0 || output_len > DEFAULT_BLOCK_SIZE / 4 {
+            return false;
+        }
+        offset - previous_read_end <= MAX_SPARSE_FORWARD_GAP_BYTES
     }
 }
 

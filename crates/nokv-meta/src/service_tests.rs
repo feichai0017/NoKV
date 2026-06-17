@@ -276,6 +276,7 @@ fn body_descriptor(generation: u64, size: u64) -> BodyDescriptor {
         content_type: "application/octet-stream".to_owned(),
         manifest_id: format!("manifest-{generation}"),
         generation,
+        base_generation: 0,
         chunk_size: DEFAULT_CHUNK_SIZE,
         block_size: DEFAULT_BLOCK_SIZE as u64,
     }
@@ -2712,6 +2713,296 @@ fn prepared_artifact_staged_session_preserves_dirty_slice_overlay() {
     assert_eq!(manifests[0].slices.len(), 3);
     assert_eq!(manifests[0].slices[1].logical_offset, 2);
     assert_eq!(manifests[0].slices[2].logical_offset, 10);
+}
+
+#[test]
+fn delta_publish_writes_only_dirty_chunks_and_preserves_base() {
+    let service = service();
+    let name = DentryName::new(b"multi.bin".to_vec()).unwrap();
+
+    // Generation 1: a two-chunk file (a few bytes in chunk 0 and chunk 1).
+    let create = service
+        .prepare_artifact_create(InodeId::root(), name.clone())
+        .unwrap();
+    let inode = create.inode;
+    let g1 = create.generation;
+    let written = service
+        .stage_prepared_artifact_ranges(
+            &create,
+            "multi-v1",
+            &[
+                PublishArtifactRange {
+                    offset: 0,
+                    bytes: b"aa".to_vec(),
+                },
+                PublishArtifactRange {
+                    offset: DEFAULT_CHUNK_SIZE,
+                    bytes: b"bb".to_vec(),
+                },
+            ],
+            0,
+        )
+        .unwrap();
+    let staged = written.staged_objects().unwrap();
+    let chunks = written.chunk_manifests();
+    service
+        .publish_prepared_artifact_staged_session(
+            create,
+            PublishArtifactStagedSession {
+                parent: InodeId::root(),
+                name: name.clone(),
+                producer: "unit-test".to_owned(),
+                digest_uri: "unknown".to_owned(),
+                content_type: "application/octet-stream".to_owned(),
+                manifest_id: "multi-v1".to_owned(),
+                size: DEFAULT_CHUNK_SIZE + 2,
+                chunks,
+                staged,
+                mode: 0o644,
+                uid: 1000,
+                gid: 1000,
+            },
+        )
+        .unwrap();
+
+    // Generation 2: overwrite only chunk 0 — a delta over generation 1.
+    let replace = service
+        .prepare_artifact_replace(InodeId::root(), name.clone())
+        .unwrap();
+    let g2 = replace.generation;
+    assert_eq!(replace.old_generation, Some(g1));
+    let written2 = service
+        .stage_prepared_artifact_ranges(
+            &replace,
+            "multi-v2",
+            &[PublishArtifactRange {
+                offset: 0,
+                bytes: b"XY".to_vec(),
+            }],
+            0,
+        )
+        .unwrap();
+    let staged2 = written2.staged_objects().unwrap();
+    let chunks2 = written2.chunk_manifests();
+    service
+        .publish_prepared_artifact_staged_session(
+            replace,
+            PublishArtifactStagedSession {
+                parent: InodeId::root(),
+                name: name.clone(),
+                producer: "unit-test".to_owned(),
+                digest_uri: "unknown".to_owned(),
+                content_type: "application/octet-stream".to_owned(),
+                manifest_id: "multi-v2".to_owned(),
+                size: DEFAULT_CHUNK_SIZE + 2,
+                chunks: chunks2,
+                staged: staged2,
+                mode: 0o644,
+                uid: 1000,
+                gid: 1000,
+            },
+        )
+        .unwrap();
+
+    let version = service.read_version().unwrap();
+    let body = service
+        .lookup_path("/multi.bin")
+        .unwrap()
+        .unwrap()
+        .body
+        .unwrap();
+    assert_eq!(body.generation, g2);
+    // The delta falls through to generation 1 for untouched chunks.
+    assert_eq!(body.base_generation, g1);
+
+    // O(write): generation 2 stores ONLY the dirty chunk (chunk 0), not chunk 1.
+    assert!(service
+        .chain_chunk_manifest(inode, &[g2], 0, version, ReadPurpose::UserStrong)
+        .unwrap()
+        .is_some());
+    assert!(service
+        .chain_chunk_manifest(inode, &[g2], 1, version, ReadPurpose::UserStrong)
+        .unwrap()
+        .is_none());
+
+    // The base generation is preserved intact — not eagerly deleted.
+    assert!(service
+        .chain_chunk_manifest(inode, &[g1], 0, version, ReadPurpose::UserStrong)
+        .unwrap()
+        .is_some());
+    assert!(service
+        .chain_chunk_manifest(inode, &[g1], 1, version, ReadPurpose::UserStrong)
+        .unwrap()
+        .is_some());
+
+    // Reads resolve across the chain: chunk 0 from the delta, chunk 1 inherited.
+    assert_eq!(service.read_file(inode, 0, 2).unwrap(), b"XY");
+    assert_eq!(
+        service.read_file(inode, DEFAULT_CHUNK_SIZE, 2).unwrap(),
+        b"bb"
+    );
+}
+
+fn overwrite_staged(
+    service: &NoKvFs<HoltMetadataStore, MemoryObjectStore>,
+    prepared: PreparedArtifact,
+    name: &DentryName,
+    manifest_id: &str,
+    offset: u64,
+    bytes: &[u8],
+    size: u64,
+) {
+    let written = service
+        .stage_prepared_artifact_ranges(
+            &prepared,
+            manifest_id,
+            &[PublishArtifactRange {
+                offset,
+                bytes: bytes.to_vec(),
+            }],
+            0,
+        )
+        .unwrap();
+    let staged = written.staged_objects().unwrap();
+    let chunks = written.chunk_manifests();
+    service
+        .publish_prepared_artifact_staged_session(
+            prepared,
+            PublishArtifactStagedSession {
+                parent: InodeId::root(),
+                name: name.clone(),
+                producer: "unit-test".to_owned(),
+                digest_uri: "unknown".to_owned(),
+                content_type: "application/octet-stream".to_owned(),
+                manifest_id: manifest_id.to_owned(),
+                size,
+                chunks,
+                staged,
+                mode: 0o644,
+                uid: 1000,
+                gid: 1000,
+            },
+        )
+        .unwrap();
+}
+
+#[test]
+fn delta_chain_compacts_to_self_contained_at_depth_threshold() {
+    let service = service();
+    let name = DentryName::new(b"hot.bin".to_vec()).unwrap();
+    let create = service
+        .prepare_artifact_create(InodeId::root(), name.clone())
+        .unwrap();
+    let inode = create.inode;
+    overwrite_staged(&service, create, &name, "hot-0", 0, b"AAAA", 4);
+
+    // Overwrite the same region many times. Each delta extends the fall-through
+    // chain by one; at the depth threshold the publish must re-materialize a
+    // self-contained generation (base_generation == 0) instead of growing the
+    // chain without bound. Every read must stay correct throughout.
+    let mut saw_compaction = false;
+    for i in 1..=12u32 {
+        let replace = service
+            .prepare_artifact_replace(InodeId::root(), name.clone())
+            .unwrap();
+        let byte = b'A' + (i % 16) as u8;
+        let want = [byte; 4];
+        overwrite_staged(&service, replace, &name, &format!("hot-{i}"), 0, &want, 4);
+        assert_eq!(service.read_file(inode, 0, 4).unwrap(), want.to_vec());
+        let body = service
+            .lookup_path("/hot.bin")
+            .unwrap()
+            .unwrap()
+            .body
+            .unwrap();
+        if body.base_generation == 0 {
+            saw_compaction = true;
+            // Compaction must coalesce the hot chunk's accumulated slices, not
+            // just collapse the chain — otherwise slice count grows unbounded
+            // across compaction cycles. The fully-overwritten chunk collapses to
+            // a single newest-wins slice.
+            let chunk0 = service
+                .chain_chunk_manifest(
+                    inode,
+                    &[body.generation],
+                    0,
+                    service.read_version().unwrap(),
+                    ReadPurpose::UserStrong,
+                )
+                .unwrap()
+                .unwrap();
+            assert_eq!(chunk0.slices.len(), 1);
+        }
+    }
+    assert!(
+        saw_compaction,
+        "deep delta chain must compact to a self-contained generation"
+    );
+}
+
+#[test]
+fn chain_collapse_gc_is_snapshot_safe() {
+    let service = service();
+    let name = DentryName::new(b"snap.bin".to_vec()).unwrap();
+    let create = service
+        .prepare_artifact_create(InodeId::root(), name.clone())
+        .unwrap();
+    let inode = create.inode;
+    overwrite_staged(&service, create, &name, "snap-0", 0, b"AAAA", 4);
+
+    // Pin generation 1, then overwrite enough to trigger a chain-collapse
+    // compaction. The compaction enqueues the superseded chain blocks for GC.
+    let pin = service.snapshot_subtree(InodeId::root()).unwrap();
+    for i in 1..=10u32 {
+        let replace = service
+            .prepare_artifact_replace(InodeId::root(), name.clone())
+            .unwrap();
+        let byte = b'A' + (i % 16) as u8;
+        overwrite_staged(
+            &service,
+            replace,
+            &name,
+            &format!("snap-{i}"),
+            0,
+            &[byte; 4],
+            4,
+        );
+    }
+
+    // The snapshot still resolves generation-1 content, and a GC pass must NOT
+    // delete any block the snapshot can still reach — the version retention
+    // floor blocks reclamation of everything enqueued after the snapshot.
+    assert_eq!(
+        service
+            .read_file_at_snapshot(pin.snapshot_id, inode, 0, 4)
+            .unwrap(),
+        b"AAAA"
+    );
+    let blocked = service.cleanup_pending_objects(1024).unwrap();
+    assert!(
+        blocked.blocked_by_snapshots > 0,
+        "snapshot must block reclamation of still-reachable chain blocks"
+    );
+    assert_eq!(blocked.deleted, 0);
+    // Snapshot read still works after the (blocked) GC pass.
+    assert_eq!(
+        service
+            .read_file_at_snapshot(pin.snapshot_id, inode, 0, 4)
+            .unwrap(),
+        b"AAAA"
+    );
+
+    // Retiring the snapshot raises the floor; the superseded chain blocks now
+    // reclaim — proving the whole chain (not just its top) was enqueued.
+    assert!(service.retire_snapshot(pin.snapshot_id).unwrap());
+    let reclaimed = service.cleanup_pending_objects(1024).unwrap();
+    assert!(
+        reclaimed.deleted > 0,
+        "retiring the snapshot must let superseded chain blocks reclaim"
+    );
+
+    // The live file reads correctly throughout (last write was i=10 -> 'K').
+    assert_eq!(service.read_file(inode, 0, 4).unwrap(), b"KKKK");
 }
 
 #[test]

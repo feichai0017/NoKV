@@ -1513,6 +1513,10 @@ fn parse_mount_args(
                 options.writeback.cache_enabled = true;
                 index += 1;
             }
+            "--writeback-async-publish" => {
+                options.writeback.async_publish = true;
+                index += 1;
+            }
             "--writeback-cache-dir" => {
                 index += 1;
                 options.writeback.root =
@@ -1569,6 +1573,14 @@ fn parse_mount_args(
                 index += 1;
             }
         }
+    }
+    if options.writeback.async_publish && !options.writeback.cache_enabled {
+        // Async-publish acks on a durable cache+journal write; it cannot run on
+        // the in-memory write buffer, so it requires --writeback-cache.
+        return Err(CliError::InvalidOption {
+            field: "writeback_async_publish",
+            value: "requires --writeback-cache".to_owned(),
+        });
     }
     let mountpoint = mountpoint.ok_or(CliError::MissingArgument("mountpoint"))?;
     Ok((options, mountpoint))
@@ -1782,6 +1794,7 @@ Mount cache options:\n\
   --max-readahead-bytes N        Max sequential read-ahead bytes per hint\n\
   --writeback-cache              Stage completed write blocks in the disk cache before object upload\n\
   --no-writeback-cache           Use the default in-memory write buffer and direct object upload\n\
+  --writeback-async-publish      Ack flush/close on the durable cache+journal; upload+publish in the background (requires --writeback-cache)\n\
   --writeback-cache-dir PATH     Directory for staged object upload cache\n\
   --writeback-cache-bytes N      Max staged object upload cache bytes\n\
   --writeback-cache-items N      Max staged object upload cache entries\n\
@@ -2337,6 +2350,7 @@ mod tests {
                 queue_capacity: 128,
                 workers: 4,
                 upload_workers_per_request: 2,
+                async_publish: false,
             },
             ..MountCliOptions::default()
         };
@@ -2387,6 +2401,37 @@ mod tests {
             parse(vec![s("mount-snapshot"), s("bad"), s("/tmp/nokv-ro")]),
             Err(CliError::InvalidNumber {
                 field: "snapshot_id",
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn parse_mount_enables_async_publish_with_cache() {
+        let (_config, command) = parse(vec![
+            s("mount"),
+            s("--writeback-cache"),
+            s("--writeback-async-publish"),
+            s("/tmp/nokv-async"),
+        ])
+        .unwrap();
+        let Command::Mount { options, .. } = command else {
+            panic!("expected mount command");
+        };
+        assert!(options.writeback.cache_enabled);
+        assert!(options.writeback.async_publish);
+    }
+
+    #[test]
+    fn parse_mount_rejects_async_publish_without_cache() {
+        assert!(matches!(
+            parse(vec![
+                s("mount"),
+                s("--writeback-async-publish"),
+                s("/tmp/nokv-async"),
+            ]),
+            Err(CliError::InvalidOption {
+                field: "writeback_async_publish",
                 ..
             })
         ));

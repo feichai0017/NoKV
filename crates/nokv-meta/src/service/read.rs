@@ -1212,21 +1212,97 @@ where
 
         let start_chunk = offset / body.chunk_size;
         let end_chunk = (end - 1) / body.chunk_size;
-        let mut manifests = Vec::new();
+        // A sparse generation stores manifests only for the chunks it rewrote;
+        // untouched chunks fall through to `base_generation`. Resolve the
+        // newest-first generation chain once, then take each chunk's manifest
+        // from the newest generation that holds it. For a self-contained body
+        // (`base_generation == 0`) the chain is a single element and this is
+        // identical to a direct per-chunk lookup.
+        let chain = self.resolve_generation_chain(inode, body, version, purpose)?;
+        let mut manifests = Vec::with_capacity((end_chunk - start_chunk + 1) as usize);
         for chunk_index in start_chunk..=end_chunk {
-            let key = chunk_manifest_key(self.mount, inode, body.generation, chunk_index);
-            let Some(value) =
-                self.metadata
-                    .get(RecordFamily::ChunkManifest, &key, version, purpose)?
-            else {
-                return Err(MetadError::MissingBodyDescriptor);
-            };
-            let manifest = decode_chunk_manifest(&value.0)
-                .map_err(|err| MetadError::Codec(err.to_string()))?;
-            manifests.push(manifest);
+            manifests.push(self.resolve_chunk_manifest(
+                inode,
+                &chain,
+                chunk_index,
+                version,
+                purpose,
+            )?);
         }
         let slice_plan = plan_chunk_manifest_reads(&manifests, offset, len)?;
         Ok(slice_plan.blocks)
+    }
+
+    /// Newest-first list of generations to consult for `body`: the body's own
+    /// generation followed by each `base_generation` it falls through to,
+    /// ending at a self-contained generation. A fresh or compacted body yields
+    /// a single element and performs no extra metadata reads.
+    pub(super) fn resolve_generation_chain(
+        &self,
+        inode: InodeId,
+        body: &BodyDescriptor,
+        version: Version,
+        purpose: ReadPurpose,
+    ) -> Result<Vec<u64>, MetadError> {
+        // Compaction bounds the live chain far below this; the cap only guards
+        // against a corrupt/cyclic pointer.
+        const MAX_GENERATION_CHAIN_DEPTH: usize = 64;
+        let mut chain = vec![body.generation];
+        let mut base = body.base_generation;
+        while base != 0 {
+            if chain.len() >= MAX_GENERATION_CHAIN_DEPTH {
+                return Err(MetadError::Codec(
+                    "metadata generation chain exceeds maximum depth".to_owned(),
+                ));
+            }
+            chain.push(base);
+            base = self
+                .body_descriptor_at_version_for_purpose(inode, base, version, purpose)?
+                .ok_or(MetadError::MissingBodyDescriptor)?
+                .base_generation;
+        }
+        Ok(chain)
+    }
+
+    /// Resolve a single chunk's manifest from the newest generation in `chain`
+    /// that stored one, or `None` if no generation holds it (a hole — e.g. a
+    /// chunk appended past the base's EOF). Each generation's chunk manifest is
+    /// self-contained for the chunk it rewrote, so the first (newest) hit is
+    /// authoritative.
+    pub(super) fn chain_chunk_manifest(
+        &self,
+        inode: InodeId,
+        chain: &[u64],
+        chunk_index: u64,
+        version: Version,
+        purpose: ReadPurpose,
+    ) -> Result<Option<ChunkManifest>, MetadError> {
+        for &generation in chain {
+            let key = chunk_manifest_key(self.mount, inode, generation, chunk_index);
+            if let Some(value) =
+                self.metadata
+                    .get(RecordFamily::ChunkManifest, &key, version, purpose)?
+            {
+                return decode_chunk_manifest(&value.0)
+                    .map(Some)
+                    .map_err(|err| MetadError::Codec(err.to_string()));
+            }
+        }
+        Ok(None)
+    }
+
+    /// Strict variant for reads: a chunk covered by the body's size must
+    /// resolve to a manifest somewhere in the chain.
+    fn resolve_chunk_manifest(
+        &self,
+        inode: InodeId,
+        chain: &[u64],
+        chunk_index: u64,
+        version: Version,
+        purpose: ReadPurpose,
+    ) -> Result<ChunkManifest, MetadError> {
+        self.chain_chunk_manifest(inode, chain, chunk_index, version, purpose)?
+            .ok_or(MetadError::MissingBodyDescriptor)
     }
 
     pub(super) fn chunk_manifests_for_body_at_version(
@@ -1243,19 +1319,18 @@ where
             return Ok(Vec::new());
         }
         let end_chunk = (body.size - 1) / body.chunk_size;
+        // Resolve each chunk through the generation chain so a sparse body
+        // yields its *effective* full manifest set (inherited chunks included),
+        // which clone/rollback/inheritance depend on. Identity for a
+        // self-contained body (chain of length 1).
+        let chain = self.resolve_generation_chain(inode, body, version, purpose)?;
         let mut manifests = Vec::new();
         for chunk_index in 0..=end_chunk {
-            let key = chunk_manifest_key(self.mount, inode, body.generation, chunk_index);
-            let Some(value) =
-                self.metadata
-                    .get(RecordFamily::ChunkManifest, &key, version, purpose)?
-            else {
-                continue;
-            };
-            manifests.push(
-                decode_chunk_manifest(&value.0)
-                    .map_err(|err| MetadError::Codec(err.to_string()))?,
-            );
+            if let Some(manifest) =
+                self.chain_chunk_manifest(inode, &chain, chunk_index, version, purpose)?
+            {
+                manifests.push(manifest);
+            }
         }
         Ok(manifests)
     }
