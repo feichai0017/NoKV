@@ -19,6 +19,7 @@ pub struct ObjectWritebackUploader<O> {
     cache: Option<WritebackCache>,
     store: O,
     upload_workers_per_request: usize,
+    retain_cache: bool,
     _state: PhantomData<O>,
 }
 
@@ -33,6 +34,12 @@ pub struct ObjectWritebackOptions {
     pub queue_capacity: usize,
     pub workers: usize,
     pub upload_workers_per_request: usize,
+    /// Keep each block's writeback-cache copy after a successful upload instead of
+    /// evicting it inline. Required for opt-in async-publish, where the cache is
+    /// the crash-recovery source until the metadata manifest commits; the
+    /// background publisher evicts the copy itself once the publish lands. Off for
+    /// the synchronous writeback-cache path, which evicts on upload as before.
+    pub retain_cache_on_success: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -99,15 +106,24 @@ struct PendingChunkedWriteInner {
 #[derive(Clone, Debug)]
 struct PendingWritebackCache {
     cache: WritebackCache,
-    tickets: Vec<WritebackTicket>,
+    /// `(logical_offset, ticket)` per cache-backed block. The offset is retained
+    /// so [`PendingChunkedWrite::cache_entries`] can record it in the publish
+    /// journal for crash recovery to re-stage the block at the right position.
+    entries: Vec<(u64, WritebackTicket)>,
 }
 
 impl Default for ObjectWritebackOptions {
     fn default() -> Self {
+        // Concurrency tuned from the JuiceFS comparison: with 2 workers / 1 PUT
+        // per request NoKV left write throughput on the table (random write
+        // ~1.7x behind JuiceFS); 8 workers x 4 parallel PUTs closes the random
+        // write gap to parity and narrows sequential write, with no measured
+        // downside on the read path.
         Self {
             queue_capacity: 64,
-            workers: 2,
-            upload_workers_per_request: 1,
+            workers: 8,
+            upload_workers_per_request: 4,
+            retain_cache_on_success: false,
         }
     }
 }
@@ -143,12 +159,35 @@ impl PendingChunkedWrite {
         }
     }
 
+    /// The writeback-cache blocks backing this pending upload, as
+    /// `(logical_offset, cache_key, file_name, len)` per block. Recorded in the
+    /// publish journal so async-publish crash recovery can `reinsert` and
+    /// re-stage them at the right offset after a restart wipes the in-memory cache
+    /// index. Empty when no cache backs the upload (inline or direct).
+    pub fn cache_entries(&self) -> Vec<(u64, String, String, u64)> {
+        let Some(writeback) = &self.writeback else {
+            return Vec::new();
+        };
+        writeback
+            .entries
+            .iter()
+            .map(|(logical_offset, ticket)| {
+                (
+                    *logical_offset,
+                    ticket.key().to_owned(),
+                    ticket.file_name().to_owned(),
+                    ticket.len(),
+                )
+            })
+            .collect()
+    }
+
     pub fn discard_writeback_cache(&self) -> Result<usize, ObjectError> {
         let Some(writeback) = &self.writeback else {
             return Ok(0);
         };
         let mut removed = 0_usize;
-        for ticket in &writeback.tickets {
+        for (_, ticket) in &writeback.entries {
             if writeback.cache.remove(ticket)? {
                 removed = removed.saturating_add(1);
             }
@@ -205,13 +244,6 @@ impl WritebackUploadRange {
     }
 }
 
-fn cache_tickets(request: &ObjectWritebackRequest) -> impl Iterator<Item = &WritebackTicket> {
-    request
-        .ranges
-        .iter()
-        .filter_map(WritebackUploadRange::cache_ticket)
-}
-
 impl<O> ObjectWritebackUploader<O>
 where
     O: ObjectStore + Clone + Send + Sync + 'static,
@@ -231,6 +263,7 @@ where
     ) -> Self {
         let capacity = options.queue_capacity.max(1);
         let workers = options.workers.max(1);
+        let retain_cache = options.retain_cache_on_success;
         let (sender, receiver) = mpsc::sync_channel::<ObjectWritebackJob>(capacity);
         let receiver = Arc::new(Mutex::new(receiver));
         let stats = Arc::new(Mutex::new(ObjectWritebackStats::default()));
@@ -253,8 +286,13 @@ where
                 };
                 let queue_wait = job.enqueued_at.elapsed();
                 let upload_start = Instant::now();
-                let result =
-                    upload_writeback_request(&store, cache.as_ref(), job.request, upload_workers);
+                let result = upload_writeback_request(
+                    &store,
+                    cache.as_ref(),
+                    job.request,
+                    upload_workers,
+                    retain_cache,
+                );
                 let upload_elapsed = upload_start.elapsed();
                 if let Ok(mut stats) = stats.lock() {
                     record_upload_result(&mut stats, &result, queue_wait, upload_elapsed);
@@ -268,6 +306,7 @@ where
             cache,
             store,
             upload_workers_per_request: options.upload_workers_per_request.max(1),
+            retain_cache,
             _state: PhantomData,
         }
     }
@@ -281,8 +320,16 @@ where
             .iter()
             .map(WritebackUploadRange::len)
             .sum::<u64>();
-        let tickets = cache_tickets(&request).cloned().collect::<Vec<_>>();
-        let writeback = if tickets.is_empty() {
+        let entries = request
+            .ranges
+            .iter()
+            .filter_map(|range| {
+                range
+                    .cache_ticket()
+                    .map(|ticket| (range.logical_offset, ticket.clone()))
+            })
+            .collect::<Vec<_>>();
+        let writeback = if entries.is_empty() {
             None
         } else {
             Some(PendingWritebackCache {
@@ -291,7 +338,7 @@ where
                         "cache-backed writeback request requires a cache".to_owned(),
                     )
                 })?,
-                tickets,
+                entries,
             })
         };
         let pending = PendingChunkedWrite {
@@ -323,6 +370,7 @@ where
                     self.cache.as_ref(),
                     job.request,
                     self.upload_workers_per_request,
+                    self.retain_cache,
                 );
                 let upload_elapsed = upload_start.elapsed();
                 let stats_result = self.record_upload_result(&result, queue_wait, upload_elapsed);
@@ -418,6 +466,7 @@ fn upload_writeback_request<O>(
     cache: Option<&WritebackCache>,
     request: ObjectWritebackRequest,
     workers: usize,
+    retain_cache: bool,
 ) -> Result<ObjectWritebackUploadOutcome, ObjectError>
 where
     O: ObjectStore + Sync,
@@ -442,7 +491,10 @@ where
         written,
         timings: ObjectWritebackTimings { collect_ns, chunk },
     });
-    if result.is_ok() {
+    // In async-publish mode the cache copy is the crash-recovery source until the
+    // manifest commits, so the background publisher evicts it after the publish
+    // lands; the synchronous path evicts here on a successful upload as before.
+    if result.is_ok() && !retain_cache {
         if let Some(cache) = cache {
             for ticket in cache_tickets {
                 let _ = cache.remove(&ticket);

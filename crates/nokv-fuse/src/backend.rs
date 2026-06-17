@@ -10,11 +10,12 @@ use nokv_meta::{
 use nokv_object::{
     plan_chunk_manifest_reads, put_chunked_ranges_parallel, BlockCache, BlockReadOptions,
     BlockReadOutcome, ChunkStore, ChunkWriteOptions, ChunkWriteRange, ChunkedWrite,
-    FileReadPipeline, FileReadRequest, FileWritePipeline, ObjectBlockCache, ObjectError,
-    ObjectPrefetchOptions, ObjectPrefetchRequest, ObjectPrefetcher, ObjectReadBlock,
-    ObjectReadPlan, ObjectReadPlanCache, ObjectReadPlanKey, ObjectStore, ObjectWritebackOptions,
-    ObjectWritebackRequest, ObjectWritebackUploader, PendingChunkedWrite, WritebackCache,
-    WritebackCacheOptions, WritebackUploadRange, DEFAULT_BLOCK_SIZE, DEFAULT_CHUNK_SIZE,
+    FileReadPipeline, FileReadRequest, FileWritePipeline, MemoryBlockCache,
+    MemoryBlockCacheOptions, ObjectBlockCache, ObjectError, ObjectPrefetchOptions,
+    ObjectPrefetchRequest, ObjectPrefetcher, ObjectReadBlock, ObjectReadPlan, ObjectReadPlanCache,
+    ObjectReadPlanKey, ObjectStore, ObjectWritebackOptions, ObjectWritebackRequest,
+    ObjectWritebackUploader, PendingChunkedWrite, WritebackCache, WritebackCacheOptions,
+    WritebackUploadRange, DEFAULT_BLOCK_SIZE, DEFAULT_CHUNK_SIZE,
 };
 use nokv_types::{
     AdvisoryLock, AdvisoryLockRequest, ChunkManifest, DentryName, InodeAttr, InodeId,
@@ -25,6 +26,12 @@ use crate::filesystem::{FuseObjectPipelineStats, FuseOptions, PendingBufferedRan
 
 const READ_PLAN_CACHE_CAPACITY: usize = 128 * 1024;
 const READ_PLAN_CACHE_SHARDS: usize = 16;
+/// Bounded read-ahead staging buffer used when prefetch is on but the (re-read)
+/// block cache is disabled, so cold sequential reads still pipeline ahead
+/// instead of falling back to serial per-block fetches. Small relative to a large
+/// file, so it stages the read-ahead window without acting as a re-read cache.
+const READAHEAD_BUFFER_BYTES: u64 = 64 * 1024 * 1024;
+const READAHEAD_BUFFER_ITEMS: usize = 4096;
 
 pub(crate) type FuseBackendResult<T> = Result<T, FuseBackendError>;
 
@@ -35,10 +42,38 @@ pub(crate) enum FuseBackendError {
     Object(ObjectError),
 }
 
+/// The prepared-artifact scalars the write-back publish journal must persist to
+/// re-drive (or recover) a generation without the live `WriteHandle`. Extracted
+/// from a `Self::Prepared` via [`FuseBackend::prepared_record_fields`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct PreparedRecordFields {
+    pub mount: u64,
+    pub generation: u64,
+    pub mtime_ms: u64,
+    pub ctime_ms: u64,
+    pub replace: bool,
+    pub dentry_version: Option<u64>,
+    pub old_generation: Option<u64>,
+}
+
+/// One writeback-cache block to re-stage during async-publish mount recovery,
+/// rebuilt from a journal `CacheFileRef`. `cache_key` re-indexes the on-disk
+/// `file_name`; `logical_offset` places it back in the re-upload.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct RecoveredBlock {
+    pub logical_offset: u64,
+    pub cache_key: String,
+    pub file_name: String,
+    pub len: u64,
+}
+
 pub(crate) trait FuseBackend: Send + Sync + 'static {
     type Prepared: Clone + Send + Sync + 'static;
 
     fn prepared_generation(&self, prepared: &Self::Prepared) -> u64;
+    /// The journal-persistable scalars of a prepared artifact, for async-publish
+    /// write-back (recording at ack, reconstructing on recovery).
+    fn prepared_record_fields(&self, prepared: &Self::Prepared) -> PreparedRecordFields;
     /// Whether `prepared` is an artifact-*replace* (vs a fresh create). Only
     /// replaces carry a dentry-version CAS guard that can be invalidated by an
     /// intervening attribute update on the same file.
@@ -225,6 +260,36 @@ pub(crate) trait FuseBackend: Send + Sync + 'static {
         ranges: &[PendingBufferedRange],
         block_index_base: u64,
     ) -> FuseBackendResult<PendingChunkedWrite>;
+    /// Re-stage already-cached write blocks after a crash: re-index each in the
+    /// writeback cache and re-upload from there, yielding the pending upload the
+    /// publisher worker drains. Used only by async-publish mount recovery; a
+    /// missing cache file fails the call (recovery then accepts the loss).
+    fn restage_cached_blocks(
+        &self,
+        prepared: &Self::Prepared,
+        manifest_id: &str,
+        blocks: &[RecoveredBlock],
+        block_index_base: u64,
+    ) -> FuseBackendResult<PendingChunkedWrite>;
+    /// Rebuild a prepared artifact from the scalars persisted in the publish
+    /// journal, so recovery can re-drive a generation without the `WriteHandle`.
+    fn prepared_from_record_fields(
+        &self,
+        parent: InodeId,
+        name: DentryName,
+        inode: InodeId,
+        fields: PreparedRecordFields,
+    ) -> Self::Prepared;
+    /// Delete writeback-cache files not referenced by any live journal record
+    /// (staged before a crash recorded them). Returns the count purged.
+    fn purge_cache_orphans(
+        &self,
+        live_file_names: &std::collections::HashSet<String>,
+    ) -> FuseBackendResult<usize>;
+    /// fsync the writeback-cache root, batching the staged blocks' directory
+    /// durability into one call at the async-publish ack. A no-op without a
+    /// writeback cache.
+    fn sync_writeback_root(&self) -> FuseBackendResult<()>;
     fn cleanup_staged_objects(
         &self,
         staged: &nokv_object::StagedObjectSet,
@@ -247,7 +312,13 @@ pub(crate) trait FuseBackend: Send + Sync + 'static {
 pub(crate) struct ClientFuseBackend<O> {
     metadata: MetadataClient,
     objects: Arc<O>,
+    /// User-configured re-read block cache (`None` with `--no-block-cache`). Kept
+    /// distinct from `read_cache` so cache-hit stats reflect the configured cache,
+    /// not the read-ahead staging buffer.
     block_cache: Option<ObjectBlockCache>,
+    /// Effective read buffer foreground reads + the prefetcher use: the configured
+    /// block cache, or a small read-ahead buffer when prefetch is on without one.
+    read_cache: Option<ObjectBlockCache>,
     read_plan_cache: ReadPlanCacheShards,
     read_plan_cache_hits: AtomicU64,
     read_plan_cache_misses: AtomicU64,
@@ -338,8 +409,25 @@ where
     ) -> FuseBackendResult<Self> {
         let objects = Arc::new(objects);
         let block_cache = options.block_cache.clone().open()?;
+        // The prefetcher stages read-ahead blocks into a cache that foreground
+        // reads then consult. When the (re-read) block cache is disabled but
+        // prefetch is on, give the read path a small bounded read-ahead buffer
+        // anyway — otherwise sequential read-ahead is detected but dropped and
+        // cold reads degrade to serial per-block fetches. The configured block
+        // cache, when present, doubles as this buffer.
+        let read_cache = match &block_cache {
+            Some(cache) => Some(cache.clone()),
+            None if options.prefetch.enabled => Some(ObjectBlockCache::Memory(
+                MemoryBlockCache::new(MemoryBlockCacheOptions {
+                    max_bytes: READAHEAD_BUFFER_BYTES,
+                    max_items: READAHEAD_BUFFER_ITEMS,
+                    ttl: None,
+                }),
+            )),
+            None => None,
+        };
         let prefetcher = if options.prefetch.enabled {
-            block_cache.as_ref().map(|cache| {
+            read_cache.as_ref().map(|cache| {
                 ObjectPrefetcher::new(
                     Arc::clone(&objects),
                     cache.clone(),
@@ -363,6 +451,10 @@ where
             queue_capacity: writeback.queue_capacity.max(1),
             workers: writeback.workers.max(1),
             upload_workers_per_request: writeback.upload_workers_per_request.max(1),
+            // Async-publish keeps cache copies until the background worker commits
+            // the manifest (then evicts them); the synchronous path evicts on
+            // upload as before.
+            retain_cache_on_success: writeback.async_publish,
         };
         let writeback_uploader = Some(match writeback_cache.clone() {
             Some(cache) => {
@@ -374,6 +466,7 @@ where
             metadata,
             objects,
             block_cache,
+            read_cache,
             read_plan_cache: ReadPlanCacheShards::new(
                 READ_PLAN_CACHE_CAPACITY,
                 READ_PLAN_CACHE_SHARDS,
@@ -682,6 +775,18 @@ where
         prepared.generation
     }
 
+    fn prepared_record_fields(&self, prepared: &Self::Prepared) -> PreparedRecordFields {
+        PreparedRecordFields {
+            mount: prepared.mount,
+            generation: prepared.generation,
+            mtime_ms: prepared.mtime_ms,
+            ctime_ms: prepared.ctime_ms,
+            replace: prepared.replace,
+            dentry_version: prepared.dentry_version,
+            old_generation: prepared.old_generation,
+        }
+    }
+
     fn prepared_is_replace(&self, prepared: &Self::Prepared) -> bool {
         prepared.replace
     }
@@ -820,7 +925,7 @@ where
         }
         let plan = self.cached_read_body_plan(attr.inode, attr.generation, offset, len)?;
         let read = self.objects.read_blocks_with_options(
-            self.block_cache.as_ref(),
+            self.read_cache.as_ref(),
             plan.output_len,
             &plan.blocks,
             self.read_options(),
@@ -843,7 +948,7 @@ where
         let plan = self.cached_read_body_plan_for_handle(attr, offset, len, read_plans)?;
         let read = pipeline.read_blocks_with_options(
             &self.objects,
-            self.block_cache.as_ref(),
+            self.read_cache.as_ref(),
             FileReadRequest {
                 file_size: attr.size,
                 offset,
@@ -1139,6 +1244,100 @@ where
                 }
                 Err(err.into())
             }
+        }
+    }
+
+    fn restage_cached_blocks(
+        &self,
+        prepared: &Self::Prepared,
+        manifest_id: &str,
+        blocks: &[RecoveredBlock],
+        block_index_base: u64,
+    ) -> FuseBackendResult<PendingChunkedWrite> {
+        let writeback_uploader = self.writeback_uploader.as_ref().ok_or_else(|| {
+            FuseBackendError::Object(ObjectError::Backend(
+                "async-publish recovery requires a writeback uploader".to_owned(),
+            ))
+        })?;
+        let writeback_cache = self.writeback_cache.as_ref().ok_or_else(|| {
+            FuseBackendError::Object(ObjectError::Backend(
+                "async-publish recovery requires a writeback cache".to_owned(),
+            ))
+        })?;
+        let mut upload_ranges: Vec<WritebackUploadRange> = Vec::with_capacity(blocks.len());
+        for block in blocks.iter().filter(|block| block.len != 0) {
+            // A missing cache file (cache wiped between runs) surfaces here, so the
+            // caller can accept the loss rather than wedge on a record it cannot
+            // re-drive.
+            let ticket = writeback_cache.reinsert(
+                block.cache_key.clone(),
+                block.file_name.clone(),
+                block.len,
+            )?;
+            upload_ranges.push(WritebackUploadRange::cache(block.logical_offset, ticket));
+        }
+        if upload_ranges.is_empty() {
+            return Ok(PendingChunkedWrite::ready(Ok(ChunkedWrite {
+                manifest_id: manifest_id.to_owned(),
+                size: 0,
+                chunk_size: DEFAULT_CHUNK_SIZE,
+                block_size: DEFAULT_BLOCK_SIZE as u64,
+                chunks: Vec::new(),
+                object_puts: 0,
+                object_put_bytes: 0,
+            })));
+        }
+        let request = ObjectWritebackRequest {
+            ranges: upload_ranges,
+            options: ChunkWriteOptions {
+                manifest_id: manifest_id.to_owned(),
+                mount: prepared.mount,
+                inode: prepared.inode.get(),
+                generation: prepared.generation,
+                chunk_size: DEFAULT_CHUNK_SIZE,
+                block_size: DEFAULT_BLOCK_SIZE,
+            },
+            block_index_base,
+        };
+        writeback_uploader.submit(request).map_err(Into::into)
+    }
+
+    fn prepared_from_record_fields(
+        &self,
+        parent: InodeId,
+        name: DentryName,
+        inode: InodeId,
+        fields: PreparedRecordFields,
+    ) -> Self::Prepared {
+        ClientPreparedArtifact {
+            mount: fields.mount,
+            parent,
+            name,
+            path: None,
+            inode,
+            generation: fields.generation,
+            mtime_ms: fields.mtime_ms,
+            ctime_ms: fields.ctime_ms,
+            replace: fields.replace,
+            dentry_version: fields.dentry_version,
+            old_generation: fields.old_generation,
+        }
+    }
+
+    fn purge_cache_orphans(
+        &self,
+        live_file_names: &std::collections::HashSet<String>,
+    ) -> FuseBackendResult<usize> {
+        match &self.writeback_cache {
+            Some(cache) => cache.purge_orphans(live_file_names).map_err(Into::into),
+            None => Ok(0),
+        }
+    }
+
+    fn sync_writeback_root(&self) -> FuseBackendResult<()> {
+        match &self.writeback_cache {
+            Some(cache) => cache.sync_root().map_err(Into::into),
+            None => Ok(()),
         }
     }
 

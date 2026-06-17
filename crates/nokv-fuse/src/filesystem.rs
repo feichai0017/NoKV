@@ -41,6 +41,8 @@ mod handle;
 mod locks;
 mod options;
 mod posix;
+mod publish_journal;
+mod publisher;
 mod write_session;
 mod xattr;
 
@@ -91,6 +93,10 @@ pub(crate) struct NoKvFuse<B: FuseBackend> {
     write_handles: RwLock<HashMap<u64, WriteHandle<B::Prepared>>>,
     directory_handles: RwLock<HashMap<u64, DirectoryHandle>>,
     invalidation: Arc<InvalidationRegistry>,
+    /// Opt-in async write-back runtime (journal + read-after-write tracker +
+    /// background publisher). `None` unless `--writeback-async-publish` is on, in
+    /// which case the synchronous `publish_handle` tail is bypassed at `release`.
+    writeback_publisher: Option<publisher::WritebackPublisher<B>>,
 }
 
 #[derive(Debug, Default)]
@@ -177,7 +183,8 @@ where
     config.n_threads = Some(options.threads);
     let backend = Arc::new(backend);
     let stats_backend = Arc::clone(&backend);
-    let fuse = NoKvFuse::from_shared_backend(Arc::clone(&backend), options.clone());
+    let mut fuse = NoKvFuse::from_shared_backend(Arc::clone(&backend), options.clone());
+    fuse.enable_async_publish()?;
     let stats_read = Arc::clone(&fuse.read_stats);
     let registry = fuse.invalidation_registry();
     let local_invalidation = fuse.local_invalidation();
@@ -391,6 +398,10 @@ where
                 return;
             }
         };
+        if let Err(err) = self.wait_pending_publish_dentry(parent, &name) {
+            reply.error(err);
+            return;
+        }
         match self.service_lookup_plus(parent, &name) {
             Ok(Some(entry)) => {
                 self.remember_entry(&entry);
@@ -406,6 +417,11 @@ where
     }
 
     fn getattr(&self, _req: &Request, ino: INodeNo, _fh: Option<FileHandle>, reply: ReplyAttr) {
+        // No async-publish barrier here: the kernel issues a getattr while
+        // closing a just-written file, and barriering it would make the writer
+        // wait out its own deferred publish (a self-inflicted stall). A *reader*
+        // resolves the path through `lookup` first, which does barrier, so
+        // read-after-write across handles stays consistent without this one.
         match self.metadata_inode(ino).and_then(|inode| {
             self.service_get_attr(inode)
                 .map_err(errno)?
@@ -537,6 +553,16 @@ where
                 return;
             }
         };
+        if let Err(err) = self.wait_pending_publish(inode) {
+            reply.error(err);
+            return;
+        }
+        // The read-open path trusts the local attr cache (`read_open_attr`); after
+        // waiting out an async publish, drop the now-stale entry so the open
+        // resolves the just-committed generation.
+        if self.writeback_publisher.is_some() {
+            self.forget_attr_cache(inode);
+        }
         let attr = match flags.acc_mode() {
             OpenAccMode::O_RDONLY => self.read_open_attr(inode),
             OpenAccMode::O_WRONLY | OpenAccMode::O_RDWR => {
@@ -585,6 +611,23 @@ where
         reply: ReplyData,
     ) {
         self.record_fuse_read_request(size);
+        if self.writeback_publisher.is_some() {
+            // A read with no read/write handle falls through to the metadata
+            // service below; block it behind any in-flight async publish so it
+            // observes the committed generation, not the pre-write one.
+            match self.metadata_inode(ino) {
+                Ok(inode) => {
+                    if let Err(err) = self.wait_pending_publish(inode) {
+                        reply.error(err);
+                        return;
+                    }
+                }
+                Err(err) => {
+                    reply.error(err);
+                    return;
+                }
+            }
+        }
         match self.read_from_read_handle(fh, offset, size) {
             Ok(Some(bytes)) => {
                 reply.data(&bytes);
@@ -2210,6 +2253,12 @@ mod tests {
             b"efgh"
         );
         assert_eq!(
+            fuse.read_from_read_handle(second_fh, 0, 4)
+                .unwrap()
+                .unwrap(),
+            b"abcd"
+        );
+        assert_eq!(
             fuse.read_from_read_handle(second_fh, 4, 4)
                 .unwrap()
                 .unwrap(),
@@ -2217,13 +2266,39 @@ mod tests {
         );
 
         let stats = backend.read_stats();
-        assert_eq!(stats.len(), 3);
+        assert_eq!(stats.len(), 4);
         assert_eq!(stats[1].0, 7);
         assert_eq!(stats[1].1.reads, 2);
         assert_eq!(stats[1].1.sequential_reads, 2);
-        assert_eq!(stats[2].0, 8);
-        assert_eq!(stats[2].1.reads, 1);
-        assert_eq!(stats[2].1.sequential_reads, 0);
+        assert_eq!(stats[3].0, 8);
+        assert_eq!(stats[3].1.reads, 2);
+        assert_eq!(stats[3].1.sequential_reads, 2);
+    }
+
+    #[test]
+    fn read_handle_bypasses_pipeline_for_non_stateful_reads() {
+        let backend = UnsupportedTestBackend::default();
+        let fuse = NoKvFuse::from_backend(backend.clone(), FuseOptions::default());
+        let fh = fuse.allocate_read_handle(test_file_attr(7)).unwrap();
+
+        assert_eq!(
+            fuse.read_from_read_handle(fh, 4, 4).unwrap().unwrap(),
+            b"efgh"
+        );
+        assert!(
+            backend.read_stats().is_empty(),
+            "a first middle-of-file read should use the concurrent direct path"
+        );
+
+        assert_eq!(
+            fuse.read_from_read_handle(fh, 8, 4).unwrap().unwrap(),
+            b"ijkl"
+        );
+        let stats = backend.read_stats();
+        assert_eq!(stats.len(), 1);
+        assert_eq!(stats[0].0, 7);
+        assert_eq!(stats[0].1.reads, 1);
+        assert_eq!(stats[0].1.sequential_reads, 1);
     }
 
     #[test]
@@ -2436,6 +2511,21 @@ mod tests {
 
         fn prepared_generation(&self, _prepared: &Self::Prepared) -> u64 {
             1
+        }
+
+        fn prepared_record_fields(
+            &self,
+            _prepared: &Self::Prepared,
+        ) -> crate::backend::PreparedRecordFields {
+            crate::backend::PreparedRecordFields {
+                mount: 1,
+                generation: 1,
+                mtime_ms: 0,
+                ctime_ms: 0,
+                replace: false,
+                dentry_version: None,
+                old_generation: None,
+            }
         }
 
         fn prepared_is_replace(&self, _prepared: &Self::Prepared) -> bool {
@@ -2809,6 +2899,36 @@ mod tests {
                 object_puts: ranges.len(),
                 object_put_bytes: ranges.iter().map(|range| range.len() as u64).sum(),
             })))
+        }
+
+        fn restage_cached_blocks(
+            &self,
+            _prepared: &Self::Prepared,
+            _manifest_id: &str,
+            _blocks: &[crate::backend::RecoveredBlock],
+            _block_index_base: u64,
+        ) -> FuseBackendResult<PendingChunkedWrite> {
+            unsupported()
+        }
+
+        fn prepared_from_record_fields(
+            &self,
+            _parent: InodeId,
+            _name: DentryName,
+            _inode: InodeId,
+            _fields: crate::backend::PreparedRecordFields,
+        ) -> Self::Prepared {
+        }
+
+        fn purge_cache_orphans(
+            &self,
+            _live_file_names: &std::collections::HashSet<String>,
+        ) -> FuseBackendResult<usize> {
+            Ok(0)
+        }
+
+        fn sync_writeback_root(&self) -> FuseBackendResult<()> {
+            Ok(())
         }
 
         fn cleanup_staged_objects(

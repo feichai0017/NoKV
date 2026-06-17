@@ -33,16 +33,21 @@ RESULT_CSV="${NOKV_PYTHON_SMOKE_RESULT_CSV:-}"
 METADATA_TIER="${NOKV_PYTHON_SMOKE_METADATA_TIER:-nokv-l1-service}"
 OBJECT_BACKEND_LABEL="${NOKV_PYTHON_SMOKE_OBJECT_BACKEND:-rustfs}"
 HOT_OBJECT_ROOT="${NOKV_PYTHON_SMOKE_HOT_OBJECT_ROOT:-}"
+if [[ -z "${NOKV_PYTHON_SMOKE_OBJECT_BACKEND:-}" && -n "$HOT_OBJECT_ROOT" ]]; then
+    OBJECT_BACKEND_LABEL="rustfs+local-hot+put=cold-then-hot"
+fi
 
 NOKV_BIN="${NOKV_PYTHON_SMOKE_NOKV_BIN:-}"
 SKIP_BUILD="${NOKV_PYTHON_SMOKE_SKIP_BUILD:-0}"
 KEEP_WORKDIR="${NOKV_PYTHON_SMOKE_KEEP:-0}"
 WORK_DIR="${NOKV_PYTHON_SMOKE_WORKDIR:-}"
 CARGO_TARGET_DIR_OVERRIDE="${NOKV_PYTHON_SMOKE_CARGO_TARGET_DIR:-${CARGO_TARGET_DIR:-}}"
+RUSTFS_DATA_DIR_OVERRIDE="${NOKV_PYTHON_SMOKE_RUSTFS_DATA_DIR:-}"
 
 RUSTFS_PID=""
 SERVER_PID=""
 OWN_WORK_DIR=0
+OWN_RUSTFS_DATA_DIR=0
 META_DIR=""
 RUSTFS_DATA_DIR=""
 RUSTFS_LOG=""
@@ -59,6 +64,7 @@ Environment:
   NOKV_PYTHON_SMOKE_NOKV_BIN             use an existing nokv binary
   NOKV_PYTHON_SMOKE_SKIP_BUILD=1         do not build nokv when a binary is set
   NOKV_PYTHON_SMOKE_CARGO_TARGET_DIR     cargo target directory for nokv/maturin builds
+  NOKV_PYTHON_SMOKE_RUSTFS_DATA_DIR      optional RustFS data dir; defaults to a no-space temp dir when workdir contains spaces
   NOKV_PYTHON_SMOKE_RUSTFS_ADDRESS       RustFS listen address (default: 127.0.0.1:9060)
   NOKV_PYTHON_SMOKE_SERVER_ADDRESS       NoKV metadata server address (default: 127.0.0.1:7782)
   NOKV_PYTHON_SMOKE_SHARD_COUNT          packed shard count (default: 8)
@@ -71,8 +77,8 @@ Environment:
   NOKV_PYTHON_SMOKE_CACHE_STATES         cold,warm,hot subset (default: cold,warm)
   NOKV_PYTHON_SMOKE_RESULT_CSV           optional benchmark CSV output path
   NOKV_PYTHON_SMOKE_METADATA_TIER        result metadata_tier label (default: nokv-l1-service)
-  NOKV_PYTHON_SMOKE_OBJECT_BACKEND       result object_backend label (default: rustfs)
-  NOKV_PYTHON_SMOKE_HOT_OBJECT_ROOT      optional local hot object root for Python reads
+  NOKV_PYTHON_SMOKE_OBJECT_BACKEND       result object_backend label (default: rustfs, or rustfs+local-hot+put=cold-then-hot with hot root)
+  NOKV_PYTHON_SMOKE_HOT_OBJECT_ROOT      optional local hot object root for Python reads; default tiered writes are cold-then-hot
 
 The smoke builds the Python extension with maturin, writes a packed shard
 dataset through the NoKV CLI, checks sample ranges through
@@ -120,6 +126,11 @@ cleanup() {
         rm -rf "$WORK_DIR"
     elif [[ -n "$WORK_DIR" ]]; then
         echo "NoKV Python smoke workdir: $WORK_DIR" >&2
+    fi
+    if [[ "$OWN_RUSTFS_DATA_DIR" -eq 1 && "$KEEP_WORKDIR" != "1" ]]; then
+        rm -rf "$RUSTFS_DATA_DIR"
+    elif [[ "$OWN_RUSTFS_DATA_DIR" -eq 1 && -n "$RUSTFS_DATA_DIR" ]]; then
+        echo "NoKV Python smoke RustFS data dir: $RUSTFS_DATA_DIR" >&2
     fi
     exit "$status"
 }
@@ -560,7 +571,14 @@ else
 fi
 
 META_DIR="$WORK_DIR/meta"
-RUSTFS_DATA_DIR="$WORK_DIR/rustfs-data"
+if [[ -n "$RUSTFS_DATA_DIR_OVERRIDE" ]]; then
+    RUSTFS_DATA_DIR="$RUSTFS_DATA_DIR_OVERRIDE"
+elif [[ "$WORK_DIR" == *[[:space:]]* ]]; then
+    RUSTFS_DATA_DIR="$(mktemp -d "${TMPDIR:-/tmp}/nokv-python-rustfs.XXXXXX")"
+    OWN_RUSTFS_DATA_DIR=1
+else
+    RUSTFS_DATA_DIR="$WORK_DIR/rustfs-data"
+fi
 RUSTFS_LOG="$WORK_DIR/rustfs.log"
 SERVER_LOG="$WORK_DIR/nokv-server.log"
 VENV_DIR="$WORK_DIR/venv"

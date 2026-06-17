@@ -284,6 +284,10 @@ pub(super) fn wire_namespace_card(card: &NamespaceCard) -> WireNamespaceCard {
                 content_type: body.content_type.clone(),
                 manifest_id: body.manifest_id.clone(),
                 generation: body.generation,
+                // Namespace cards are an informational projection and do not
+                // carry the data-plane fallthrough chain; reads resolve it
+                // server-side, never from a card.
+                base_generation: 0,
                 chunk_size: body.chunk_size,
                 block_size: body.block_size,
             }),

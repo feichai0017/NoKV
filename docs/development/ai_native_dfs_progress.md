@@ -1697,7 +1697,8 @@ NoKV optimizes for AI training throughput first:
 - Updated `scripts/run-python-fsspec-smoke.sh` with
   `NOKV_PYTHON_SMOKE_METADATA_TIER`, `NOKV_PYTHON_SMOKE_OBJECT_BACKEND`, and
   `NOKV_PYTHON_SMOKE_HOT_OBJECT_ROOT`, so layered runs can label Python rows as
-  `nokv-l1-service` over `rustfs+local-hot` and use a local hot object root.
+  `nokv-l1-service` over `rustfs+local-hot+put=cold-then-hot` and use a local
+  hot object root.
 - L1-only smoke:
   `NOKV_AI_LAYERED_RUN_L2=0
   NOKV_AI_LAYERED_PROFILE=smoke
@@ -3895,6 +3896,215 @@ incl. all checkpoint/snapshot/range/gc + failover-restore paths). `cargo build
 --workspace` clean; `cargo clippy -p nokv-meta` clean. Only the 3 pre-existing
 `nokv-client` data-plane prefetch failures remain (unrelated). Cargo.lock updated
 to holt 0.7.1.
+
+### 2026-06-17 Async publish journal recovery hardening
+
+Closed a recovery hole in the FUSE async-publish journal. The journal frame digest
+now covers the frame kind, payload length, and payload, so a corrupted frame kind
+cannot reinterpret a valid publish body as another record type. Tombstones are
+accepted only when the payload is exactly `(inode, generation)`; trailing bytes now
+make the frame a corrupt tail and keep earlier publish records live instead of
+retiring them.
+
+This protects the write-back ACK boundary: once `flush`/`release` has acknowledged
+that cache blocks and the pending publish record are durable, replay cannot lose
+that record because of a malformed tombstone tail.
+
+Validation:
+
+- `cargo fmt --all -- --check`
+- `cargo test -p nokv-fuse publish_journal -- --nocapture`
+- `cargo check -p nokv-fuse`
+
+Next gap: decide the production-vs-benchmark default for tiered object writes.
+`HotThenBackgroundCold` is good for local-NVMe latency, but the production
+metadata-visible invariant should either wait for cold/object-store durability or
+document an explicit RPO window for local-hot acknowledged data.
+
+### 2026-06-17 Tiered object write default aligned with DFS durability
+
+Changed `TieredObjectStoreOptions::default()` from `HotThenBackgroundCold` to
+`ColdThenHot`. A default tiered backend now writes the cold/object-store tier
+before returning from `put`, then fills the local hot tier as cache. This makes
+the default object-store ACK boundary match the production DFS invariant that
+metadata should not make bytes visible before the durable object tier has them.
+
+The AI benchmark path still opts into `HotThenBackgroundCold` explicitly where
+it is measuring local-NVMe hot-write latency, so benchmark rows stay honest about
+the durability mode they exercise instead of inheriting a cache-first default.
+
+Validation:
+
+- `cargo test -p nokv-object tiered_object_store -- --nocapture`
+- `cargo test -p nokv-bench hot_root -- --nocapture`
+- `cargo check -p nokv-object`
+- `cargo fmt --all -- --check`
+
+Next gap: rerun the layered data-plane benchmark with the durability mode called
+out in the row labels, so `ColdThenHot` production writes and
+`HotThenBackgroundCold` cache-first writes are not compared as the same system.
+
+### 2026-06-17 Layered data-plane durability labels
+
+Benchmark rows now include the tiered write policy in the `object_backend` label
+whenever a local hot tier is active. Examples:
+
+- `rustfs+local-hot+put=cold-only` for read workloads that seed durable cold
+  objects before measuring hot reads.
+- `rustfs+local-hot+put=cold-then-hot` for production-style tiered writes that
+  acknowledge after the cold object store before filling local hot.
+- `rustfs+local-hot+put=hot-background` for cache-first write workloads that
+  acknowledge after local-hot staging and enqueue the cold put in the background.
+
+This keeps the existing layered merge/baseline scripts working because the
+durability mode stays inside an existing grouping key instead of adding a new
+column that older consumers might ignore.
+
+Updated all layered entrypoints that own this label: Rust L1 `nokv-bench`,
+Python/fsspec L1 smoke, and mounted L2 NoKV-vs-JuiceFS scripts.
+
+Validation:
+
+- `cargo test -p nokv-bench hot_root -- --nocapture`
+- `cargo test -p nokv-bench csv_row_reports_hot_path_attribution -- --nocapture`
+- `cargo check -p nokv-bench`
+- `cargo fmt --all -- --check`
+- `bash -n scripts/run-ai-dataplane-layered-matrix.sh scripts/run-python-fsspec-smoke.sh scripts/lib/fs-bench-common.sh`
+- `NOKV_AI_LAYERED_RUN_PYTHON_L1=0 NOKV_AI_LAYERED_RUN_L2=0 NOKV_AI_LAYERED_PROFILE=smoke NOKV_AI_LAYERED_CASES=sparse-exact scripts/run-ai-dataplane-layered-matrix.sh`
+
+Smoke result path:
+`bench/results/ai-dataplane-layered-Mac-20260617T030110Z/layered.aggregate.csv`.
+The Rust SDK L1 smoke emitted `rustfs+local-hot+put=cold-only` rows for
+`ai-shard-range-read`: cold 1,312 samples/s and warm 134,690 samples/s on this
+single local RustFS run. This validates the row labelling and hot-read path; it
+is not a saturated multi-node performance claim.
+
+Next gap: run the full layered matrix with Python L1 and mounted L2/JuiceFS
+enabled, then compare only rows with matching boundary, cache state, and
+durability label.
+
+### 2026-06-17 Full-layer AI data-plane smoke
+
+Ran the layered smoke with Rust SDK L1, Python/fsspec L1, and mounted
+NoKV-vs-JuiceFS L2 enabled for both default sparse-read shapes. The L2 runs used
+`fsync=0`, `concurrency=1`, `profile=smoke`, RustFS on localhost, Redis-backed
+JuiceFS metadata, and NoKV's local Holt metadata server. The rows carry the new
+durability labels:
+
+- Rust SDK L1 read-seed rows: `rustfs+local-hot+put=cold-only`
+- Python/fsspec L1 and mounted NoKV L2 rows:
+  `rustfs+local-hot+put=cold-then-hot`
+- JuiceFS L2 rows: `rustfs`
+
+The Python/fsspec smoke initially failed because the benchmark workdir lives
+under a path with spaces, and RustFS parsed that path as multiple endpoints.
+`scripts/run-python-fsspec-smoke.sh` now uses a no-space temp RustFS data
+directory when the workdir contains whitespace, while keeping logs and CSVs in
+the requested result directory.
+
+`sparse-exact` result path:
+`bench/results/ai-dataplane-layered-Mac-20260617T032714Z/layered.aggregate.csv`.
+
+- Rust SDK L1: cold 1,706 samples/s, warm 148,945 samples/s.
+- Python/fsspec L1: cold 12,961 samples/s, warm 15,979 samples/s.
+- Mounted L2 cold: NoKV 46,230 ops/s vs JuiceFS 21,838 ops/s, NoKV 2.12x.
+- Mounted L2 warm: NoKV 179,576 ops/s vs JuiceFS 64,272 ops/s, NoKV 2.79x.
+
+`sparse-coalesced` result path:
+`bench/results/ai-dataplane-layered-Mac-20260617T032825Z/layered.aggregate.csv`.
+
+- Rust SDK L1: cold 1,961 samples/s, warm 443,610 samples/s.
+- Python/fsspec L1: cold 71,055 samples/s, warm 506,387 samples/s.
+- Mounted L2 cold: NoKV 106,079 ops/s vs JuiceFS 19,425 ops/s, NoKV 5.46x.
+- Mounted L2 warm: NoKV 186,244 ops/s vs JuiceFS 48,598 ops/s, NoKV 3.83x.
+
+Interpretation limits: these are single-repeat smoke rows on one local machine,
+not saturated multi-node throughput numbers. The comparison is valid only inside
+matching L2 rows with the same cache state, same generated shape, same object
+endpoint, and explicit durability label.
+
+Validation:
+
+- `bash -n scripts/run-python-fsspec-smoke.sh scripts/run-ai-dataplane-layered-matrix.sh scripts/lib/fs-bench-common.sh`
+- `NOKV_AI_LAYERED_PROFILE=smoke NOKV_AI_LAYERED_CASES=sparse-exact NOKV_AI_LAYERED_L2_CONCURRENCY=1 NOKV_AI_LAYERED_L2_CACHE_STATES='cold warm' NOKV_AI_LAYERED_L2_FSYNC=0 NOKV_AI_LAYERED_PYTHON_CACHE_STATES='cold,warm' scripts/run-ai-dataplane-layered-matrix.sh`
+- `NOKV_AI_LAYERED_PROFILE=smoke NOKV_AI_LAYERED_CASES=sparse-coalesced NOKV_AI_LAYERED_L2_CONCURRENCY=1 NOKV_AI_LAYERED_L2_CACHE_STATES='cold warm' NOKV_AI_LAYERED_L2_FSYNC=0 NOKV_AI_LAYERED_PYTHON_CACHE_STATES='cold,warm' scripts/run-ai-dataplane-layered-matrix.sh`
+
+Next gap: run the same two cases with more repeats and L2 concurrency `1 4`,
+then inspect p95/variance and decompose rows before making a stronger
+NoKV-vs-JuiceFS claim.
+
+### 2026-06-17 Repeat-3 layered L2 diagnosis and FUSE concurrent-read cleanup
+
+Repeated the layered smoke for both sparse-read shapes with `L2_REPEATS=3`,
+`L2_CONCURRENCY="1 4"`, `L2_CACHE_STATES="cold warm"`, and `fsync=0`.
+Artifacts:
+`bench/results/ai-dataplane-layered-Mac-20260617T034848Z/layered.aggregate.csv`.
+
+Mounted L2 median results:
+
+- `sparse-exact`, p=1 cold: NoKV 42,554 ops/s vs JuiceFS 25,164 ops/s
+  (`1.69x` NoKV).
+- `sparse-exact`, p=1 warm: NoKV 137,474 ops/s vs JuiceFS 65,795 ops/s
+  (`2.09x` NoKV).
+- `sparse-exact`, p=4 cold: NoKV 28,012 ops/s vs JuiceFS 29,042 ops/s
+  (rough parity, JuiceFS `1.04x`).
+- `sparse-exact`, p=4 warm: NoKV 78,199 ops/s vs JuiceFS 193,560 ops/s
+  (`2.48x` JuiceFS).
+- `sparse-coalesced`, p=1 cold: NoKV 96,789 ops/s vs JuiceFS 40,865 ops/s
+  (`2.37x` NoKV).
+- `sparse-coalesced`, p=1 warm: NoKV 155,418 ops/s vs JuiceFS 63,606 ops/s
+  (`2.44x` NoKV).
+- `sparse-coalesced`, p=4 cold: NoKV 36,020 ops/s vs JuiceFS 36,112 ops/s
+  (tie).
+- `sparse-coalesced`, p=4 warm: NoKV 187,982 ops/s vs JuiceFS 164,467 ops/s
+  (`1.14x` NoKV throughput, but NoKV p99 is worse).
+
+L1 rows in the same artifact remain separate from the mounted L2 comparison.
+Python/fsspec p=4 warm reached 46,500 ops/s for `sparse-exact` and 551,328
+ops/s for `sparse-coalesced`; Rust SDK p=4 warm reached 141,463 ops/s and
+671,181 ops/s respectively.
+
+Decompose showed the exact sparse path is not primarily object-GET bound:
+`sparse-exact` cold p=1 served 128 KiB of semantic data through 256 FUSE
+callbacks and 4 MiB of FUSE read request bytes. Object reads were only 24 GETs
+and 524 KiB because cache/prefetch handled most bytes. The remaining p=4 gap is
+therefore FUSE request scheduling, read-handle locking, cache-hit copy cost, and
+macOS FUSE small-request behavior, not more metadata or object-cache design.
+
+Implemented the cleanup step that is valid on all platforms:
+
+- FUSE read handles now bypass the per-handle `FileReadPipeline` mutex for
+  reads that do not need stateful sequential/sparse-forward pipeline behavior.
+  Those reads use the existing backend direct read path, shared read-plan cache,
+  and object/block cache, while the pipeline still observes the read boundary so
+  a later contiguous read can re-enter stateful prefetch correctly.
+
+Tried to make `4` FUSE workers the cross-platform default, but `fuser` rejects
+`n_threads != 1` outside Linux. The default therefore remains Linux `4` and
+non-Linux/macOS `1`; macOS mounted p=4 rows are still constrained by the FUSE
+worker model and should not be treated as proof of Linux multi-worker behavior.
+
+Validation so far:
+
+- `cargo test -p nokv-object file_read_pipeline -- --nocapture`
+- `cargo test -p nokv-fuse read_handle -- --nocapture`
+- `cargo test -p nokv-fuse default_fuse_threads_match_parallel_read_baseline -- --nocapture`
+- p=4 mounted rerun attempt:
+  `NOKV_AI_LAYERED_RUN_RUST_L1=0 NOKV_AI_LAYERED_RUN_PYTHON_L1=0 NOKV_AI_LAYERED_RUN_L2=1 ... scripts/run-ai-dataplane-layered-matrix.sh`
+  exposed the non-Linux `fuser` worker limit and was stopped before producing
+  comparable rows.
+- After restoring the non-Linux default to `1`, a minimal mounted L2 p=4 cold
+  smoke passed:
+  `NOKV_BENCH_PROFILE=smoke NOKV_BENCH_CACHE_STATES=cold scripts/run-fs-benchmark.sh --quick --repeats 1 --concurrency 4 --product-workloads ai_shard_range_read --primitive-workloads none --skip-real-tools ...`.
+  It emitted NoKV `33,893 ops/s`, p99 `352.72us`, and JuiceFS `33,986 ops/s`,
+  p99 `420.09us`; this is a mount-health smoke and not a stable performance
+  claim.
+
+Next gap: run a focused p=4 mounted L2 rerun after the FUSE concurrent-read
+cleanup on Linux or force macOS `--fuse-threads 1` for apples-to-apples local
+diagnostics, then compare only the same `sparse-exact`/`sparse-coalesced` rows
+and check whether FUSE read request counts stay constant while throughput
+improves.
 
 ### 2026-06-13 Combined Gate
 

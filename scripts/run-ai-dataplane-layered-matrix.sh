@@ -227,7 +227,7 @@ for case_name in "${cases[@]}"; do
             NOKV_PYTHON_SMOKE_RESULT_CSV="$python_csv"
             NOKV_PYTHON_SMOKE_WORKDIR="$python_work"
             NOKV_PYTHON_SMOKE_HOT_OBJECT_ROOT="$python_hot"
-            NOKV_PYTHON_SMOKE_OBJECT_BACKEND="rustfs+local-hot"
+            NOKV_PYTHON_SMOKE_OBJECT_BACKEND="rustfs+local-hot+put=cold-then-hot"
             NOKV_PYTHON_SMOKE_METADATA_TIER="nokv-l1-service"
             NOKV_PYTHON_SMOKE_RUSTFS_ADDRESS="127.0.0.1:${python_rustfs_port}"
             NOKV_PYTHON_SMOKE_RUSTFS_CONSOLE_ADDRESS="127.0.0.1:${python_console_port}"

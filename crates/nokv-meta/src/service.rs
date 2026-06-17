@@ -918,22 +918,31 @@ fn validate_prepared_artifact(
         }
         return Ok(());
     }
-    let expected_chunks = ((body.size - 1) / body.chunk_size) + 1;
-    if chunks.len() as u64 != expected_chunks {
+    let last_chunk = (body.size - 1) / body.chunk_size;
+    // A self-contained generation (base_generation == 0) must cover every chunk
+    // of the file; a delta/sparse generation stores only the chunks it rewrote
+    // (untouched chunks fall through to the base on read).
+    if body.base_generation == 0 && chunks.len() as u64 != last_chunk + 1 {
         return Err(MetadError::InvalidPreparedArtifact(format!(
-            "chunk manifest count {} does not match expected {expected_chunks}",
-            chunks.len()
+            "chunk manifest count {} does not match expected {}",
+            chunks.len(),
+            last_chunk + 1
         )));
     }
-    for (position, chunk) in chunks.iter().enumerate() {
-        let expected_index = position as u64;
-        if chunk.chunk_index != expected_index {
+    let mut seen_chunks = HashSet::new();
+    for chunk in chunks.iter() {
+        let chunk_index = chunk.chunk_index;
+        if chunk_index > last_chunk {
             return Err(MetadError::InvalidPreparedArtifact(format!(
-                "chunk manifest index {} is not the expected contiguous index {expected_index}",
-                chunk.chunk_index
+                "chunk manifest index {chunk_index} exceeds last chunk {last_chunk}"
             )));
         }
-        let expected_offset = expected_index
+        if !seen_chunks.insert(chunk_index) {
+            return Err(MetadError::InvalidPreparedArtifact(format!(
+                "duplicate chunk manifest index {chunk_index}"
+            )));
+        }
+        let expected_offset = chunk_index
             .checked_mul(body.chunk_size)
             .ok_or(ObjectError::InvalidRange)?;
         if chunk.logical_offset != expected_offset {
@@ -1094,6 +1103,45 @@ fn merge_session_chunks(
         append_chunk_manifest_slices(&mut chunks, dirty_chunk, size)?;
     }
     Ok(chunks.into_values().collect())
+}
+
+/// Coalesce each chunk's accumulated slices into the minimal newest-wins set.
+/// Used at compaction so slice count does not grow without bound across
+/// compaction cycles (the chain-collapse re-materialize alone keeps every
+/// superseded slice). Metadata-only: the planner emits sub-ranges of existing
+/// block objects, so the coalesced manifest borrows them without copying bytes.
+fn compact_chunk_slices(chunks: Vec<ChunkManifest>) -> Result<Vec<ChunkManifest>, MetadError> {
+    chunks.into_iter().map(coalesce_chunk_slices).collect()
+}
+
+fn coalesce_chunk_slices(chunk: ChunkManifest) -> Result<ChunkManifest, MetadError> {
+    if chunk.slices.len() <= 1 {
+        return Ok(chunk);
+    }
+    let plan = plan_chunk_manifest_reads(
+        std::slice::from_ref(&chunk),
+        chunk.logical_offset,
+        usize::try_from(chunk.len).map_err(|_| ObjectError::InvalidRange)?,
+    )?;
+    let blocks = plan
+        .blocks
+        .into_iter()
+        .map(|read| BlockDescriptor {
+            object_key: read.object_key,
+            logical_offset: chunk.logical_offset + read.output_offset as u64,
+            object_offset: read.object_offset,
+            len: read.len as u64,
+            digest_uri: read.digest_uri,
+        })
+        .collect::<Vec<_>>();
+    let mut coalesced = ChunkManifest {
+        chunk_index: chunk.chunk_index,
+        logical_offset: chunk.logical_offset,
+        len: chunk.len,
+        slices: Vec::new(),
+    };
+    append_contiguous_slices(&mut coalesced, blocks)?;
+    Ok(coalesced)
 }
 
 fn append_chunk_manifest_slices(

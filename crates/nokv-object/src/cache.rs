@@ -324,6 +324,11 @@ impl WritebackCache {
             inner.bytes = inner.bytes.saturating_add(len);
             (id, file_name, tmp_path, path)
         };
+        // The block's data is fsync'd here, but the directory entry (the rename)
+        // is made durable in one batched `sync_root` at the publish-journal ack —
+        // not per block — so a multi-block file pays a single dir fsync, and the
+        // synchronous (transient-cache) path pays none. `sync_root` also covers
+        // the journal file's own entry, since both live in the cache root.
         if let Err(err) = write_cache_file(&tmp_path, &key, bytes)
             .and_then(|()| fs::rename(&tmp_path, &path).map_err(ObjectError::from_backend))
         {
@@ -402,11 +407,100 @@ impl WritebackCache {
         stats.active_bytes = inner.bytes;
         Ok(stats)
     }
+
+    /// fsync the cache root directory, making every staged block's rename (and
+    /// the journal file's own entry, which shares this directory) durable. Called
+    /// once at the async-publish ack, batching what would otherwise be a per-block
+    /// directory fsync.
+    pub fn sync_root(&self) -> Result<(), ObjectError> {
+        let root = {
+            let inner = self.inner.lock().map_err(ObjectError::from_poisoned_lock)?;
+            inner.options.root.clone()
+        };
+        sync_dir(&root)
+    }
+
+    /// Re-index an on-disk cache file after a restart: the bytes already exist
+    /// under `file_name` (recorded in the publish journal), so register a fresh
+    /// in-memory ticket for it that `read`/`remove` accept. Does not write the
+    /// file. Used by write-back crash recovery.
+    pub fn reinsert(
+        &self,
+        key: String,
+        file_name: String,
+        len: u64,
+    ) -> Result<WritebackTicket, ObjectError> {
+        let mut inner = self.inner.lock().map_err(ObjectError::from_poisoned_lock)?;
+        if !inner.file_path(&file_name).exists() {
+            return Err(ObjectError::Backend(
+                "writeback cache file is missing on reinsert".to_owned(),
+            ));
+        }
+        let id = inner.next_id;
+        inner.next_id = inner.next_id.saturating_add(1);
+        inner.entries.insert(
+            id,
+            WritebackEntry {
+                key: key.clone(),
+                file_name: file_name.clone(),
+                bytes: len,
+            },
+        );
+        inner.bytes = inner.bytes.saturating_add(len);
+        Ok(WritebackTicket {
+            id,
+            key,
+            file_name,
+            len,
+        })
+    }
+
+    /// Delete `*.writeback` files in the cache root not referenced by any live
+    /// publish-journal entry (`live_file_names`) — blocks staged by a crash
+    /// before the journal recorded them, hence unrecoverable garbage. Returns
+    /// the number deleted.
+    pub fn purge_orphans(
+        &self,
+        live_file_names: &std::collections::HashSet<String>,
+    ) -> Result<usize, ObjectError> {
+        let root = {
+            let inner = self.inner.lock().map_err(ObjectError::from_poisoned_lock)?;
+            inner.options.root.clone()
+        };
+        let entries = match fs::read_dir(&root) {
+            Ok(entries) => entries,
+            Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(0),
+            Err(err) => return Err(ObjectError::from_backend(err)),
+        };
+        let mut purged = 0_usize;
+        for entry in entries {
+            let entry = entry.map_err(ObjectError::from_backend)?;
+            let name = entry.file_name();
+            let Some(name) = name.to_str() else {
+                continue;
+            };
+            if !name.ends_with(".writeback") || live_file_names.contains(name) {
+                continue;
+            }
+            match fs::remove_file(entry.path()) {
+                Ok(()) => purged = purged.saturating_add(1),
+                Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+                Err(err) => return Err(ObjectError::from_backend(err)),
+            }
+        }
+        Ok(purged)
+    }
 }
 
 impl WritebackTicket {
     pub fn key(&self) -> &str {
         &self.key
+    }
+
+    /// The on-disk file name backing this ticket. Recorded in the publish
+    /// journal so write-back recovery can `reinsert` the block after a restart.
+    pub fn file_name(&self) -> &str {
+        &self.file_name
     }
 
     pub fn len(&self) -> u64 {
@@ -1129,7 +1223,17 @@ fn write_cache_file(path: &Path, key: &str, bytes: &[u8]) -> Result<(), ObjectEr
         .map_err(ObjectError::from_backend)?;
     file.write_all(key.as_bytes())
         .map_err(ObjectError::from_backend)?;
-    file.write_all(bytes).map_err(ObjectError::from_backend)
+    file.write_all(bytes).map_err(ObjectError::from_backend)?;
+    // Durability anchor for write-back: the staged block is the only durable
+    // copy until the background upload completes, so it must survive a crash.
+    file.sync_all().map_err(ObjectError::from_backend)
+}
+
+fn sync_dir(dir: &Path) -> Result<(), ObjectError> {
+    // fsync the directory so the staged block's final (renamed) name is durable
+    // before the publish journal records it.
+    let handle = fs::File::open(dir).map_err(ObjectError::from_backend)?;
+    handle.sync_all().map_err(ObjectError::from_backend)
 }
 
 fn decode_cache_file(expected_key: &str, encoded: &[u8]) -> Option<Vec<u8>> {
