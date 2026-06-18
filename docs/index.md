@@ -7,7 +7,7 @@ hero:
   tagline: Holt-backed metadata, S3-compatible immutable object bodies, FUSE and SDK paths — a self-contained filesystem with no separate database to run.
   image:
     src: /img/logo.png
-    alt: NoKV distributed filesystem
+    alt: NoKV
   actions:
     - theme: brand
       text: Architecture

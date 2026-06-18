@@ -4,7 +4,7 @@ SPDX-License-Identifier: Apache-2.0
 -->
 
 <div align="center">
-  <img src="./docs/public/img/logo.png" width="360" alt="NoKV distributed filesystem" />
+  <img src="./docs/public/img/logo.png" width="360" alt="NoKV" />
 
   <p>
     <strong>Metadata control plane for object-backed agent artifacts.</strong>
