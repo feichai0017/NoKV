@@ -273,6 +273,62 @@ where
         Ok(mutations)
     }
 
+    /// Reclaim an entire superseded generation chain at a chain collapse. When a
+    /// self-contained generation supersedes a delta chain, every generation in
+    /// the old chain becomes unreachable, so each one must enqueue the blocks it
+    /// OWNS that the new generation no longer references — `retained_object_keys`
+    /// (the new generation's complete key set) and `owns_block_object_key`
+    /// together keep borrowed and still-referenced blocks alive. The
+    /// version-stamped enqueue keeps any block a live snapshot can still reach
+    /// protected by the GC retention floor.
+    pub(super) fn collapse_chain_gc_mutations(
+        &self,
+        inode: InodeId,
+        old_top_generation: u64,
+        old_chunks: &[ChunkManifest],
+        enqueue_version: Version,
+        retained_object_keys: &HashSet<String>,
+    ) -> Result<Vec<Mutation>, MetadError> {
+        let read_version = self.read_version()?;
+        let chain = match self.body_descriptor_at_version_for_purpose(
+            inode,
+            old_top_generation,
+            read_version,
+            ReadPurpose::WritePlanLocal,
+        ) {
+            Ok(Some(body)) => self.resolve_generation_chain(
+                inode,
+                &body,
+                read_version,
+                ReadPurpose::WritePlanLocal,
+            )?,
+            // The old summary is already gone; best-effort reclaim the top only.
+            Ok(None) | Err(MetadError::MissingBodyDescriptor) => vec![old_top_generation],
+            Err(err) => return Err(err),
+        };
+        // Fast path: a self-contained old generation whose manifests the caller
+        // already resolved is reclaimed without a metadata scan.
+        if chain.len() == 1 && !old_chunks.is_empty() {
+            return Ok(self.chunk_manifest_delete_and_gc_mutations_from_manifests(
+                inode,
+                old_top_generation,
+                old_chunks,
+                enqueue_version,
+                retained_object_keys,
+            ));
+        }
+        let mut mutations = Vec::new();
+        for generation in chain {
+            mutations.extend(self.chunk_manifest_delete_and_gc_mutations(
+                inode,
+                generation,
+                enqueue_version,
+                retained_object_keys,
+            )?);
+        }
+        Ok(mutations)
+    }
+
     pub(super) fn chunk_manifest_delete_and_gc_mutations_from_manifests(
         &self,
         inode: InodeId,

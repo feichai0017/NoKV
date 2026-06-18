@@ -1068,6 +1068,7 @@ pub struct WireBodyDescriptor {
     pub content_type: String,
     pub manifest_id: String,
     pub generation: u64,
+    pub base_generation: u64,
     pub chunk_size: u64,
     pub block_size: u64,
 }
@@ -1291,6 +1292,7 @@ impl WireBodyDescriptor {
             content_type: body.content_type.clone(),
             manifest_id: body.manifest_id.clone(),
             generation: body.generation,
+            base_generation: body.base_generation,
             chunk_size: body.chunk_size,
             block_size: body.block_size,
         }
@@ -1304,6 +1306,7 @@ impl WireBodyDescriptor {
             content_type: self.content_type,
             manifest_id: self.manifest_id,
             generation: self.generation,
+            base_generation: self.base_generation,
             chunk_size: self.chunk_size,
             block_size: self.block_size,
         }
@@ -1727,6 +1730,7 @@ mod tests {
                         content_type: "application/octet-stream".to_owned(),
                         manifest_id: "artifact.bin".to_owned(),
                         generation: 7,
+                        base_generation: 0,
                         chunk_size: 64 * 1024 * 1024,
                         block_size: 4 * 1024 * 1024,
                     }),

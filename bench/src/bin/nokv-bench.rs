@@ -2552,12 +2552,17 @@ struct BoundaryLabels {
 }
 
 fn boundary_labels(config: &Config, workload: &str) -> BoundaryLabels {
+    let hot_object_root = hot_object_root_for(config, workload);
     BoundaryLabels {
         boundary: "L1",
         system: "nokv",
         metadata_tier: "nokv-l1-service".to_owned(),
-        object_backend: if hot_object_root_for(config, workload).is_some() {
-            format!("{}+local-hot", object_backend_name(config.object_backend))
+        object_backend: if hot_object_root.is_some() {
+            format!(
+                "{}+local-hot+put={}",
+                object_backend_name(config.object_backend),
+                tiered_put_policy_label(tiered_put_policy_for_workload(workload))
+            )
         } else {
             object_backend_name(config.object_backend).to_owned()
         },
@@ -3703,6 +3708,14 @@ fn tiered_put_policy_for_workload(workload: &str) -> TieredPutPolicy {
     }
 }
 
+fn tiered_put_policy_label(policy: TieredPutPolicy) -> &'static str {
+    match policy {
+        TieredPutPolicy::ColdOnly => "cold-only",
+        TieredPutPolicy::ColdThenHot => "cold-then-hot",
+        TieredPutPolicy::HotThenBackgroundCold => "hot-background",
+    }
+}
+
 fn hot_object_root_for(config: &Config, workload: &str) -> Option<PathBuf> {
     config
         .hot_object_root
@@ -4667,7 +4680,7 @@ mod tests {
             })
         );
         let labels = boundary_labels(&config, "native-layout-read");
-        assert_eq!(labels.object_backend, "rustfs+local-hot");
+        assert_eq!(labels.object_backend, "rustfs+local-hot+put=cold-only");
     }
 
     #[test]
@@ -4695,6 +4708,8 @@ mod tests {
                 ..TieredObjectStoreOptions::default()
             })
         );
+        let labels = boundary_labels(&config, "checkpoint-publish");
+        assert_eq!(labels.object_backend, "rustfs+local-hot+put=hot-background");
     }
 
     #[test]
@@ -4713,7 +4728,7 @@ mod tests {
             Some(PathBuf::from("/tmp/nokv-bench/ai-dataset-batch-read/hot-objects").as_path())
         );
         let labels = boundary_labels(&config, "ai-dataset-batch-read");
-        assert_eq!(labels.object_backend, "rustfs+local-hot");
+        assert_eq!(labels.object_backend, "rustfs+local-hot+put=cold-only");
     }
 
     #[test]
@@ -4733,7 +4748,7 @@ mod tests {
             Some(PathBuf::from("/tmp/nokv-bench/ai-shard-range-read/hot-objects").as_path())
         );
         let labels = boundary_labels(&config, "ai-shard-range-read");
-        assert_eq!(labels.object_backend, "rustfs+local-hot");
+        assert_eq!(labels.object_backend, "rustfs+local-hot+put=cold-only");
     }
 
     #[test]

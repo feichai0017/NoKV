@@ -135,6 +135,10 @@ pub struct BodyDescriptor {
     pub content_type: String,
     pub manifest_id: String,
     pub generation: u64,
+    /// Generation to fall through to for chunks this (sparse) generation did
+    /// not rewrite. `0` means self-contained (a fresh write or a compacted
+    /// generation that re-materialized every chunk).
+    pub base_generation: u64,
     pub chunk_size: u64,
     pub block_size: u64,
 }

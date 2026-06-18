@@ -495,6 +495,29 @@ fn tiered_object_store_background_fill_coalesces_duplicate_cold_reads() {
 }
 
 #[test]
+fn tiered_object_store_default_put_is_cold_durable_before_ack() {
+    let hot = MemoryObjectStore::new();
+    let cold = MemoryObjectStore::new();
+    let store = TieredObjectStore::new(
+        hot.clone(),
+        cold.clone(),
+        TieredObjectStoreOptions::default(),
+    );
+    let key = ObjectKey::new("blocks/default-cold-durable").unwrap();
+
+    let info = store.put(&key, b"abcdef".to_vec()).unwrap();
+
+    assert_eq!(info.size, 6);
+    assert_eq!(cold.get(&key, None).unwrap(), b"abcdef");
+    assert_eq!(hot.get(&key, None).unwrap(), b"abcdef");
+    let stats = store.stats().unwrap();
+    assert_eq!(stats.cold_puts, 1);
+    assert_eq!(stats.hot_puts, 1);
+    assert_eq!(stats.pending_cold_put_ns, 0);
+    assert_eq!(stats.cold_put_enqueue_ns, 0);
+}
+
+#[test]
 fn tiered_object_store_hot_publish_returns_before_cold_put_completes() {
     let hot = MemoryObjectStore::new();
     let cold = BlockFirstPutStore::new();
@@ -2004,6 +2027,46 @@ fn writeback_cache_stages_reads_and_removes_ticket() {
 }
 
 #[test]
+fn writeback_cache_reinserts_after_restart_and_purges_orphans() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("writeback");
+    let key = "blocks/1/2/3/0/0".to_owned();
+    let file_name = {
+        let cache = WritebackCache::new(WritebackCacheOptions {
+            root: root.clone(),
+            max_bytes: 1024,
+            max_items: 8,
+        })
+        .unwrap();
+        let ticket = cache.stage(key.clone(), b"durable").unwrap();
+        // The cache instance drops here, simulating a process restart; the
+        // fsync'd file persists on disk under this name.
+        ticket.file_name().to_owned()
+    };
+
+    // Fresh cache on the same root (post-restart): re-index the on-disk file and
+    // read it back without the original in-memory ticket.
+    let cache = WritebackCache::new(WritebackCacheOptions {
+        root: root.clone(),
+        max_bytes: 1024,
+        max_items: 8,
+    })
+    .unwrap();
+    let ticket = cache.reinsert(key.clone(), file_name.clone(), 7).unwrap();
+    assert_eq!(cache.read(&ticket).unwrap(), b"durable");
+
+    // An orphan cache file (staged by a crash before any journal entry) is
+    // purged, while the live (journal-referenced) file survives.
+    let orphan = root.join("orphan-00000000deadbeef.writeback");
+    std::fs::write(&orphan, b"orphan").unwrap();
+    let mut live = std::collections::HashSet::new();
+    live.insert(file_name);
+    assert_eq!(cache.purge_orphans(&live).unwrap(), 1);
+    assert!(!orphan.exists());
+    assert_eq!(cache.read(&ticket).unwrap(), b"durable");
+}
+
+#[test]
 fn writeback_cache_rejects_capacity_overflow() {
     let dir = tempfile::tempdir().unwrap();
     let cache = WritebackCache::new(WritebackCacheOptions {
@@ -2038,6 +2101,7 @@ fn object_writeback_uploader_uploads_cached_ranges_and_clears_tickets() {
             queue_capacity: 4,
             workers: 1,
             upload_workers_per_request: 1,
+            retain_cache_on_success: false,
         },
     );
     let pending = uploader
@@ -2091,6 +2155,7 @@ fn object_writeback_uploader_uploads_inline_ranges_without_cache() {
             queue_capacity: 4,
             workers: 1,
             upload_workers_per_request: 1,
+            retain_cache_on_success: false,
         },
     );
     let pending = uploader
@@ -2191,6 +2256,7 @@ fn object_writeback_uploader_moves_inline_range_into_object_put() {
             queue_capacity: 4,
             workers: 1,
             upload_workers_per_request: 1,
+            retain_cache_on_success: false,
         },
     );
     let bytes = b"checkpoint".to_vec();
@@ -2224,6 +2290,7 @@ fn object_writeback_uploader_coalesces_adjacent_inline_ranges() {
             queue_capacity: 4,
             workers: 1,
             upload_workers_per_request: 1,
+            retain_cache_on_success: false,
         },
     );
     let pending = uploader
@@ -2276,6 +2343,7 @@ fn object_writeback_uploader_keeps_block_framed_inline_ranges_unmerged() {
             queue_capacity: 4,
             workers: 1,
             upload_workers_per_request: 1,
+            retain_cache_on_success: false,
         },
     );
     let first = b"abcd".to_vec();
@@ -2316,6 +2384,7 @@ fn object_writeback_uploader_reports_direct_upload_failure_without_cache_cleanup
             queue_capacity: 4,
             workers: 1,
             upload_workers_per_request: 1,
+            retain_cache_on_success: false,
         },
     );
     let pending = uploader
@@ -2369,6 +2438,7 @@ fn object_writeback_uploader_keeps_cached_ranges_after_upload_failure() {
             queue_capacity: 4,
             workers: 1,
             upload_workers_per_request: 1,
+            retain_cache_on_success: false,
         },
     );
 
@@ -2430,6 +2500,7 @@ fn object_writeback_uploader_falls_back_inline_when_queue_is_full() {
             queue_capacity: 1,
             workers: 1,
             upload_workers_per_request: 1,
+            retain_cache_on_success: false,
         },
     );
 

@@ -86,7 +86,7 @@ struct ColdPutJob {
 impl Default for TieredObjectStoreOptions {
     fn default() -> Self {
         Self {
-            put_policy: TieredPutPolicy::HotThenBackgroundCold,
+            put_policy: TieredPutPolicy::ColdThenHot,
             populate_hot_on_get: true,
             hot_fill_mode: HotFillMode::Inline,
             pending_cold_put_root: None,
