@@ -6,8 +6,8 @@ hero:
   text: A Rust filesystem for AI training and agent workspaces.
   tagline: Holt-backed metadata, S3-compatible immutable object bodies, FUSE and SDK paths — a self-contained filesystem with no separate database to run.
   image:
-    src: /img/logo.svg
-    alt: NoKV
+    src: /img/logo.png
+    alt: NoKV distributed filesystem
   actions:
     - theme: brand
       text: Architecture
