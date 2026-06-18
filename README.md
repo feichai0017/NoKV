@@ -7,7 +7,7 @@ SPDX-License-Identifier: Apache-2.0
   <img src="./docs/public/img/logo.svg" width="200" alt="NoKV" />
 
   <p>
-    <strong>A Rust filesystem for AI training and agent workspaces.</strong>
+    <strong>Metadata control plane for object-backed agent artifacts.</strong>
   </p>
 
   <p>
@@ -26,6 +26,7 @@ SPDX-License-Identifier: Apache-2.0
 
   <p>
     <a href="https://nokv.io/architecture">Docs</a> ·
+    <a href="https://nokv.io/blog/agents-want-filesystems">Why Filesystems</a> ·
     <a href="#-quick-start">Quick Start</a> ·
     <a href="#-headline-evidence">Benchmarks</a> ·
     <a href="https://github.com/feichai0017/NoKV/discussions">Discussions</a>
@@ -61,8 +62,16 @@ SPDX-License-Identifier: Apache-2.0
 
 ## What Is NoKV?
 
-NoKV is a Rust filesystem for AI training and agent workspaces. It keeps
-namespace metadata in its own path-native engine
+NoKV is a metadata control plane for object-backed agent artifacts: run
+outputs, log files, checkpoints, reports, and citable evidence in one
+filesystem-shaped namespace. For the longer interface argument, see
+[Agents Want Filesystems](https://nokv.io/blog/agents-want-filesystems).
+
+It is not a trace database. Keep JSONL, SQLite, or Postgres as the source of
+truth for runtime events; use NoKV as the agent-facing namespace over the
+artifacts and evidence those systems produce.
+
+NoKV keeps namespace metadata in its own path-native engine
 ([Holt](https://crates.io/crates/holt)) and stores file bodies as immutable
 blocks in S3-compatible object storage such as RustFS, MinIO, Ceph RGW, or AWS
 S3.
