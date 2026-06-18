@@ -29,6 +29,7 @@ BLOCK_CACHE="${NOKV_E2E_BLOCK_CACHE:-on}"
 HOT_OBJECT_MAX_BYTES="${NOKV_E2E_HOT_OBJECT_MAX_BYTES:-}"
 HOT_FILL_MODE="${NOKV_E2E_HOT_FILL_MODE:-}"
 BENCH_KEEP="${NOKV_E2E_BENCH_KEEP:-0}"
+CARGO_TARGET_DIR_OVERRIDE="${NOKV_E2E_CARGO_TARGET_DIR:-${CARGO_TARGET_DIR:-}}"
 
 RUSTFS_DATA_DIR="${NOKV_E2E_RUSTFS_DATA_DIR:-}"
 RUSTFS_LOG="${NOKV_E2E_RUSTFS_LOG:-}"
@@ -48,6 +49,7 @@ Environment:
   NOKV_E2E_BLOCK_CACHE              on|off (default: on)
   NOKV_E2E_HOT_OBJECT_MAX_BYTES     pass --hot-object-max-bytes to nokv-bench
   NOKV_E2E_HOT_FILL_MODE            inline|background hot fill mode
+  NOKV_E2E_CARGO_TARGET_DIR         cargo target directory for isolated runs
   NOKV_E2E_RUSTFS_ADDRESS           RustFS listen address (default: 127.0.0.1:9000)
   NOKV_E2E_RUSTFS_CONSOLE_ADDRESS   RustFS console address (default: 127.0.0.1:9001)
   NOKV_E2E_RUSTFS_BUCKET            bucket name (default: nokv)
@@ -197,5 +199,10 @@ fi
 echo "Running NoKV E2E benchmark: workload=$WORKLOAD profile=$PROFILE object_concurrency=$OBJECT_CONCURRENCY"
 (
     cd "$ROOT_DIR"
-    cargo run --release -p nokv-bench --bin nokv-bench -- "${bench_args[@]}"
+    if [[ -n "$CARGO_TARGET_DIR_OVERRIDE" ]]; then
+        CARGO_TARGET_DIR="$CARGO_TARGET_DIR_OVERRIDE" \
+            cargo run --release -p nokv-bench --bin nokv-bench -- "${bench_args[@]}"
+    else
+        cargo run --release -p nokv-bench --bin nokv-bench -- "${bench_args[@]}"
+    fi
 )

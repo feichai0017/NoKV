@@ -25,11 +25,11 @@ pub use artifact::{
     normalize_artifact_path, ArtifactBackend, ArtifactInfo, ArtifactRepository,
     ArtifactRepositoryOptions,
 };
-pub use file_client::NoKvFsClient;
+pub use file_client::{NoKvFsClient, PathRangeReadRequest, PathReadRange, PreparedPathRangeBatch};
 pub use nokv_object::{DataFabricReadStats, ObjectReadPlan};
 pub use service::{
     ClientPreparedArtifact, CloneOutcome, MetadataClient, MetadataClientOptions, PathLayoutOpen,
-    SnapshotOutcome,
+    PathLayoutOpenRequest, SnapshotOutcome,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]

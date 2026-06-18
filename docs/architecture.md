@@ -15,18 +15,19 @@ SDK talk to `nokv-server`, which commits semantic metadata commands into an
 embedded Holt MVCC engine on a **single node**. Distributed metadata is **not
 implemented** — the planned direction (subtree sharding + owner-lease + epoch
 fencing, *not* consensus-replicated metadata) is described under
-[Distributed Direction](#distributed-direction). The broader product target —
-production metadata HA, CSI, Python/fsspec, and node-local cache — is recorded in
-[Product Design](./product-design.md).
+[Distributed Direction](#distributed-direction). Python/fsspec now has an
+SDK binding over the native batch range-read path plus a caller-owned buffer
+staging shape for dataloaders; production metadata HA, CSI, and node-local cache
+are recorded in [Product Design](./product-design.md).
 
 ## Layers
 
 ```text
 Application surface
   nokv-client    Rust SDK
+  nokv-python    Python/fsspec binding over the Rust SDK
   nokv           CLI
   nokv-fuse      low-level FUSE frontend
-  nokv-python    planned Python/fsspec bindings
   nokv-csi       planned Kubernetes CSI integration
 
 Metadata layer
@@ -229,9 +230,17 @@ direction is **subtree sharding + owner-lease + epoch fencing**:
 - **Epoch fencing.** Each shard carries a monotonic ownership epoch (the
   `allocator` record already persists one, recovered with `fetch_max`). On owner
   change the control group bumps the epoch and a deposed owner's commits are
-  rejected at the durability boundary. Wiring this epoch into an actual commit
-  predicate is a prerequisite tracked separately — it is *stored today but not yet
-  enforced*.
+  rejected at the metadata commit boundary. The service-local commit fence exists
+  today for single-command and independent-batch commits, and `nokv-server` can
+  acquire a `nokv-control` shard lease, install that epoch into the fence, and
+  renew it from a server-owned background worker. An optional etcd-backed
+  store/session backend is wired through server and CLI config, and the local
+  multi-process HA smoke covers owner death, epoch-2 failover, shared-log replay,
+  post-failover writes without replayed-inode reuse, and machine-readable timing
+  metrics for local RTO rows. A local stale-owner mode pauses and resumes owner
+  A to verify the resumed epoch-1 owner rejects writes after epoch-2 failover.
+  Multi-machine deployment and network-partition chaos gates remain distributed
+  hardening work.
 
 - **Failover reuses the DR path.** The metadata backup/restore mechanism (see
   Metadata Disaster Recovery, above) — export a Holt checkpoint image to object

@@ -1,5 +1,5 @@
 use crate::cache::BlockCache;
-use crate::chunk::{BlockReadOptions, BlockReadOutcome, ChunkStore};
+use crate::chunk::{BlockReadIntoOutcome, BlockReadOptions, BlockReadOutcome, ChunkStore};
 use crate::pipeline::{
     FileReadPipeline, FileReadRequest, ObjectPrefetchRequest, ObjectReadPlan, ReadAheadHint,
 };
@@ -14,6 +14,21 @@ pub struct LayoutReadOutcome {
     pub cache_warmup: Option<ObjectPrefetchRequest>,
     pub stats: DataFabricReadStats,
     pub placements: Vec<BlockPlacement>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LayoutReadIntoOutcome {
+    pub readahead: Option<ReadAheadHint>,
+    pub cache_warmup: Option<ObjectPrefetchRequest>,
+    pub stats: DataFabricReadStats,
+    pub placements: Vec<BlockPlacement>,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct LayoutReadRequest<'a> {
+    pub file_size: u64,
+    pub offset: u64,
+    pub plan: &'a ObjectReadPlan,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -98,10 +113,73 @@ where
             placements,
         })
     }
+
+    pub fn read_plan_into_with_options<C>(
+        &self,
+        pipeline: &mut FileReadPipeline,
+        cache: Option<&C>,
+        request: LayoutReadRequest<'_>,
+        output: &mut [u8],
+        read_options: BlockReadOptions,
+    ) -> Result<LayoutReadIntoOutcome, ObjectError>
+    where
+        C: BlockCache + ?Sized,
+    {
+        if output.len() != request.plan.output_len {
+            return Err(ObjectError::InvalidRange);
+        }
+        let placements = self.store.resolve_read_placements(&request.plan.blocks)?;
+        let read = pipeline.read_blocks_into_with_options(
+            self.store,
+            cache,
+            output,
+            FileReadRequest {
+                file_size: request.file_size,
+                offset: request.offset,
+                output_len: request.plan.output_len,
+                blocks: &request.plan.blocks,
+            },
+            read_options,
+        )?;
+        let stats = DataFabricReadStats::from_block_read_into(&placements, &read.blocks);
+        Ok(LayoutReadIntoOutcome {
+            readahead: read.readahead,
+            cache_warmup: read.cache_warmup,
+            stats,
+            placements,
+        })
+    }
 }
 
 impl DataFabricReadStats {
     pub fn from_block_read(placements: &[BlockPlacement], blocks: &BlockReadOutcome) -> Self {
+        let mut stats = Self {
+            planned_blocks: placements.len() as u64,
+            object_gets: blocks.object_gets as u64,
+            object_get_bytes: blocks.object_get_bytes,
+            coalesced_ranges: blocks.coalesced_gets as u64,
+            coalesced_range_bytes: blocks.coalesced_get_bytes,
+            cache_hits: blocks.cache_hits as u64,
+            cache_hit_bytes: blocks.cache_hit_bytes,
+            ..Self::default()
+        };
+        for placement in placements {
+            match placement.transport {
+                DataTransport::ObjectTcpGet => {
+                    stats.object_fallbacks = stats.object_fallbacks.saturating_add(1);
+                }
+                DataTransport::LocalNvmeRead => {
+                    stats.local_nvme_hits = stats.local_nvme_hits.saturating_add(1);
+                }
+            }
+        }
+        stats
+    }
+
+    pub fn from_block_read_into(
+        placements: &[BlockPlacement],
+        blocks: &BlockReadIntoOutcome,
+    ) -> Self {
         let mut stats = Self {
             planned_blocks: placements.len() as u64,
             object_gets: blocks.object_gets as u64,

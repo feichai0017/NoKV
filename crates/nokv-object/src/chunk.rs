@@ -9,8 +9,8 @@ pub use manifest::{
     plan_chunk_manifest_reads, plan_slice_reads,
 };
 pub use read::{
-    read_object_blocks_with_cache_options, BlockReadOptions, BlockReadOutcome, ObjectReadBlock,
-    ReadCacheFillMode,
+    read_object_blocks_into_with_cache_options, read_object_blocks_with_cache_options,
+    BlockReadIntoOutcome, BlockReadOptions, BlockReadOutcome, ObjectReadBlock, ReadCacheFillMode,
 };
 pub use singleflight::ObjectReadCoordinator;
 pub use types::{

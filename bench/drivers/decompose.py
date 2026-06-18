@@ -43,11 +43,14 @@ _NS_FIELDS = {
     "local_hot_record": ("local_hot_put_record_ns",),
 }
 _COUNT_FIELDS = (
+    "fuse_read_requests", "fuse_read_request_bytes",
     "object_gets", "object_get_bytes", "object_puts", "object_put_bytes",
     "cache_hits", "cache_hit_bytes", "block_cache_hits",
     "block_cache_hit_bytes", "read_window_hits", "read_window_hit_bytes",
-    "prefetch_object_gets",
-    "prefetch_object_get_bytes", "read_plan_cache_misses",
+    "prefetch_enqueued", "prefetch_dropped", "prefetch_completed",
+    "prefetch_failed", "prefetch_object_gets", "prefetch_object_get_bytes",
+    "prefetch_cache_hits", "prefetch_cache_hit_bytes",
+    "read_plan_cache_hits", "read_plan_cache_misses",
     "local_hot_puts", "local_hot_put_bytes",
 )
 
@@ -83,16 +86,22 @@ def cost_breakdown(before: dict, after: dict) -> str:
 
 
 def _selftest() -> int:
-    before = {"metadata_store": {"metadata_atomic_apply_ns": 1000, "metadata_commit_prepare_ns": 500},
+    before = {"fuse_read_requests": 2,
+              "fuse_read_request_bytes": 1024,
+              "metadata_store": {"metadata_atomic_apply_ns": 1000, "metadata_commit_prepare_ns": 500},
               "object": {"object_gets": 10, "object_writeback_digest_ns": 1000},
               "local_hot_put_total_ns": 1000, "local_hot_puts": 1}
-    after = {"metadata_store": {"metadata_atomic_apply_ns": 3000, "metadata_commit_prepare_ns": 1500},
+    after = {"fuse_read_requests": 5,
+             "fuse_read_request_bytes": 4096,
+             "metadata_store": {"metadata_atomic_apply_ns": 3000, "metadata_commit_prepare_ns": 1500},
              "object": {"object_gets": 42, "object_writeback_digest_ns": 4000},
              "local_hot_put_total_ns": 6000, "local_hot_puts": 3}
     cb = cost_breakdown(before, after)
     assert "meta_commit=3us" in cb, cb        # (2000 + 1000) ns -> 3us
     assert "object_writeback_digest=3us" in cb, cb
     assert "local_hot_put=5us" in cb, cb
+    assert "fuse_read_requests=3" in cb, cb
+    assert "fuse_read_request_bytes=3072" in cb, cb
     assert "object_gets=32" in cb, cb
     assert "local_hot_puts=2" in cb, cb
     print("decompose selftest OK")

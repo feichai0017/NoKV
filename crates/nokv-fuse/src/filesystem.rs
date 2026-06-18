@@ -26,7 +26,7 @@ use nokv_meta::{DentryWithAttr, PublishArtifactStagedSession, ReadDirPlusPage};
 use nokv_meta::{MetadError, UpdateAttr, XattrSetMode};
 #[cfg(test)]
 use nokv_object::{manifest_digest_uri, ObjectError, ObjectReadBlock, PendingChunkedWrite};
-use nokv_object::{FileReadPipeline, ObjectStore};
+use nokv_object::{FileReadPipeline, ObjectReadPlanCache, ObjectStore};
 #[cfg(test)]
 use nokv_types::{AdvisoryLockRequest, DentryName, InodeId};
 use nokv_types::{FileType, InodeAttr, SpecialNodeSpec};
@@ -41,6 +41,8 @@ mod handle;
 mod locks;
 mod options;
 mod posix;
+mod publish_journal;
+mod publisher;
 mod write_session;
 mod xattr;
 
@@ -77,16 +79,30 @@ use xattr::{
     reply_xattr_data, xattr_missing_error, xattr_name, xattr_set_mode, xattr_unsupported_error,
 };
 
+const READ_HANDLE_PLAN_CACHE_CAPACITY: usize = 512;
+
 pub(crate) struct NoKvFuse<B: FuseBackend> {
     backend: Arc<B>,
     options: FuseOptions,
+    read_stats: Arc<FuseReadStats>,
     parents: RwLock<HashMap<u64, u64>>,
     names: RwLock<HashMap<u64, Vec<u8>>>,
+    attrs: Arc<RwLock<HashMap<u64, InodeAttr>>>,
     next_handle: AtomicU64,
     read_handles: RwLock<HashMap<u64, Arc<ReadHandle>>>,
     write_handles: RwLock<HashMap<u64, WriteHandle<B::Prepared>>>,
     directory_handles: RwLock<HashMap<u64, DirectoryHandle>>,
     invalidation: Arc<InvalidationRegistry>,
+    /// Opt-in async write-back runtime (journal + read-after-write tracker +
+    /// background publisher). `None` unless `--writeback-async-publish` is on, in
+    /// which case the synchronous `publish_handle` tail is bypassed at `release`.
+    writeback_publisher: Option<publisher::WritebackPublisher<B>>,
+}
+
+#[derive(Debug, Default)]
+struct FuseReadStats {
+    requests: AtomicU64,
+    request_bytes: AtomicU64,
 }
 
 pub struct FuseMount {
@@ -109,7 +125,22 @@ impl FuseMount {
 #[derive(Debug)]
 struct ReadHandle {
     attr: InodeAttr,
-    reader: Mutex<FileReadPipeline>,
+    state: Mutex<ReadHandleState>,
+}
+
+#[derive(Debug)]
+struct ReadHandleState {
+    reader: FileReadPipeline,
+    read_plans: ObjectReadPlanCache,
+}
+
+impl ReadHandleState {
+    fn new(reader: FileReadPipeline) -> Self {
+        Self {
+            reader,
+            read_plans: ObjectReadPlanCache::new(READ_HANDLE_PLAN_CACHE_CAPACITY),
+        }
+    }
 }
 
 pub fn mount_client<O>(
@@ -152,13 +183,18 @@ where
     config.n_threads = Some(options.threads);
     let backend = Arc::new(backend);
     let stats_backend = Arc::clone(&backend);
-    let fuse = NoKvFuse::from_shared_backend(Arc::clone(&backend), options.clone());
+    let mut fuse = NoKvFuse::from_shared_backend(Arc::clone(&backend), options.clone());
+    fuse.enable_async_publish()?;
+    let stats_read = Arc::clone(&fuse.read_stats);
     let registry = fuse.invalidation_registry();
+    let local_invalidation = fuse.local_invalidation();
     let session = fuser::spawn_mount2(fuse, mountpoint, &config)?;
     let stats: FuseStatsProvider = Arc::new(move || {
-        stats_backend
+        let mut stats = stats_backend
             .object_pipeline_stats()
-            .map_err(|err| io::Error::other(err.to_string()))
+            .map_err(|err| io::Error::other(err.to_string()))?;
+        merge_fuse_read_stats(&mut stats, &stats_read);
+        Ok(stats)
     });
     let stats_server = options
         .stats_bind
@@ -169,6 +205,7 @@ where
             backend,
             session.notifier(),
             registry,
+            Some(local_invalidation),
             options.invalidation,
         ))
     } else {
@@ -275,8 +312,10 @@ fn fuse_stats_json(stats: &FuseObjectPipelineStats) -> String {
     let tiered = stats.tiered_object.unwrap_or_default();
     let local_hot = stats.local_hot.unwrap_or_default();
     format!(
-        "{{\"ready\":true,\"source\":\"fuse\",\"block_cache_enabled\":{},\"object_puts\":{},\"object_put_bytes\":{},\"object_gets\":{},\"object_get_bytes\":{},\"coalesced_gets\":{},\"coalesced_get_bytes\":{},\"cache_hits\":{},\"cache_hit_bytes\":{},\"block_cache_hits\":{},\"block_cache_hit_bytes\":{},\"read_window_hits\":{},\"read_window_hit_bytes\":{},\"prefetch_enqueued\":{},\"prefetch_dropped\":{},\"prefetch_completed\":{},\"prefetch_failed\":{},\"prefetch_object_gets\":{},\"prefetch_object_get_bytes\":{},\"prefetch_cache_hits\":{},\"prefetch_cache_hit_bytes\":{},\"read_plan_cache_hits\":{},\"read_plan_cache_misses\":{},\"object_writeback_enqueued\":{},\"object_writeback_inline\":{},\"object_writeback_completed\":{},\"object_writeback_failed\":{},\"object_writeback_staged_bytes\":{},\"object_writeback_uploaded_bytes\":{},\"object_writeback_queue_wait_ns\":{},\"object_writeback_queue_max_wait_ns\":{},\"object_writeback_upload_ns\":{},\"object_writeback_upload_max_ns\":{},\"object_writeback_collect_ns\":{},\"object_writeback_digest_ns\":{},\"object_writeback_store_put_ns\":{},\"object_writeback_cache_put_ns\":{},\"tiered_hot_put_ns\":{},\"tiered_pending_cold_put_ns\":{},\"tiered_cold_put_enqueue_ns\":{},\"local_hot_puts\":{},\"local_hot_put_bytes\":{},\"local_hot_put_total_ns\":{},\"local_hot_put_prepare_ns\":{},\"local_hot_put_write_ns\":{},\"local_hot_put_sync_ns\":{},\"local_hot_put_rename_ns\":{},\"local_hot_put_record_ns\":{},\"manifest_chunks\":{},\"manifest_blocks\":{}}}\n",
+        "{{\"ready\":true,\"source\":\"fuse\",\"block_cache_enabled\":{},\"fuse_read_requests\":{},\"fuse_read_request_bytes\":{},\"object_puts\":{},\"object_put_bytes\":{},\"object_gets\":{},\"object_get_bytes\":{},\"coalesced_gets\":{},\"coalesced_get_bytes\":{},\"cache_hits\":{},\"cache_hit_bytes\":{},\"block_cache_hits\":{},\"block_cache_hit_bytes\":{},\"read_window_hits\":{},\"read_window_hit_bytes\":{},\"prefetch_enqueued\":{},\"prefetch_dropped\":{},\"prefetch_completed\":{},\"prefetch_failed\":{},\"prefetch_object_gets\":{},\"prefetch_object_get_bytes\":{},\"prefetch_cache_hits\":{},\"prefetch_cache_hit_bytes\":{},\"read_plan_cache_hits\":{},\"read_plan_cache_misses\":{},\"object_writeback_enqueued\":{},\"object_writeback_inline\":{},\"object_writeback_completed\":{},\"object_writeback_failed\":{},\"object_writeback_staged_bytes\":{},\"object_writeback_uploaded_bytes\":{},\"object_writeback_queue_wait_ns\":{},\"object_writeback_queue_max_wait_ns\":{},\"object_writeback_upload_ns\":{},\"object_writeback_upload_max_ns\":{},\"object_writeback_collect_ns\":{},\"object_writeback_digest_ns\":{},\"object_writeback_store_put_ns\":{},\"object_writeback_cache_put_ns\":{},\"tiered_hot_put_ns\":{},\"tiered_pending_cold_put_ns\":{},\"tiered_cold_put_enqueue_ns\":{},\"local_hot_puts\":{},\"local_hot_put_bytes\":{},\"local_hot_put_total_ns\":{},\"local_hot_put_prepare_ns\":{},\"local_hot_put_write_ns\":{},\"local_hot_put_sync_ns\":{},\"local_hot_put_rename_ns\":{},\"local_hot_put_record_ns\":{},\"manifest_chunks\":{},\"manifest_blocks\":{}}}\n",
         stats.block_cache.is_some(),
+        stats.fuse_read_requests,
+        stats.fuse_read_request_bytes,
         objects.object_puts,
         objects.object_put_bytes,
         objects.object_gets,
@@ -329,6 +368,11 @@ fn fuse_stats_json(stats: &FuseObjectPipelineStats) -> String {
     )
 }
 
+fn merge_fuse_read_stats(stats: &mut FuseObjectPipelineStats, read_stats: &FuseReadStats) {
+    stats.fuse_read_requests = read_stats.requests.load(Ordering::Relaxed);
+    stats.fuse_read_request_bytes = read_stats.request_bytes.load(Ordering::Relaxed);
+}
+
 impl<B> Filesystem for NoKvFuse<B>
 where
     B: FuseBackend,
@@ -354,6 +398,10 @@ where
                 return;
             }
         };
+        if let Err(err) = self.wait_pending_publish_dentry(parent, &name) {
+            reply.error(err);
+            return;
+        }
         match self.service_lookup_plus(parent, &name) {
             Ok(Some(entry)) => {
                 self.remember_entry(&entry);
@@ -369,12 +417,18 @@ where
     }
 
     fn getattr(&self, _req: &Request, ino: INodeNo, _fh: Option<FileHandle>, reply: ReplyAttr) {
+        // No async-publish barrier here: the kernel issues a getattr while
+        // closing a just-written file, and barriering it would make the writer
+        // wait out its own deferred publish (a self-inflicted stall). A *reader*
+        // resolves the path through `lookup` first, which does barrier, so
+        // read-after-write across handles stays consistent without this one.
         match self.metadata_inode(ino).and_then(|inode| {
             self.service_get_attr(inode)
                 .map_err(errno)?
                 .ok_or(Errno::ENOENT)
         }) {
             Ok(attr) => {
+                self.remember_attr(&attr);
                 let attr = self.attr_with_pending_size(attr);
                 reply.attr(&self.options.attr_ttl, &self.view_file_attr(&attr))
             }
@@ -433,7 +487,10 @@ where
         }
         if published_handle && mtime.is_none() && ctime.is_none() {
             match self.service_get_attr(inode) {
-                Ok(Some(attr)) => reply.attr(&self.options.attr_ttl, &self.view_file_attr(&attr)),
+                Ok(Some(attr)) => {
+                    self.remember_attr(&attr);
+                    reply.attr(&self.options.attr_ttl, &self.view_file_attr(&attr));
+                }
                 Ok(None) => reply.error(Errno::ENOENT),
                 Err(err) => reply.error(errno(err)),
             }
@@ -449,7 +506,10 @@ where
         };
         if inode == self.options.view.root() {
             match self.backend.update_root_attrs(changes) {
-                Ok(attr) => reply.attr(&self.options.attr_ttl, &self.view_file_attr(&attr)),
+                Ok(attr) => {
+                    self.remember_attr(&attr);
+                    reply.attr(&self.options.attr_ttl, &self.view_file_attr(&attr));
+                }
                 Err(err) => reply.error(errno(err)),
             }
             return;
@@ -486,30 +546,56 @@ where
     }
 
     fn open(&self, _req: &Request, ino: INodeNo, flags: OpenFlags, reply: ReplyOpen) {
-        match self.metadata_inode(ino).and_then(|inode| {
-            self.service_get_attr(inode)
-                .map_err(errno)?
-                .ok_or(Errno::ENOENT)
-        }) {
-            Ok(attr) if attr.file_type == FileType::File => match flags.acc_mode() {
-                OpenAccMode::O_RDONLY => match self.allocate_read_handle(attr) {
-                    Ok(fh) => reply.opened(fh, self.read_open_flags()),
-                    Err(err) => reply.error(err),
-                },
-                OpenAccMode::O_WRONLY | OpenAccMode::O_RDWR => {
-                    if self.read_only() {
-                        reply.error(Errno::EROFS);
-                        return;
-                    }
-                    let parent = self.parent_of(attr.inode);
-                    match self.open_write_handle(&attr, parent) {
-                        Ok(fh) => reply.opened(fh, self.write_open_flags()),
-                        Err(err) => reply.error(err),
-                    }
+        let inode = match self.metadata_inode(ino) {
+            Ok(inode) => inode,
+            Err(err) => {
+                reply.error(err);
+                return;
+            }
+        };
+        if let Err(err) = self.wait_pending_publish(inode) {
+            reply.error(err);
+            return;
+        }
+        // The read-open path trusts the local attr cache (`read_open_attr`); after
+        // waiting out an async publish, drop the now-stale entry so the open
+        // resolves the just-committed generation.
+        if self.writeback_publisher.is_some() {
+            self.forget_attr_cache(inode);
+        }
+        let attr = match flags.acc_mode() {
+            OpenAccMode::O_RDONLY => self.read_open_attr(inode),
+            OpenAccMode::O_WRONLY | OpenAccMode::O_RDWR => {
+                if self.read_only() {
+                    reply.error(Errno::EROFS);
+                    return;
                 }
+                self.live_open_attr(inode)
+            }
+        };
+        let attr = match attr {
+            Ok(attr) if attr.file_type == FileType::File => attr,
+            Ok(_) => {
+                reply.error(Errno::EISDIR);
+                return;
+            }
+            Err(err) => {
+                reply.error(err);
+                return;
+            }
+        };
+        match flags.acc_mode() {
+            OpenAccMode::O_RDONLY => match self.allocate_read_handle(attr) {
+                Ok(fh) => reply.opened(fh, self.read_open_flags()),
+                Err(err) => reply.error(err),
             },
-            Ok(_) => reply.error(Errno::EISDIR),
-            Err(err) => reply.error(err),
+            OpenAccMode::O_WRONLY | OpenAccMode::O_RDWR => {
+                let parent = self.parent_of(attr.inode);
+                match self.open_write_handle(&attr, parent) {
+                    Ok(fh) => reply.opened(fh, self.write_open_flags()),
+                    Err(err) => reply.error(err),
+                }
+            }
         }
     }
 
@@ -524,6 +610,24 @@ where
         _lock_owner: Option<fuser::LockOwner>,
         reply: ReplyData,
     ) {
+        self.record_fuse_read_request(size);
+        if self.writeback_publisher.is_some() {
+            // A read with no read/write handle falls through to the metadata
+            // service below; block it behind any in-flight async publish so it
+            // observes the committed generation, not the pre-write one.
+            match self.metadata_inode(ino) {
+                Ok(inode) => {
+                    if let Err(err) = self.wait_pending_publish(inode) {
+                        reply.error(err);
+                        return;
+                    }
+                }
+                Err(err) => {
+                    reply.error(err);
+                    return;
+                }
+            }
+        }
         match self.read_from_read_handle(fh, offset, size) {
             Ok(Some(bytes)) => {
                 reply.data(&bytes);
@@ -1116,12 +1220,7 @@ where
         };
         match self.backend.remove_file(parent, &name) {
             Ok(entry) => {
-                if let Ok(mut parents) = self.parents.write() {
-                    parents.remove(&entry.attr.inode.get());
-                }
-                if let Ok(mut names) = self.names.write() {
-                    names.remove(&entry.attr.inode.get());
-                }
+                self.forget_inode_cache(entry.attr.inode);
                 reply.ok();
             }
             Err(err) => reply.error(errno(err)),
@@ -1149,12 +1248,7 @@ where
         };
         match self.backend.remove_empty_dir(parent, &name) {
             Ok(entry) => {
-                if let Ok(mut parents) = self.parents.write() {
-                    parents.remove(&entry.attr.inode.get());
-                }
-                if let Ok(mut names) = self.names.write() {
-                    names.remove(&entry.attr.inode.get());
-                }
+                self.forget_inode_cache(entry.attr.inode);
                 reply.ok();
             }
             Err(err) => reply.error(errno(err)),
@@ -1271,14 +1365,11 @@ where
         };
         match result {
             Ok(result) => {
+                let entry_inode = result.entry.attr.inode;
                 self.remember_entry(&result.entry);
-                if let Some(replaced) = result.replaced {
-                    if let Ok(mut parents) = self.parents.write() {
-                        parents.remove(&replaced.attr.inode.get());
-                    }
-                    if let Ok(mut names) = self.names.write() {
-                        names.remove(&replaced.attr.inode.get());
-                    }
+                if let Some(replaced) = result.replaced.filter(|old| old.attr.inode != entry_inode)
+                {
+                    self.forget_inode_cache(replaced.attr.inode);
                 }
                 reply.ok();
             }
@@ -1611,6 +1702,19 @@ mod tests {
     }
 
     #[test]
+    fn object_pipeline_stats_include_fuse_read_requests() {
+        let fuse =
+            NoKvFuse::from_backend(UnsupportedTestBackend::default(), FuseOptions::default());
+
+        fuse.record_fuse_read_request(4096);
+        fuse.record_fuse_read_request(8192);
+
+        let stats = fuse.object_pipeline_stats().unwrap();
+        assert_eq!(stats.fuse_read_requests, 2);
+        assert_eq!(stats.fuse_read_request_bytes, 12_288);
+    }
+
+    #[test]
     fn object_pipeline_stats_convert_to_object_transfer_stats() {
         let stats = FuseObjectPipelineStats {
             block_cache: Some(BlockCacheStats {
@@ -1666,6 +1770,8 @@ mod tests {
                 put_record_ns: 114,
                 ..nokv_object::LocalObjectStoreStats::default()
             }),
+            fuse_read_requests: 0,
+            fuse_read_request_bytes: 0,
             foreground_object_gets: 1,
             foreground_object_get_bytes: 10,
             foreground_coalesced_gets: 2,
@@ -1732,6 +1838,8 @@ mod tests {
         });
 
         assert!(body.contains("\"source\":\"fuse\""));
+        assert!(body.contains("\"fuse_read_requests\":0"));
+        assert!(body.contains("\"fuse_read_request_bytes\":0"));
         assert!(body.contains("\"object_gets\":3"));
         assert!(body.contains("\"object_get_bytes\":4096"));
         assert!(body.contains("\"cache_hits\":2"));
@@ -2008,6 +2116,7 @@ mod tests {
             published_digests[0].starts_with("manifest-sha256:"),
             "{published_digests:?}"
         );
+        assert_eq!(fuse.cached_attr(inode).unwrap().size, 10);
 
         let handles = fuse.write_handles.read().unwrap();
         let handle = handles.get(&fh.0).unwrap();
@@ -2144,6 +2253,12 @@ mod tests {
             b"efgh"
         );
         assert_eq!(
+            fuse.read_from_read_handle(second_fh, 0, 4)
+                .unwrap()
+                .unwrap(),
+            b"abcd"
+        );
+        assert_eq!(
             fuse.read_from_read_handle(second_fh, 4, 4)
                 .unwrap()
                 .unwrap(),
@@ -2151,13 +2266,149 @@ mod tests {
         );
 
         let stats = backend.read_stats();
-        assert_eq!(stats.len(), 3);
+        assert_eq!(stats.len(), 4);
         assert_eq!(stats[1].0, 7);
         assert_eq!(stats[1].1.reads, 2);
         assert_eq!(stats[1].1.sequential_reads, 2);
-        assert_eq!(stats[2].0, 8);
-        assert_eq!(stats[2].1.reads, 1);
-        assert_eq!(stats[2].1.sequential_reads, 0);
+        assert_eq!(stats[3].0, 8);
+        assert_eq!(stats[3].1.reads, 2);
+        assert_eq!(stats[3].1.sequential_reads, 2);
+    }
+
+    #[test]
+    fn read_handle_bypasses_pipeline_for_non_stateful_reads() {
+        let backend = UnsupportedTestBackend::default();
+        let fuse = NoKvFuse::from_backend(backend.clone(), FuseOptions::default());
+        let fh = fuse.allocate_read_handle(test_file_attr(7)).unwrap();
+
+        assert_eq!(
+            fuse.read_from_read_handle(fh, 4, 4).unwrap().unwrap(),
+            b"efgh"
+        );
+        assert!(
+            backend.read_stats().is_empty(),
+            "a first middle-of-file read should use the concurrent direct path"
+        );
+
+        assert_eq!(
+            fuse.read_from_read_handle(fh, 8, 4).unwrap().unwrap(),
+            b"ijkl"
+        );
+        let stats = backend.read_stats();
+        assert_eq!(stats.len(), 1);
+        assert_eq!(stats[0].0, 7);
+        assert_eq!(stats[0].1.reads, 1);
+        assert_eq!(stats[0].1.sequential_reads, 1);
+    }
+
+    #[test]
+    fn read_handle_skips_pipeline_when_prefetch_disabled() {
+        let backend = UnsupportedTestBackend::default();
+        let fuse = NoKvFuse::from_backend(
+            backend.clone(),
+            FuseOptions {
+                prefetch: FusePrefetchOptions {
+                    enabled: false,
+                    ..FusePrefetchOptions::default()
+                },
+                ..FuseOptions::default()
+            },
+        );
+        let fh = fuse.allocate_read_handle(test_file_attr(7)).unwrap();
+
+        assert_eq!(
+            fuse.read_from_read_handle(fh, 0, 4).unwrap().unwrap(),
+            b"abcd"
+        );
+        assert_eq!(
+            fuse.read_from_read_handle(fh, 4, 4).unwrap().unwrap(),
+            b"efgh"
+        );
+        assert!(
+            backend.read_stats().is_empty(),
+            "no-prefetch reads should bypass FileReadPipeline state"
+        );
+    }
+
+    #[test]
+    fn read_handle_clamps_read_past_eof_to_short_read() {
+        // A read that starts before EOF (size 16) but whose length runs past it
+        // must come back as a short read, not a backend range error. Exercised on
+        // both the prefetch-disabled and pipeline paths.
+        for prefetch_enabled in [false, true] {
+            let fuse = NoKvFuse::from_backend(
+                UnsupportedTestBackend::default(),
+                FuseOptions {
+                    prefetch: FusePrefetchOptions {
+                        enabled: prefetch_enabled,
+                        ..FusePrefetchOptions::default()
+                    },
+                    ..FuseOptions::default()
+                },
+            );
+            let fh = fuse.allocate_read_handle(test_file_attr(7)).unwrap();
+            // offset 14 + size 8 would reach 22 > size 16 without clamping.
+            let bytes = fuse.read_from_read_handle(fh, 14, 8).unwrap().unwrap();
+            assert_eq!(bytes, b"op", "prefetch_enabled={prefetch_enabled}");
+            // A read fully at/after EOF is an empty short read, never an error.
+            assert!(fuse
+                .read_from_read_handle(fh, 16, 8)
+                .unwrap()
+                .unwrap()
+                .is_empty());
+        }
+    }
+
+    #[test]
+    fn attr_cache_tracks_entries_and_inode_forgets() {
+        let fuse =
+            NoKvFuse::from_backend(UnsupportedTestBackend::default(), FuseOptions::default());
+        let attr = test_file_attr(7);
+        let name = DentryName::new("checkpoint.bin").unwrap();
+        let entry = DentryWithAttr {
+            dentry: nokv_types::DentryRecord {
+                parent: InodeId::root(),
+                name: name.clone(),
+                child: attr.inode,
+                child_type: FileType::File,
+                attr_generation: attr.generation,
+            },
+            attr: attr.clone(),
+            body: None,
+        };
+
+        fuse.remember_entry(&entry);
+        assert_eq!(fuse.cached_attr(attr.inode), Some(attr.clone()));
+        assert_eq!(fuse.name_of(attr.inode).unwrap(), name);
+
+        fuse.forget_attr_cache(attr.inode);
+        assert_eq!(fuse.cached_attr(attr.inode), None);
+        assert_eq!(fuse.name_of(attr.inode).unwrap(), entry.dentry.name);
+
+        fuse.remember_attr(&attr);
+        fuse.forget_inode_cache(attr.inode);
+        assert_eq!(fuse.cached_attr(attr.inode), None);
+        assert_eq!(
+            fuse.name_of(attr.inode).unwrap_err().code(),
+            Errno::EIO.code()
+        );
+    }
+
+    #[test]
+    fn local_invalidation_drops_cached_attr() {
+        let fuse =
+            NoKvFuse::from_backend(UnsupportedTestBackend::default(), FuseOptions::default());
+        let attr = test_file_attr(9);
+        fuse.remember_attr(&attr);
+
+        let invalidate = fuse.local_invalidation();
+        invalidate(crate::invalidation::InvalidationTarget {
+            parent: Some(InodeId::root()),
+            name: Some(DentryName::new("shard-0009.bin").unwrap()),
+            inode: attr.inode,
+        });
+
+        assert_eq!(fuse.cached_attr(attr.inode), None);
     }
 
     fn test_file_attr(raw_inode: u64) -> InodeAttr {
@@ -2220,9 +2471,23 @@ mod tests {
         let options = mount_options(&FuseOptions::default());
         let debug = format!("{options:?}");
         assert!(debug.contains("noappledouble"));
+        assert!(!debug.contains("direct_io"));
+        assert!(!debug.contains("iosize="));
         // `noapplexattr` must NOT be set: it makes macFUSE reject `com.apple.*`
         // xattrs with EPERM, which breaks `cp` (it copies `com.apple.provenance`).
         assert!(!debug.contains("noapplexattr"));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_direct_io_sets_mount_io_size() {
+        let options = mount_options(&FuseOptions {
+            direct_io: true,
+            ..FuseOptions::default()
+        });
+        let debug = format!("{options:?}");
+        assert!(debug.contains("direct_io"));
+        assert!(debug.contains("iosize=1048576"));
     }
 
     #[derive(Clone, Default)]
@@ -2246,6 +2511,21 @@ mod tests {
 
         fn prepared_generation(&self, _prepared: &Self::Prepared) -> u64 {
             1
+        }
+
+        fn prepared_record_fields(
+            &self,
+            _prepared: &Self::Prepared,
+        ) -> crate::backend::PreparedRecordFields {
+            crate::backend::PreparedRecordFields {
+                mount: 1,
+                generation: 1,
+                mtime_ms: 0,
+                ctime_ms: 0,
+                replace: false,
+                dentry_version: None,
+                old_generation: None,
+            }
         }
 
         fn prepared_is_replace(&self, _prepared: &Self::Prepared) -> bool {
@@ -2350,12 +2630,31 @@ mod tests {
             unsupported()
         }
 
+        fn read_file_with_known_attr(
+            &self,
+            attr: &InodeAttr,
+            offset: u64,
+            len: usize,
+        ) -> FuseBackendResult<Vec<u8>> {
+            let data = b"abcdefghijklmnop";
+            if len == 0 || offset >= attr.size {
+                return Ok(Vec::new());
+            }
+            let start = usize::try_from(offset).map_err(|_| ObjectError::InvalidRange)?;
+            let end = start.checked_add(len).ok_or(ObjectError::InvalidRange)?;
+            if end > data.len() {
+                return Err(ObjectError::InvalidRange.into());
+            }
+            Ok(data[start..end].to_vec())
+        }
+
         fn read_file_with_known_attr_pipeline(
             &self,
             attr: &InodeAttr,
             offset: u64,
             len: usize,
             pipeline: &mut FileReadPipeline,
+            _read_plans: &mut ObjectReadPlanCache,
         ) -> FuseBackendResult<Vec<u8>> {
             let inode = attr.inode;
             let store = nokv_object::MemoryObjectStore::new();
@@ -2600,6 +2899,36 @@ mod tests {
                 object_puts: ranges.len(),
                 object_put_bytes: ranges.iter().map(|range| range.len() as u64).sum(),
             })))
+        }
+
+        fn restage_cached_blocks(
+            &self,
+            _prepared: &Self::Prepared,
+            _manifest_id: &str,
+            _blocks: &[crate::backend::RecoveredBlock],
+            _block_index_base: u64,
+        ) -> FuseBackendResult<PendingChunkedWrite> {
+            unsupported()
+        }
+
+        fn prepared_from_record_fields(
+            &self,
+            _parent: InodeId,
+            _name: DentryName,
+            _inode: InodeId,
+            _fields: crate::backend::PreparedRecordFields,
+        ) -> Self::Prepared {
+        }
+
+        fn purge_cache_orphans(
+            &self,
+            _live_file_names: &std::collections::HashSet<String>,
+        ) -> FuseBackendResult<usize> {
+            Ok(0)
+        }
+
+        fn sync_writeback_root(&self) -> FuseBackendResult<()> {
+            Ok(())
         }
 
         fn cleanup_staged_objects(

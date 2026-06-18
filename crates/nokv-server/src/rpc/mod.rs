@@ -17,11 +17,12 @@ pub(crate) use transport::{
     read_frame, write_frame, MAX_FRAMED_RPC_WORKERS, MIN_FRAMED_RPC_WORKERS,
 };
 
-use nokv_meta::{MetadError, PublishArtifactStagedSession};
+use nokv_meta::{MetadError, OpenPathReadPlanRequest, PublishArtifactStagedSession};
 use nokv_protocol::{
     decode_advisory_lock_kind, decode_file_type, decode_name_cursor, decode_request,
     decode_xattr_name, encode_envelope, encode_name_cursor, encode_xattr_name, MetadataRpcEnvelope,
-    MetadataRpcRequest, MetadataRpcResult, WireAdvisoryLock, WireMetadataError, WirePathMetadata,
+    MetadataRpcRequest, MetadataRpcResult, WireAdvisoryLock, WireMetadataError,
+    WireOpenPathReadPlanRequest, WirePathMetadata,
 };
 use nokv_types::{AdvisoryLockRequest, SpecialNodeSpec};
 
@@ -34,20 +35,40 @@ use wire::{
     staged_object_set, update_attr, wire_body_read_plan, wire_dentry,
     wire_namespace_aggregate_result, wire_namespace_card, wire_namespace_find_result,
     wire_namespace_grep_result, wire_namespace_list_page, wire_namespace_read_page,
-    wire_prepared_artifact, wire_subtree_delta, xattr_set_mode,
+    wire_open_path_read_plan, wire_prepared_artifact, wire_subtree_delta, xattr_set_mode,
 };
 
 fn handle_binary_rpc(server: &Server, body: &[u8]) -> Result<Vec<u8>, ServerError> {
     let envelope = match decode_request(body) {
-        Ok(request) => match execute(server, request) {
-            Ok(result) => MetadataRpcEnvelope {
-                ok: true,
-                result: Some(result),
-                error: None,
-                error_kind: None,
-            },
-            Err(err) => err_envelope(err),
-        },
+        Ok(request) => {
+            // Resolve which shard owns this request BEFORE consuming it, so a
+            // committing op publishes the LogRef of the shard that handled it
+            // (not the default shard). Batches publish per-shard inside execute,
+            // so they are excluded here.
+            let publish_index = if !matches!(request, MetadataRpcRequest::Batch { .. })
+                && commits_metadata_view(&request)
+            {
+                server.route(&request).ok().map(|slot| slot.shard_index())
+            } else {
+                None
+            };
+            match execute(server, request) {
+                Ok(result) => match if let Some(shard_index) = publish_index {
+                    server.publish_latest_metadata_log_ref_for_index(shard_index)
+                } else {
+                    Ok(None)
+                } {
+                    Ok(_) => MetadataRpcEnvelope {
+                        ok: true,
+                        result: Some(result),
+                        error: None,
+                        error_kind: None,
+                    },
+                    Err(err) => err_envelope(err),
+                },
+                Err(err) => err_envelope(err),
+            }
+        }
         Err(err) => MetadataRpcEnvelope {
             ok: false,
             result: None,
@@ -66,19 +87,26 @@ fn handle_binary_rpc(server: &Server, body: &[u8]) -> Result<Vec<u8>, ServerErro
 }
 
 fn execute(server: &Server, request: MetadataRpcRequest) -> Result<MetadataRpcResult, ServerError> {
+    // A batch re-routes each sub-request to its own shard, so resolve it there.
+    if let MetadataRpcRequest::Batch { requests } = request {
+        return execute_batch(server, requests);
+    }
+    let slot = server.route(&request)?;
     if refreshes_metadata_view(&request) {
-        server.refresh_metadata_view()?;
+        slot.service()
+            .refresh_allocator_state()
+            .map_err(ServerError::Metadata)?;
     }
     match request {
-        MetadataRpcRequest::Batch { requests } => execute_batch(server, requests),
+        MetadataRpcRequest::Batch { .. } => unreachable!("batch is handled before routing"),
         MetadataRpcRequest::BootstrapRoot { mode, uid, gid } => {
-            let attr = server.service().bootstrap_root(mode, uid, gid)?;
+            let attr = slot.service().bootstrap_root(mode, uid, gid)?;
             Ok(MetadataRpcResult::InodeAttr {
                 attr: Some(nokv_protocol::WireInodeAttr::from_inode_attr(&attr)),
             })
         }
         MetadataRpcRequest::GetAttr { inode } => {
-            let attr = server.service().get_attr(inode_id(inode)?)?;
+            let attr = slot.service().get_attr(inode_id(inode)?)?;
             Ok(MetadataRpcResult::InodeAttr {
                 attr: attr
                     .as_ref()
@@ -86,7 +114,7 @@ fn execute(server: &Server, request: MetadataRpcRequest) -> Result<MetadataRpcRe
             })
         }
         MetadataRpcRequest::GetAttrAtSnapshot { snapshot_id, inode } => {
-            let attr = server
+            let attr = slot
                 .service()
                 .get_attr_at_snapshot(snapshot_id, inode_id(inode)?)?;
             Ok(MetadataRpcResult::InodeAttr {
@@ -96,7 +124,7 @@ fn execute(server: &Server, request: MetadataRpcRequest) -> Result<MetadataRpcRe
             })
         }
         MetadataRpcRequest::LookupPlus { parent, name } => {
-            let entry = server
+            let entry = slot
                 .service()
                 .lookup_plus(inode_id(parent)?, &dentry_name(name)?)?;
             Ok(MetadataRpcResult::Dentry {
@@ -104,7 +132,7 @@ fn execute(server: &Server, request: MetadataRpcRequest) -> Result<MetadataRpcRe
             })
         }
         MetadataRpcRequest::CurrentDentryVersion { parent, name } => {
-            let version = server
+            let version = slot
                 .service()
                 .current_dentry_version(inode_id(parent)?, &dentry_name(name)?)?;
             Ok(MetadataRpcResult::DentryVersion { version })
@@ -114,7 +142,7 @@ fn execute(server: &Server, request: MetadataRpcRequest) -> Result<MetadataRpcRe
             parent,
             name,
         } => {
-            let entry = server.service().lookup_plus_at_snapshot(
+            let entry = slot.service().lookup_plus_at_snapshot(
                 snapshot_id,
                 inode_id(parent)?,
                 &dentry_name(name)?,
@@ -124,19 +152,19 @@ fn execute(server: &Server, request: MetadataRpcRequest) -> Result<MetadataRpcRe
             })
         }
         MetadataRpcRequest::LookupPath { path } => {
-            let entry = server.service().lookup_path(&path)?;
+            let entry = slot.service().lookup_path(&path)?;
             Ok(MetadataRpcResult::Dentry {
                 entry: entry.as_ref().map(|entry| Box::new(wire_dentry(entry))),
             })
         }
         MetadataRpcRequest::StatPath { path } => {
-            let metadata = server.service().stat_path(&path)?;
+            let metadata = slot.service().stat_path(&path)?;
             Ok(MetadataRpcResult::PathMetadata {
                 metadata: metadata.as_ref().map(WirePathMetadata::from_path_metadata),
             })
         }
         MetadataRpcRequest::ReadDirPlus { parent } => {
-            let entries = server.service().read_dir_plus(inode_id(parent)?)?;
+            let entries = slot.service().read_dir_plus(inode_id(parent)?)?;
             Ok(MetadataRpcResult::Dentries {
                 entries: entries.iter().map(wire_dentry).collect(),
             })
@@ -152,8 +180,7 @@ fn execute(server: &Server, request: MetadataRpcRequest) -> Result<MetadataRpcRe
                 .transpose()
                 .map_err(protocol_error)?;
             let page =
-                server
-                    .service()
+                slot.service()
                     .read_dir_plus_page(inode_id(parent)?, after.as_ref(), limit)?;
             Ok(MetadataRpcResult::DentriesPage {
                 entries: page.entries.iter().map(wire_dentry).collect(),
@@ -164,7 +191,7 @@ fn execute(server: &Server, request: MetadataRpcRequest) -> Result<MetadataRpcRe
             snapshot_id,
             parent,
         } => {
-            let entries = server
+            let entries = slot
                 .service()
                 .read_dir_plus_at_snapshot(snapshot_id, inode_id(parent)?)?;
             Ok(MetadataRpcResult::Dentries {
@@ -172,7 +199,7 @@ fn execute(server: &Server, request: MetadataRpcRequest) -> Result<MetadataRpcRe
             })
         }
         MetadataRpcRequest::ReadDirPlusPath { path } => {
-            let entries = server.service().read_dir_plus_path(&path)?;
+            let entries = slot.service().read_dir_plus_path(&path)?;
             Ok(MetadataRpcResult::Dentries {
                 entries: entries.iter().map(wire_dentry).collect(),
             })
@@ -187,7 +214,7 @@ fn execute(server: &Server, request: MetadataRpcRequest) -> Result<MetadataRpcRe
                 .map(decode_name_cursor)
                 .transpose()
                 .map_err(protocol_error)?;
-            let page = server
+            let page = slot
                 .service()
                 .read_dir_plus_path_page(&path, after.as_ref(), limit)?;
             Ok(MetadataRpcResult::DentriesPage {
@@ -205,7 +232,7 @@ fn execute(server: &Server, request: MetadataRpcRequest) -> Result<MetadataRpcRe
                 .map(decode_name_cursor)
                 .transpose()
                 .map_err(protocol_error)?;
-            let page = server
+            let page = slot
                 .service()
                 .list_indexed_path_page(&path, after.as_ref(), limit)?;
             Ok(MetadataRpcResult::DentriesPage {
@@ -214,7 +241,7 @@ fn execute(server: &Server, request: MetadataRpcRequest) -> Result<MetadataRpcRe
             })
         }
         MetadataRpcRequest::StatCard { path } => {
-            let card = server.service().stat_card(&path)?;
+            let card = slot.service().stat_card(&path)?;
             Ok(MetadataRpcResult::NamespaceCard {
                 card: card
                     .as_ref()
@@ -231,7 +258,7 @@ fn execute(server: &Server, request: MetadataRpcRequest) -> Result<MetadataRpcRe
                     "namespace list limit exceeds platform limit".to_owned(),
                 ))
             })?;
-            let page = server
+            let page = slot
                 .service()
                 .list_page(&path, nokv_meta::NamespaceListOptions { cursor, limit })?;
             Ok(MetadataRpcResult::NamespaceListPage {
@@ -239,7 +266,7 @@ fn execute(server: &Server, request: MetadataRpcRequest) -> Result<MetadataRpcRe
             })
         }
         MetadataRpcRequest::FindPaths { request } => {
-            let result = server
+            let result = slot
                 .service()
                 .find_paths(namespace_find_request(*request)?)?;
             Ok(MetadataRpcResult::NamespaceFindResult {
@@ -247,7 +274,7 @@ fn execute(server: &Server, request: MetadataRpcRequest) -> Result<MetadataRpcRe
             })
         }
         MetadataRpcRequest::AggregatePaths { request } => {
-            let result = server
+            let result = slot
                 .service()
                 .aggregate_paths(namespace_aggregate_request(*request)?)?;
             Ok(MetadataRpcResult::NamespaceAggregateResult {
@@ -255,7 +282,7 @@ fn execute(server: &Server, request: MetadataRpcRequest) -> Result<MetadataRpcRe
             })
         }
         MetadataRpcRequest::GrepPaths { request } => {
-            let result = server
+            let result = slot
                 .service()
                 .grep_paths(namespace_grep_request(*request)?)?;
             Ok(MetadataRpcResult::NamespaceGrepResult {
@@ -263,7 +290,7 @@ fn execute(server: &Server, request: MetadataRpcRequest) -> Result<MetadataRpcRe
             })
         }
         MetadataRpcRequest::ReadPage { path, options } => {
-            let page = server
+            let page = slot
                 .service()
                 .read_page(&path, namespace_read_options(*options)?)?;
             Ok(MetadataRpcResult::NamespaceReadPage {
@@ -277,9 +304,25 @@ fn execute(server: &Server, request: MetadataRpcRequest) -> Result<MetadataRpcRe
             uid,
             gid,
         } => {
-            let entry = server.service().create_dir(
+            let entry =
+                slot.service()
+                    .create_dir(inode_id(parent)?, dentry_name(name)?, mode, uid, gid)?;
+            Ok(MetadataRpcResult::Dentry {
+                entry: Some(Box::new(wire_dentry(&entry))),
+            })
+        }
+        MetadataRpcRequest::CreateGraft {
+            parent,
+            name,
+            target_inode,
+            mode,
+            uid,
+            gid,
+        } => {
+            let entry = slot.service().create_graft(
                 inode_id(parent)?,
                 dentry_name(name)?,
+                inode_id(target_inode)?,
                 mode,
                 uid,
                 gid,
@@ -288,13 +331,21 @@ fn execute(server: &Server, request: MetadataRpcRequest) -> Result<MetadataRpcRe
                 entry: Some(Box::new(wire_dentry(&entry))),
             })
         }
+        MetadataRpcRequest::RemoveGraft { parent, name } => {
+            let entry = slot
+                .service()
+                .remove_graft(inode_id(parent)?, &dentry_name(name)?)?;
+            Ok(MetadataRpcResult::Dentry {
+                entry: entry.map(|entry| Box::new(wire_dentry(&entry))),
+            })
+        }
         MetadataRpcRequest::CreateDirPath {
             path,
             mode,
             uid,
             gid,
         } => {
-            let entry = server.service().create_dir_path(&path, mode, uid, gid)?;
+            let entry = slot.service().create_dir_path(&path, mode, uid, gid)?;
             Ok(MetadataRpcResult::Dentry {
                 entry: Some(Box::new(wire_dentry(&entry))),
             })
@@ -306,7 +357,7 @@ fn execute(server: &Server, request: MetadataRpcRequest) -> Result<MetadataRpcRe
             uid,
             gid,
         } => {
-            let entry = server.service().create_file(
+            let entry = slot.service().create_file(
                 inode_id(parent)?,
                 dentry_name(name)?,
                 mode,
@@ -324,7 +375,7 @@ fn execute(server: &Server, request: MetadataRpcRequest) -> Result<MetadataRpcRe
             uid,
             gid,
         } => {
-            let created = server.service().create_file_prepared(
+            let created = slot.service().create_file_prepared(
                 inode_id(parent)?,
                 dentry_name(name)?,
                 mode,
@@ -333,7 +384,7 @@ fn execute(server: &Server, request: MetadataRpcRequest) -> Result<MetadataRpcRe
             )?;
             Ok(MetadataRpcResult::CreatedPreparedArtifact {
                 entry: Box::new(wire_dentry(&created.entry)),
-                prepared: wire_prepared_artifact(server.service().mount_id(), &created.prepared),
+                prepared: wire_prepared_artifact(slot.service().mount_id(), &created.prepared),
             })
         }
         MetadataRpcRequest::CreateSymlink {
@@ -344,7 +395,7 @@ fn execute(server: &Server, request: MetadataRpcRequest) -> Result<MetadataRpcRe
             uid,
             gid,
         } => {
-            let entry = server.service().create_symlink(
+            let entry = slot.service().create_symlink(
                 inode_id(parent)?,
                 dentry_name(name)?,
                 target,
@@ -366,7 +417,7 @@ fn execute(server: &Server, request: MetadataRpcRequest) -> Result<MetadataRpcRe
             gid,
         } => {
             let file_type = decode_file_type(&file_type).map_err(protocol_error)?;
-            let entry = server.service().create_special_node(
+            let entry = slot.service().create_special_node(
                 inode_id(parent)?,
                 dentry_name(name)?,
                 SpecialNodeSpec {
@@ -386,7 +437,7 @@ fn execute(server: &Server, request: MetadataRpcRequest) -> Result<MetadataRpcRe
             name,
             changes,
         } => {
-            let entry = server.service().update_attrs(
+            let entry = slot.service().update_attrs(
                 inode_id(parent)?,
                 &dentry_name(name)?,
                 update_attr(changes),
@@ -396,7 +447,7 @@ fn execute(server: &Server, request: MetadataRpcRequest) -> Result<MetadataRpcRe
             })
         }
         MetadataRpcRequest::UpdateRootAttrs { changes } => {
-            let attr = server.service().update_root_attrs(update_attr(changes))?;
+            let attr = slot.service().update_root_attrs(update_attr(changes))?;
             Ok(MetadataRpcResult::InodeAttr {
                 attr: Some(nokv_protocol::WireInodeAttr::from_inode_attr(&attr)),
             })
@@ -408,25 +459,24 @@ fn execute(server: &Server, request: MetadataRpcRequest) -> Result<MetadataRpcRe
             mode,
         } => {
             let name = decode_xattr_name(&name_hex).map_err(protocol_error)?;
-            server
-                .service()
+            slot.service()
                 .set_xattr(inode_id(inode)?, &name, value, xattr_set_mode(mode))?;
             Ok(MetadataRpcResult::Unit)
         }
         MetadataRpcRequest::GetXattr { inode, name_hex } => {
             let name = decode_xattr_name(&name_hex).map_err(protocol_error)?;
-            let value = server.service().get_xattr(inode_id(inode)?, &name)?;
+            let value = slot.service().get_xattr(inode_id(inode)?, &name)?;
             Ok(MetadataRpcResult::XattrValue { value })
         }
         MetadataRpcRequest::ListXattr { inode } => {
-            let names = server.service().list_xattr(inode_id(inode)?)?;
+            let names = slot.service().list_xattr(inode_id(inode)?)?;
             Ok(MetadataRpcResult::XattrNames {
                 names_hex: names.iter().map(|name| encode_xattr_name(name)).collect(),
             })
         }
         MetadataRpcRequest::RemoveXattr { inode, name_hex } => {
             let name = decode_xattr_name(&name_hex).map_err(protocol_error)?;
-            server.service().remove_xattr(inode_id(inode)?, &name)?;
+            slot.service().remove_xattr(inode_id(inode)?, &name)?;
             Ok(MetadataRpcResult::Unit)
         }
         MetadataRpcRequest::GetAdvisoryLock {
@@ -437,7 +487,7 @@ fn execute(server: &Server, request: MetadataRpcRequest) -> Result<MetadataRpcRe
             kind,
             pid,
         } => {
-            let lock = server.service().get_advisory_lock(AdvisoryLockRequest {
+            let lock = slot.service().get_advisory_lock(AdvisoryLockRequest {
                 inode: inode_id(inode)?,
                 owner,
                 start,
@@ -459,7 +509,7 @@ fn execute(server: &Server, request: MetadataRpcRequest) -> Result<MetadataRpcRe
             pid,
             wait,
         } => {
-            server.service().set_advisory_lock(AdvisoryLockRequest {
+            slot.service().set_advisory_lock(AdvisoryLockRequest {
                 inode: inode_id(inode)?,
                 owner,
                 start,
@@ -476,7 +526,7 @@ fn execute(server: &Server, request: MetadataRpcRequest) -> Result<MetadataRpcRe
             uid,
             gid,
         } => {
-            let entry = server.service().create_file_path(&path, mode, uid, gid)?;
+            let entry = slot.service().create_file_path(&path, mode, uid, gid)?;
             Ok(MetadataRpcResult::Dentry {
                 entry: Some(Box::new(wire_dentry(&entry))),
             })
@@ -490,6 +540,7 @@ fn execute(server: &Server, request: MetadataRpcRequest) -> Result<MetadataRpcRe
         } => Ok(MetadataRpcResult::Batch {
             results: create_path_batch_envelopes(
                 server,
+                slot,
                 CreatePathKind::File,
                 &parent_path,
                 names,
@@ -499,7 +550,7 @@ fn execute(server: &Server, request: MetadataRpcRequest) -> Result<MetadataRpcRe
             )?,
         }),
         MetadataRpcRequest::RemoveFile { parent, name } => {
-            let entry = server
+            let entry = slot
                 .service()
                 .remove_file(inode_id(parent)?, &dentry_name(name)?)?;
             Ok(MetadataRpcResult::Dentry {
@@ -507,13 +558,13 @@ fn execute(server: &Server, request: MetadataRpcRequest) -> Result<MetadataRpcRe
             })
         }
         MetadataRpcRequest::RemoveFilePath { path } => {
-            let entry = server.service().remove_file_path(&path)?;
+            let entry = slot.service().remove_file_path(&path)?;
             Ok(MetadataRpcResult::Dentry {
                 entry: Some(Box::new(wire_dentry(&entry))),
             })
         }
         MetadataRpcRequest::RemoveEmptyDir { parent, name } => {
-            let entry = server
+            let entry = slot
                 .service()
                 .remove_empty_dir(inode_id(parent)?, &dentry_name(name)?)?;
             Ok(MetadataRpcResult::Dentry {
@@ -521,7 +572,7 @@ fn execute(server: &Server, request: MetadataRpcRequest) -> Result<MetadataRpcRe
             })
         }
         MetadataRpcRequest::RemoveEmptyDirPath { path } => {
-            let entry = server.service().remove_empty_dir_path(&path)?;
+            let entry = slot.service().remove_empty_dir_path(&path)?;
             Ok(MetadataRpcResult::Dentry {
                 entry: Some(Box::new(wire_dentry(&entry))),
             })
@@ -531,7 +582,7 @@ fn execute(server: &Server, request: MetadataRpcRequest) -> Result<MetadataRpcRe
             new_parent,
             new_name,
         } => {
-            let entry = server.service().link(
+            let entry = slot.service().link(
                 inode_id(inode)?,
                 inode_id(new_parent)?,
                 dentry_name(new_name)?,
@@ -546,7 +597,7 @@ fn execute(server: &Server, request: MetadataRpcRequest) -> Result<MetadataRpcRe
             new_parent,
             new_name,
         } => {
-            let entry = server.service().rename(
+            let entry = slot.service().rename(
                 inode_id(parent)?,
                 &dentry_name(name)?,
                 inode_id(new_parent)?,
@@ -560,7 +611,7 @@ fn execute(server: &Server, request: MetadataRpcRequest) -> Result<MetadataRpcRe
             source,
             destination,
         } => {
-            let entry = server.service().rename_path(&source, &destination)?;
+            let entry = slot.service().rename_path(&source, &destination)?;
             Ok(MetadataRpcResult::Dentry {
                 entry: Some(Box::new(wire_dentry(&entry))),
             })
@@ -571,7 +622,7 @@ fn execute(server: &Server, request: MetadataRpcRequest) -> Result<MetadataRpcRe
             new_parent,
             new_name,
         } => {
-            let result = server.service().rename_replace(
+            let result = slot.service().rename_replace(
                 inode_id(parent)?,
                 &dentry_name(name)?,
                 inode_id(new_parent)?,
@@ -589,9 +640,7 @@ fn execute(server: &Server, request: MetadataRpcRequest) -> Result<MetadataRpcRe
             source,
             destination,
         } => {
-            let result = server
-                .service()
-                .rename_replace_path(&source, &destination)?;
+            let result = slot.service().rename_replace_path(&source, &destination)?;
             Ok(MetadataRpcResult::RenameReplace {
                 entry: Box::new(wire_dentry(&result.entry)),
                 replaced: result
@@ -601,13 +650,13 @@ fn execute(server: &Server, request: MetadataRpcRequest) -> Result<MetadataRpcRe
             })
         }
         MetadataRpcRequest::SnapshotSubtree { root } => {
-            let snapshot = server.service().snapshot_subtree(inode_id(root)?)?;
+            let snapshot = slot.service().snapshot_subtree(inode_id(root)?)?;
             Ok(MetadataRpcResult::Snapshot {
                 snapshot: nokv_protocol::WireSnapshotPin::from_snapshot_pin(&snapshot),
             })
         }
         MetadataRpcRequest::SnapshotPin { snapshot_id } => {
-            let snapshot = server.service().snapshot_pin(snapshot_id)?;
+            let snapshot = slot.service().snapshot_pin(snapshot_id)?;
             Ok(MetadataRpcResult::SnapshotPin {
                 snapshot: snapshot
                     .as_ref()
@@ -615,13 +664,13 @@ fn execute(server: &Server, request: MetadataRpcRequest) -> Result<MetadataRpcRe
             })
         }
         MetadataRpcRequest::SnapshotSubtreePath { path } => {
-            let snapshot = server.service().snapshot_subtree_path(&path)?;
+            let snapshot = slot.service().snapshot_subtree_path(&path)?;
             Ok(MetadataRpcResult::Snapshot {
                 snapshot: nokv_protocol::WireSnapshotPin::from_snapshot_pin(&snapshot),
             })
         }
         MetadataRpcRequest::CloneSubtreePath { src_path, dst_path } => {
-            let handle = server
+            let handle = slot
                 .service()
                 .clone_subtree_path_into(&src_path, &dst_path)?;
             Ok(MetadataRpcResult::CloneSubtree {
@@ -630,7 +679,7 @@ fn execute(server: &Server, request: MetadataRpcRequest) -> Result<MetadataRpcRe
             })
         }
         MetadataRpcRequest::DiffSubtrees { a_path, b_path } => {
-            let deltas = server.service().diff_subtrees_path(&a_path, &b_path)?;
+            let deltas = slot.service().diff_subtrees_path(&a_path, &b_path)?;
             Ok(MetadataRpcResult::SubtreeDeltas {
                 deltas: deltas.iter().map(wire_subtree_delta).collect(),
             })
@@ -639,19 +688,18 @@ fn execute(server: &Server, request: MetadataRpcRequest) -> Result<MetadataRpcRe
             target_path,
             snapshot_id,
         } => {
-            server
-                .service()
+            slot.service()
                 .rollback_subtree_path(&target_path, snapshot_id)?;
             Ok(MetadataRpcResult::Unit)
         }
         MetadataRpcRequest::StatPathAtSnapshot { snapshot_id, path } => {
-            let metadata = server.service().stat_path_at_snapshot(snapshot_id, &path)?;
+            let metadata = slot.service().stat_path_at_snapshot(snapshot_id, &path)?;
             Ok(MetadataRpcResult::PathMetadata {
                 metadata: metadata.as_ref().map(WirePathMetadata::from_path_metadata),
             })
         }
         MetadataRpcRequest::ReadDirPlusPathAtSnapshot { snapshot_id, path } => {
-            let entries = server
+            let entries = slot
                 .service()
                 .read_dir_plus_path_at_snapshot(snapshot_id, &path)?;
             Ok(MetadataRpcResult::Dentries {
@@ -659,14 +707,14 @@ fn execute(server: &Server, request: MetadataRpcRequest) -> Result<MetadataRpcRe
             })
         }
         MetadataRpcRequest::RetireSnapshot { snapshot_id } => {
-            let retired = server.service().retire_snapshot(snapshot_id)?;
+            let retired = slot.service().retire_snapshot(snapshot_id)?;
             Ok(MetadataRpcResult::RetiredSnapshot { retired })
         }
         MetadataRpcRequest::RenewSnapshot {
             snapshot_id,
             lease_ms,
         } => {
-            let renewed = server.service().renew_snapshot(snapshot_id, lease_ms)?;
+            let renewed = slot.service().renew_snapshot(snapshot_id, lease_ms)?;
             Ok(MetadataRpcResult::RenewedSnapshot { renewed })
         }
         MetadataRpcRequest::OpenPathReadPlan {
@@ -681,13 +729,23 @@ fn execute(server: &Server, request: MetadataRpcRequest) -> Result<MetadataRpcRe
                 ))
             })?;
             let open =
-                server
-                    .service()
+                slot.service()
                     .open_path_read_plan(&path, offset, len, expected_generation)?;
+            let open = wire_open_path_read_plan(&open);
             Ok(MetadataRpcResult::OpenPathReadPlan {
-                metadata: WirePathMetadata::from_path_metadata(&open.metadata),
-                lease: nokv_protocol::WireReadLease::from_read_lease(&open.lease),
-                plan: wire_body_read_plan(&open.plan),
+                metadata: open.metadata,
+                lease: open.lease,
+                plan: open.plan,
+            })
+        }
+        MetadataRpcRequest::OpenPathReadPlanBatch { requests } => {
+            let requests = requests
+                .into_iter()
+                .map(open_path_read_plan_request)
+                .collect::<Result<Vec<_>, _>>()?;
+            let plans = slot.service().open_path_read_plan_batch(&requests)?;
+            Ok(MetadataRpcResult::OpenPathReadPlanBatch {
+                plans: plans.iter().map(wire_open_path_read_plan).collect(),
             })
         }
         MetadataRpcRequest::ReadBodyPlan {
@@ -701,16 +759,15 @@ fn execute(server: &Server, request: MetadataRpcRequest) -> Result<MetadataRpcRe
                     "body read length exceeds platform limit".to_owned(),
                 ))
             })?;
-            let plan =
-                server
-                    .service()
-                    .read_file_plan(inode_id(inode)?, generation, offset, len)?;
+            let plan = slot
+                .service()
+                .read_file_plan(inode_id(inode)?, generation, offset, len)?;
             Ok(MetadataRpcResult::BodyReadPlan {
                 plan: wire_body_read_plan(&plan),
             })
         }
         MetadataRpcRequest::ReadArtifactPathAtSnapshot { snapshot_id, path } => {
-            let bytes = server
+            let bytes = slot
                 .service()
                 .read_artifact_path_at_snapshot(snapshot_id, &path)?;
             Ok(MetadataRpcResult::FileBytes { bytes })
@@ -727,8 +784,7 @@ fn execute(server: &Server, request: MetadataRpcRequest) -> Result<MetadataRpcRe
                 ))
             })?;
             let bytes =
-                server
-                    .service()
+                slot.service()
                     .read_file_path_at_snapshot(snapshot_id, &path, offset, len)?;
             Ok(MetadataRpcResult::FileBytes { bytes })
         }
@@ -743,20 +799,17 @@ fn execute(server: &Server, request: MetadataRpcRequest) -> Result<MetadataRpcRe
                     "snapshot read length exceeds platform limit".to_owned(),
                 ))
             })?;
-            let bytes = server.service().read_file_at_snapshot(
-                snapshot_id,
-                inode_id(inode)?,
-                offset,
-                len,
-            )?;
+            let bytes =
+                slot.service()
+                    .read_file_at_snapshot(snapshot_id, inode_id(inode)?, offset, len)?;
             Ok(MetadataRpcResult::FileBytes { bytes })
         }
         MetadataRpcRequest::ReadSymlink { inode } => {
-            let bytes = server.service().read_symlink(inode_id(inode)?)?;
+            let bytes = slot.service().read_symlink(inode_id(inode)?)?;
             Ok(MetadataRpcResult::FileBytes { bytes })
         }
         MetadataRpcRequest::ReadSymlinkAtSnapshot { snapshot_id, inode } => {
-            let bytes = server
+            let bytes = slot
                 .service()
                 .read_symlink_at_snapshot(snapshot_id, inode_id(inode)?)?;
             Ok(MetadataRpcResult::FileBytes { bytes })
@@ -768,26 +821,24 @@ fn execute(server: &Server, request: MetadataRpcRequest) -> Result<MetadataRpcRe
         } => {
             let name = dentry_name(name)?;
             let prepared = if replace {
-                server
-                    .service()
+                slot.service()
                     .prepare_artifact_replace(inode_id(parent)?, name)?
             } else {
-                server
-                    .service()
+                slot.service()
                     .prepare_artifact_create(inode_id(parent)?, name)?
             };
             Ok(MetadataRpcResult::PreparedArtifact {
-                prepared: wire_prepared_artifact(server.service().mount_id(), &prepared),
+                prepared: wire_prepared_artifact(slot.service().mount_id(), &prepared),
             })
         }
         MetadataRpcRequest::PrepareArtifactPath { path, replace } => {
             let prepared = if replace {
-                server.service().prepare_artifact_replace_path(&path)?
+                slot.service().prepare_artifact_replace_path(&path)?
             } else {
-                server.service().prepare_artifact_create_path(&path)?
+                slot.service().prepare_artifact_create_path(&path)?
             };
             Ok(MetadataRpcResult::PreparedArtifact {
-                prepared: wire_prepared_artifact(server.service().mount_id(), &prepared),
+                prepared: wire_prepared_artifact(slot.service().mount_id(), &prepared),
             })
         }
         MetadataRpcRequest::PublishPreparedArtifact {
@@ -798,12 +849,12 @@ fn execute(server: &Server, request: MetadataRpcRequest) -> Result<MetadataRpcRe
             uid,
             gid,
         } => {
-            if prepared.mount != server.service().mount_id().get() {
+            if prepared.mount != slot.service().mount_id().get() {
                 return Err(ServerError::Metadata(MetadError::Codec(
                     "prepared artifact mount does not match server mount".to_owned(),
                 )));
             }
-            let result = server.service().publish_prepared_artifact(
+            let result = slot.service().publish_prepared_artifact(
                 prepared_artifact(prepared)?,
                 (*body).into_body_descriptor(),
                 chunks
@@ -835,13 +886,13 @@ fn execute(server: &Server, request: MetadataRpcRequest) -> Result<MetadataRpcRe
             uid,
             gid,
         } => {
-            if prepared.mount != server.service().mount_id().get() {
+            if prepared.mount != slot.service().mount_id().get() {
                 return Err(ServerError::Metadata(MetadError::Codec(
                     "prepared artifact mount does not match server mount".to_owned(),
                 )));
             }
             let prepared = prepared_artifact(prepared)?;
-            let result = server.service().publish_prepared_artifact_staged_session(
+            let result = slot.service().publish_prepared_artifact_staged_session(
                 prepared.clone(),
                 PublishArtifactStagedSession {
                     parent: prepared.parent,
@@ -876,6 +927,22 @@ fn execute(server: &Server, request: MetadataRpcRequest) -> Result<MetadataRpcRe
     }
 }
 
+fn open_path_read_plan_request(
+    request: WireOpenPathReadPlanRequest,
+) -> Result<OpenPathReadPlanRequest, ServerError> {
+    let len = usize::try_from(request.len).map_err(|_| {
+        ServerError::Metadata(MetadError::Codec(
+            "path read length exceeds platform limit".to_owned(),
+        ))
+    })?;
+    Ok(OpenPathReadPlanRequest {
+        path: request.path,
+        offset: request.offset,
+        len,
+        expected_generation: request.expected_generation,
+    })
+}
+
 fn refreshes_metadata_view(request: &MetadataRpcRequest) -> bool {
     match request {
         MetadataRpcRequest::Batch { requests } => requests.iter().any(refreshes_metadata_view),
@@ -907,12 +974,14 @@ fn refreshes_metadata_view(request: &MetadataRpcRequest) -> bool {
         | MetadataRpcRequest::GetXattr { .. }
         | MetadataRpcRequest::ListXattr { .. }
         | MetadataRpcRequest::OpenPathReadPlan { .. }
+        | MetadataRpcRequest::OpenPathReadPlanBatch { .. }
         | MetadataRpcRequest::ReadBodyPlan { .. }
         | MetadataRpcRequest::ReadArtifactPathAtSnapshot { .. }
         | MetadataRpcRequest::DiffSubtrees { .. }
         | MetadataRpcRequest::SnapshotPin { .. } => true,
         MetadataRpcRequest::BootstrapRoot { .. }
         | MetadataRpcRequest::CreateDir { .. }
+        | MetadataRpcRequest::CreateGraft { .. }
         | MetadataRpcRequest::CreateDirPath { .. }
         | MetadataRpcRequest::CreateFile { .. }
         | MetadataRpcRequest::CreateFilePrepared { .. }
@@ -926,6 +995,7 @@ fn refreshes_metadata_view(request: &MetadataRpcRequest) -> bool {
         | MetadataRpcRequest::RemoveXattr { .. }
         | MetadataRpcRequest::CreateFilePath { .. }
         | MetadataRpcRequest::CreateFilesInDirPath { .. }
+        | MetadataRpcRequest::RemoveGraft { .. }
         | MetadataRpcRequest::RemoveFile { .. }
         | MetadataRpcRequest::RemoveFilePath { .. }
         | MetadataRpcRequest::RemoveEmptyDir { .. }
@@ -945,6 +1015,13 @@ fn refreshes_metadata_view(request: &MetadataRpcRequest) -> bool {
         | MetadataRpcRequest::PrepareArtifactPath { .. }
         | MetadataRpcRequest::PublishPreparedArtifact { .. }
         | MetadataRpcRequest::PublishPreparedArtifactStagedSession { .. } => false,
+    }
+}
+
+fn commits_metadata_view(request: &MetadataRpcRequest) -> bool {
+    match request {
+        MetadataRpcRequest::Batch { requests } => requests.iter().any(commits_metadata_view),
+        request => !refreshes_metadata_view(request),
     }
 }
 

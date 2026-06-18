@@ -13,6 +13,9 @@ pub struct InodeId(NonZeroU64);
 pub enum ModelError {
     ZeroMountId,
     ZeroInodeId,
+    /// A shard-local inode number was 0 or exceeded the local-bits range, so it
+    /// cannot be composed into a globally-unique inode id.
+    InodeLocalOutOfRange,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -132,6 +135,10 @@ pub struct BodyDescriptor {
     pub content_type: String,
     pub manifest_id: String,
     pub generation: u64,
+    /// Generation to fall through to for chunks this (sparse) generation did
+    /// not rewrite. `0` means self-contained (a fresh write or a compacted
+    /// generation that re-materialized every chunk).
+    pub base_generation: u64,
     pub chunk_size: u64,
     pub block_size: u64,
 }
@@ -287,6 +294,18 @@ impl MountId {
 impl InodeId {
     pub const ROOT_RAW: u64 = 1;
 
+    /// High bits of an inode id reserved for the owning shard index, so an inode
+    /// is globally unique across shards *and* self-routing: the owning shard is
+    /// recoverable directly from the id (`shard_index`), which is what lets
+    /// bare-inode RPCs route without a lookup.
+    pub const SHARD_BITS: u32 = 16;
+    /// Low bits available for a shard-local inode number.
+    pub const LOCAL_BITS: u32 = u64::BITS - Self::SHARD_BITS;
+    /// Largest representable shard index.
+    pub const MAX_SHARD_INDEX: u16 = u16::MAX;
+    /// Largest representable shard-local inode number.
+    pub const MAX_LOCAL: u64 = (1u64 << Self::LOCAL_BITS) - 1;
+
     pub fn new(id: u64) -> Result<Self, ModelError> {
         NonZeroU64::new(id).map(Self).ok_or(ModelError::ZeroInodeId)
     }
@@ -298,6 +317,28 @@ impl InodeId {
     pub fn get(self) -> u64 {
         self.0.get()
     }
+
+    /// Compose a globally-unique inode id from a shard index and a shard-local
+    /// inode number. Shard 0 is the default/root shard, for which this is the
+    /// identity on `local` — so existing single-shard ids are unchanged and the
+    /// root stays global id 1. `local` must be in `1..=MAX_LOCAL`.
+    pub fn compose(shard_index: u16, local: u64) -> Result<Self, ModelError> {
+        if local == 0 || local > Self::MAX_LOCAL {
+            return Err(ModelError::InodeLocalOutOfRange);
+        }
+        let raw = ((shard_index as u64) << Self::LOCAL_BITS) | local;
+        Self::new(raw)
+    }
+
+    /// The shard index encoded in the high bits of this inode id.
+    pub fn shard_index(self) -> u16 {
+        (self.get() >> Self::LOCAL_BITS) as u16
+    }
+
+    /// The shard-local inode number in the low bits.
+    pub fn local(self) -> u64 {
+        self.get() & Self::MAX_LOCAL
+    }
 }
 
 impl fmt::Display for ModelError {
@@ -305,6 +346,9 @@ impl fmt::Display for ModelError {
         match self {
             Self::ZeroMountId => write!(f, "mount id must be non-zero"),
             Self::ZeroInodeId => write!(f, "inode id must be non-zero"),
+            Self::InodeLocalOutOfRange => {
+                write!(f, "shard-local inode number is zero or out of range")
+            }
         }
     }
 }

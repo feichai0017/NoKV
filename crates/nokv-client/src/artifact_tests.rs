@@ -41,6 +41,7 @@ fn spawn_test_server() -> SocketAddr {
             limit: 128,
             run_immediately: false,
         },
+        control: None,
     })
     .unwrap();
     thread::spawn(move || {

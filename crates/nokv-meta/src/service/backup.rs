@@ -44,6 +44,14 @@ pub struct MetadataBackupOutcome {
     pub image_bytes: u64,
     pub commit_version: u64,
     pub pruned: usize,
+    /// Logical-log position the image is consistent with, captured atomically
+    /// with the image so a published `CheckpointRef` never claims an LSN beyond
+    /// the image content (which would silently drop an acknowledged write on
+    /// restore). `log_lsn` is a safe lower bound: the image always contains at
+    /// least every command up to `log_lsn`, so replaying segments above it is at
+    /// worst redundant (idempotent via command dedupe), never lossy.
+    pub log_lsn: u64,
+    pub log_digest: [u8; 32],
 }
 
 /// Result of restoring the namespace from the archive.
@@ -83,6 +91,17 @@ where
             .backup_gate
             .lock()
             .unwrap_or_else(|err| err.into_inner());
+
+        // Capture the logical-log boundary BEFORE exporting the image. Commits
+        // apply to the engine before they archive (so durable_lsn <= applied
+        // set), which makes this a safe lower bound: the image is guaranteed to
+        // contain at least everything up to (log_lsn, log_digest). Reading it
+        // after the export (as the server used to) could capture an LSN beyond
+        // the image and lose that write on restore.
+        let (log_lsn, log_digest) = self
+            .sync_metadata_log_snapshot()
+            .map(|snapshot| (snapshot.durable_lsn, snapshot.last_digest))
+            .unwrap_or((0, crate::METADATA_LOG_ZERO_DIGEST));
 
         // Fold the WAL into a durable checkpoint, then export that image.
         self.metadata.checkpoint()?;
@@ -137,6 +156,8 @@ where
             image_bytes: image_size,
             commit_version,
             pruned,
+            log_lsn,
+            log_digest,
         })
     }
 

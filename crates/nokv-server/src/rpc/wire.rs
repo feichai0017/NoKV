@@ -28,8 +28,9 @@ use nokv_protocol::{
     WireNamespaceQueryCatalog, WireNamespaceReadFormat, WireNamespaceReadItem,
     WireNamespaceReadOptions, WireNamespaceReadPage, WireNamespaceRecordCount,
     WireNamespaceRecordType, WireNamespaceSchema, WireNamespaceSort, WireNamespaceSortDirection,
-    WireNamespaceSortField, WireObjectReadBlock, WirePreparedArtifact, WireRecordCountProvenance,
-    WireStagedObjectSet, WireSubtreeDelta, WireSubtreeDeltaKind, WireUpdateAttr, WireXattrSetMode,
+    WireNamespaceSortField, WireObjectReadBlock, WireOpenPathReadPlan, WirePathMetadata,
+    WirePreparedArtifact, WireReadLease, WireRecordCountProvenance, WireStagedObjectSet,
+    WireSubtreeDelta, WireSubtreeDeltaKind, WireUpdateAttr, WireXattrSetMode,
 };
 use nokv_types::{DentryName, InodeId, MountId};
 
@@ -62,6 +63,13 @@ pub(super) fn wire_server_error(err: &ServerError) -> WireMetadataError {
         ServerError::Object(err) => WireMetadataError::Object {
             message: err.to_string(),
         },
+        ServerError::Control(err) => WireMetadataError::Metadata {
+            message: err.to_string(),
+        },
+        ServerError::NotOwner { shard_id, endpoint } => WireMetadataError::NotOwner {
+            shard_id: shard_id.clone(),
+            endpoint: endpoint.clone(),
+        },
         ServerError::Metadata(err) => wire_metad_error(err),
     }
 }
@@ -84,6 +92,26 @@ fn wire_metad_error(err: &MetadError) -> WireMetadataError {
                 current: *current,
             }
         }
+        MetadError::StaleOwnerEpoch {
+            owner_epoch,
+            required_epoch,
+        } => WireMetadataError::StaleOwnerEpoch {
+            owner_epoch: *owner_epoch,
+            required_epoch: *required_epoch,
+        },
+        MetadError::LeaseExpired {
+            now_ms,
+            deadline_ms,
+        } => WireMetadataError::LeaseExpired {
+            now_ms: *now_ms,
+            deadline_ms: *deadline_ms,
+        },
+        MetadError::SyncLogArchiveFailed { committed, message } => {
+            WireMetadataError::SyncLogArchiveFailed {
+                committed: *committed,
+                message: message.clone(),
+            }
+        }
         MetadError::LockConflict(lock) => WireMetadataError::LockConflict {
             lock: WireAdvisoryLock::from_advisory_lock(lock),
         },
@@ -96,7 +124,16 @@ fn wire_metad_error(err: &MetadError) -> WireMetadataError {
         MetadError::NotFound => WireMetadataError::NotFound,
         MetadError::NotFile => WireMetadataError::NotFile,
         MetadError::NotDirectory => WireMetadataError::NotDirectory,
+        MetadError::DirectoryNotEmpty => WireMetadataError::DirectoryNotEmpty,
         MetadError::MissingBodyDescriptor => WireMetadataError::MissingBodyDescriptor,
+        MetadError::CrossShard {
+            source_shard,
+            dest_shard,
+        } => WireMetadataError::CrossShard {
+            source_shard: *source_shard,
+            dest_shard: *dest_shard,
+        },
+        MetadError::GraftPoint => WireMetadataError::GraftPoint,
         other => WireMetadataError::Metadata {
             message: other.to_string(),
         },
@@ -215,6 +252,14 @@ pub(super) fn wire_body_read_plan(plan: &nokv_meta::BodyReadPlan) -> WireBodyRea
     }
 }
 
+pub(super) fn wire_open_path_read_plan(open: &nokv_meta::OpenPathReadPlan) -> WireOpenPathReadPlan {
+    WireOpenPathReadPlan {
+        metadata: WirePathMetadata::from_path_metadata(&open.metadata),
+        lease: WireReadLease::from_read_lease(&open.lease),
+        plan: wire_body_read_plan(&open.plan),
+    }
+}
+
 pub(super) fn wire_namespace_card(card: &NamespaceCard) -> WireNamespaceCard {
     WireNamespaceCard {
         path: card.path.clone(),
@@ -239,6 +284,10 @@ pub(super) fn wire_namespace_card(card: &NamespaceCard) -> WireNamespaceCard {
                 content_type: body.content_type.clone(),
                 manifest_id: body.manifest_id.clone(),
                 generation: body.generation,
+                // Namespace cards are an informational projection and do not
+                // carry the data-plane fallthrough chain; reads resolve it
+                // server-side, never from a card.
+                base_generation: 0,
                 chunk_size: body.chunk_size,
                 block_size: body.block_size,
             }),

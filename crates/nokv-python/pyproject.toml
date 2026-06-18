@@ -1,0 +1,20 @@
+[build-system]
+requires = ["maturin>=1,<2"]
+build-backend = "maturin"
+
+[project]
+name = "nokv"
+version = "0.1.0"
+description = "NoKV Python SDK and fsspec binding for AI training workflows."
+requires-python = ">=3.9"
+dependencies = ["fsspec>=2024.0.0"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Rust",
+    "Topic :: System :: Filesystems",
+]
+
+[tool.maturin]
+module-name = "nokv._native"
+python-source = "python"
+features = ["extension-module"]

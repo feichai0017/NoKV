@@ -18,6 +18,8 @@ const DEFAULT_WRITEBACK_CACHE_ITEMS: usize = 16 * 1024;
 const DEFAULT_WRITEBACK_QUEUE_CAPACITY: usize = 256;
 const DEFAULT_WRITEBACK_WORKERS: usize = DEFAULT_S3_MULTIPART_CONCURRENCY;
 const DEFAULT_WRITEBACK_UPLOAD_WORKERS_PER_REQUEST: usize = DEFAULT_WRITEBACK_WORKERS;
+#[cfg(target_os = "macos")]
+const MACOS_DIRECT_IO_SIZE: usize = 1024 * 1024;
 
 #[derive(Clone, Debug)]
 pub struct FuseOptions {
@@ -53,6 +55,12 @@ pub struct FuseWritebackOptions {
     pub queue_capacity: usize,
     pub workers: usize,
     pub upload_workers_per_request: usize,
+    /// Opt-in "ack-on-buffer": `flush`/`release` acknowledge once the write
+    /// blocks are durably staged in the writeback cache and a record is fsync'd
+    /// to the publish journal; the object-store upload + manifest commit complete
+    /// in the background. Trades durability for write-close latency, so it is off
+    /// by default and requires `cache_enabled`.
+    pub async_publish: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -63,6 +71,8 @@ pub struct FuseObjectPipelineStats {
     pub writeback: Option<ObjectWritebackStats>,
     pub tiered_object: Option<TieredObjectStoreStats>,
     pub local_hot: Option<LocalObjectStoreStats>,
+    pub fuse_read_requests: u64,
+    pub fuse_read_request_bytes: u64,
     pub foreground_object_gets: u64,
     pub foreground_object_get_bytes: u64,
     pub foreground_coalesced_gets: u64,
@@ -210,6 +220,7 @@ impl Default for FuseWritebackOptions {
             queue_capacity: DEFAULT_WRITEBACK_QUEUE_CAPACITY,
             workers: DEFAULT_WRITEBACK_WORKERS,
             upload_workers_per_request: DEFAULT_WRITEBACK_UPLOAD_WORKERS_PER_REQUEST,
+            async_publish: false,
         }
     }
 }
@@ -232,6 +243,12 @@ pub(super) fn mount_options(options: &FuseOptions) -> Vec<MountOption> {
         // `com.apple.provenance`, and `cp` copies it). Our xattr store accepts
         // arbitrary names, so those flow through the normal setxattr path instead.
         mount_options.push(MountOption::CUSTOM("noappledouble".to_owned()));
+        if options.direct_io {
+            mount_options.push(MountOption::CUSTOM("direct_io".to_owned()));
+            mount_options.push(MountOption::CUSTOM(format!(
+                "iosize={MACOS_DIRECT_IO_SIZE}"
+            )));
+        }
     }
     #[cfg(not(target_os = "macos"))]
     {

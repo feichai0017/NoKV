@@ -1,0 +1,24 @@
+[package]
+name = "nokv-control"
+version = "0.1.0"
+description = "NoKV control plane shard ownership, epoch fencing, and recovery coordination."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[lib]
+name = "nokv_control"
+path = "src/lib.rs"
+
+[features]
+default = []
+etcd = ["dep:etcd-client", "dep:tokio"]
+
+[dependencies]
+etcd-client = { workspace = true, optional = true }
+serde.workspace = true
+serde_json.workspace = true
+tokio = { workspace = true, optional = true }

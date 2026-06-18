@@ -10,13 +10,18 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use nokv_client::{ArtifactMetadata, MetadataClient, MetadataClientOptions, NoKvFsClient};
+use nokv_control::EtcdControlStoreOptions;
 use nokv_meta::{HistoryGcOptions, ObjectGcOptions, SubtreeDeltaKind};
 use nokv_object::{
     BlockCachePolicy, ConfiguredObjectStore, DiskBlockCacheOptions, FileReadPipelineOptions,
     HotFillMode, LocalObjectStoreOptions, MemoryBlockCacheOptions, ObjectKey, ObjectStoreConfig,
     S3ObjectStoreOptions, TieredObjectStoreOptions,
 };
-use nokv_server::{ServerOptions, DEFAULT_METADATA_CHECKPOINT_ARCHIVE_PREFIX, DEFAULT_SERVER_BIND};
+use nokv_server::{
+    ServerControlOptions, ServerControlStoreOptions, ServerOptions, ServerShardOwnerOptions,
+    ServerShardOwnerRenewalOptions, ServerSharedLogOptions,
+    DEFAULT_METADATA_CHECKPOINT_ARCHIVE_PREFIX, DEFAULT_SERVER_BIND,
+};
 use nokv_types::{FileType, MountId};
 use sha2::{Digest, Sha256};
 
@@ -39,6 +44,7 @@ struct Config {
     history_gc_interval: Duration,
     history_gc_limit: usize,
     server_bind: SocketAddr,
+    control: Option<ServerControlOptions>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -47,12 +53,40 @@ enum ObjectBackendKind {
     RustFs,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum ControlBackendKind {
+    #[default]
+    None,
+    Etcd,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ControlCliConfig {
+    backend: ControlBackendKind,
+    etcd_endpoints: Option<Vec<String>>,
+    etcd_key_prefix: Option<String>,
+    etcd_lease_ttl_seconds: Option<i64>,
+    shard_id: Option<String>,
+    shard_index: Option<u16>,
+    node_id: Option<String>,
+    failover_from_epoch: Option<u64>,
+    renewal: Option<ServerShardOwnerRenewalOptions>,
+    shared_log_prefix: Option<String>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Command {
     Init,
     Mkdir {
         path: String,
     },
+    RegisterGraft {
+        prefix: String,
+    },
+    UnregisterGraft {
+        prefix: String,
+    },
+    ReconcileGrafts,
     PutArtifact {
         path: String,
         source: PathBuf,
@@ -145,6 +179,7 @@ enum CliError {
     MissingArgument(&'static str),
     TooManyArguments,
     InvalidMount(String),
+    InvalidOption { field: &'static str, value: String },
     InvalidAddress { field: &'static str, value: String },
     InvalidNumber { field: &'static str, value: String },
     Io(String),
@@ -167,6 +202,37 @@ impl Default for MountCliOptions {
             read_pipeline: defaults.read_pipeline,
             writeback: defaults.writeback,
         }
+    }
+}
+
+impl Default for ControlCliConfig {
+    fn default() -> Self {
+        Self {
+            backend: ControlBackendKind::None,
+            etcd_endpoints: None,
+            etcd_key_prefix: None,
+            etcd_lease_ttl_seconds: None,
+            shard_id: None,
+            shard_index: None,
+            node_id: None,
+            failover_from_epoch: None,
+            renewal: Some(ServerShardOwnerRenewalOptions::default()),
+            shared_log_prefix: None,
+        }
+    }
+}
+
+impl ControlCliConfig {
+    fn requires_backend(&self) -> bool {
+        self.etcd_endpoints.is_some()
+            || self.etcd_key_prefix.is_some()
+            || self.etcd_lease_ttl_seconds.is_some()
+            || self.shard_id.is_some()
+            || self.shard_index.is_some()
+            || self.node_id.is_some()
+            || self.failover_from_epoch.is_some()
+            || self.renewal != Some(ServerShardOwnerRenewalOptions::default())
+            || self.shared_log_prefix.is_some()
     }
 }
 
@@ -222,6 +288,42 @@ fn run(args: Vec<String>) -> Result<(), CliError> {
                 .mkdir(&path, DEFAULT_MODE_DIR, config.uid, config.gid)
                 .map_err(from_client)?;
             println!("dir {} inode={}", path, entry.attr.inode.get());
+        }
+        Command::RegisterGraft { prefix } => {
+            let client = open_client(&config)?;
+            client
+                .metadata()
+                .bootstrap_root(DEFAULT_MODE_DIR, config.uid, config.gid)
+                .map_err(from_client)?;
+            let entry = client
+                .metadata()
+                .register_graft(&prefix, DEFAULT_MODE_DIR, config.uid, config.gid)
+                .map_err(from_client)?;
+            println!(
+                "graft {} -> inode={} (shard {})",
+                prefix,
+                entry.attr.inode.get(),
+                entry.attr.inode.shard_index()
+            );
+        }
+        Command::UnregisterGraft { prefix } => {
+            let client = open_client(&config)?;
+            client
+                .metadata()
+                .unregister_graft(&prefix)
+                .map_err(from_client)?;
+            println!("unregistered graft {prefix}");
+        }
+        Command::ReconcileGrafts => {
+            let client = open_client(&config)?;
+            let reconciled = client.metadata().reconcile_grafts().map_err(from_client)?;
+            if reconciled.is_empty() {
+                println!("grafts reconciled: none missing");
+            } else {
+                for prefix in reconciled {
+                    println!("reconciled graft {prefix}");
+                }
+            }
         }
         Command::PutArtifact { path, source } => {
             let mut digest_source = fs::File::open(&source).map_err(from_io)?;
@@ -337,7 +439,7 @@ fn run(args: Vec<String>) -> Result<(), CliError> {
             mountpoint,
             options,
         } => {
-            let metadata = MetadataClient::new(MetadataClientOptions::new(config.server_bind));
+            let metadata = open_mount_metadata(&config)?;
             let objects = config.object.open().map_err(from_object)?;
             metadata
                 .bootstrap_root(DEFAULT_MODE_DIR, config.uid, config.gid)
@@ -360,7 +462,7 @@ fn run(args: Vec<String>) -> Result<(), CliError> {
             mountpoint,
             options,
         } => {
-            let metadata = MetadataClient::new(MetadataClientOptions::new(config.server_bind));
+            let metadata = open_mount_metadata(&config)?;
             let objects = config.object.open().map_err(from_object)?;
             let snapshot = metadata
                 .snapshot_pin(snapshot_id)
@@ -383,27 +485,7 @@ fn run(args: Vec<String>) -> Result<(), CliError> {
             mount.join().map_err(from_io)?;
         }
         Command::Serve => {
-            nokv_server::run(ServerOptions {
-                bind: config.server_bind,
-                mount: config.mount,
-                meta_path: config.meta,
-                metadata_checkpoint_archive_prefix: config.metadata_checkpoint_archive_prefix,
-                object: config.object,
-                uid: config.uid,
-                gid: config.gid,
-                object_gc: ObjectGcOptions {
-                    interval: config.object_gc_interval,
-                    limit: config.object_gc_limit,
-                    run_immediately: false,
-                    read_lease_grace: ObjectGcOptions::default().read_lease_grace,
-                },
-                history_gc: HistoryGcOptions {
-                    interval: config.history_gc_interval,
-                    limit: config.history_gc_limit,
-                    run_immediately: false,
-                },
-            })
-            .map_err(from_io)?;
+            nokv_server::run(server_options_from_config(config)).map_err(from_io)?;
         }
         Command::Gc { limit } => {
             let body = control_get(&config, &format!("/gc?limit={limit}"))?;
@@ -414,27 +496,8 @@ fn run(args: Vec<String>) -> Result<(), CliError> {
             print!("{body}");
         }
         Command::Restore => {
-            let report = nokv_server::restore(ServerOptions {
-                bind: config.server_bind,
-                mount: config.mount,
-                meta_path: config.meta,
-                metadata_checkpoint_archive_prefix: config.metadata_checkpoint_archive_prefix,
-                object: config.object,
-                uid: config.uid,
-                gid: config.gid,
-                object_gc: ObjectGcOptions {
-                    interval: config.object_gc_interval,
-                    limit: config.object_gc_limit,
-                    run_immediately: false,
-                    read_lease_grace: ObjectGcOptions::default().read_lease_grace,
-                },
-                history_gc: HistoryGcOptions {
-                    interval: config.history_gc_interval,
-                    limit: config.history_gc_limit,
-                    run_immediately: false,
-                },
-            })
-            .map_err(from_io)?;
+            let report =
+                nokv_server::restore(server_options_from_config(config)).map_err(from_io)?;
             print!("{report}");
         }
         Command::Fsck => {
@@ -528,8 +591,90 @@ fn run(args: Vec<String>) -> Result<(), CliError> {
 
 fn open_client(config: &Config) -> Result<Client, CliError> {
     let objects = config.object.open().map_err(from_object)?;
+    // With an etcd control backend configured, route client requests across the
+    // fleet: each request resolves the owning shard's endpoint from the control
+    // plane and transparently re-resolves on an owner handoff. Without a control
+    // backend this is the single-shard client pinned to `--server-bind`.
+    if let Some(control) = config.control.as_ref() {
+        let ServerControlStoreOptions::Etcd(etcd) = &control.store;
+        return open_fleet_client(etcd.clone(), config.mount, objects);
+    }
     let metadata = MetadataClient::new(MetadataClientOptions::new(config.server_bind));
     Ok(NoKvFsClient::new(metadata, objects))
+}
+
+#[cfg(feature = "etcd")]
+fn open_fleet_client(
+    etcd: EtcdControlStoreOptions,
+    mount: MountId,
+    objects: ConfiguredObjectStore,
+) -> Result<Client, CliError> {
+    use std::sync::Arc;
+    let store: Arc<dyn nokv_control::ControlStore> = Arc::new(
+        nokv_control::EtcdControlStore::connect(etcd).map_err(|err| CliError::InvalidOption {
+            field: "control",
+            value: err.to_string(),
+        })?,
+    );
+    NoKvFsClient::connect_fleet(store, mount, objects).map_err(|err| CliError::InvalidOption {
+        field: "control",
+        value: err.to_string(),
+    })
+}
+
+#[cfg(not(feature = "etcd"))]
+fn open_fleet_client(
+    _etcd: EtcdControlStoreOptions,
+    _mount: MountId,
+    _objects: ConfiguredObjectStore,
+) -> Result<Client, CliError> {
+    Err(CliError::InvalidOption {
+        field: "control",
+        value: "fleet client routing requires the etcd control feature".to_owned(),
+    })
+}
+
+/// Build the metadata client for the FUSE mount. With an etcd control backend it
+/// routes across the fleet (each path resolves its owning shard's endpoint from
+/// the control plane); otherwise it is the single-shard client pinned to
+/// `--server-bind`. Mirrors [`open_client`] for the mount's `MetadataClient`.
+fn open_mount_metadata(config: &Config) -> Result<MetadataClient, CliError> {
+    if let Some(control) = config.control.as_ref() {
+        let ServerControlStoreOptions::Etcd(etcd) = &control.store;
+        return open_fleet_metadata(etcd.clone(), config.mount);
+    }
+    Ok(MetadataClient::new(MetadataClientOptions::new(
+        config.server_bind,
+    )))
+}
+
+#[cfg(feature = "etcd")]
+fn open_fleet_metadata(
+    etcd: EtcdControlStoreOptions,
+    mount: MountId,
+) -> Result<MetadataClient, CliError> {
+    use std::sync::Arc;
+    let store: Arc<dyn nokv_control::ControlStore> = Arc::new(
+        nokv_control::EtcdControlStore::connect(etcd).map_err(|err| CliError::InvalidOption {
+            field: "control",
+            value: err.to_string(),
+        })?,
+    );
+    MetadataClient::fleet(store, mount).map_err(|err| CliError::InvalidOption {
+        field: "control",
+        value: err.to_string(),
+    })
+}
+
+#[cfg(not(feature = "etcd"))]
+fn open_fleet_metadata(
+    _etcd: EtcdControlStoreOptions,
+    _mount: MountId,
+) -> Result<MetadataClient, CliError> {
+    Err(CliError::InvalidOption {
+        field: "control",
+        value: "fleet mount routing requires the etcd control feature".to_owned(),
+    })
 }
 
 fn control_get(config: &Config, path: &str) -> Result<String, CliError> {
@@ -551,6 +696,30 @@ fn control_get(config: &Config, path: &str) -> Result<String, CliError> {
     Ok(body.to_owned())
 }
 
+fn server_options_from_config(config: Config) -> ServerOptions {
+    ServerOptions {
+        bind: config.server_bind,
+        mount: config.mount,
+        meta_path: config.meta,
+        metadata_checkpoint_archive_prefix: config.metadata_checkpoint_archive_prefix,
+        object: config.object,
+        uid: config.uid,
+        gid: config.gid,
+        object_gc: ObjectGcOptions {
+            interval: config.object_gc_interval,
+            limit: config.object_gc_limit,
+            run_immediately: false,
+            read_lease_grace: ObjectGcOptions::default().read_lease_grace,
+        },
+        history_gc: HistoryGcOptions {
+            interval: config.history_gc_interval,
+            limit: config.history_gc_limit,
+            run_immediately: false,
+        },
+        control: config.control,
+    }
+}
+
 fn parse(args: Vec<String>) -> Result<(Config, Command), CliError> {
     let mut meta = PathBuf::from(".nokv/meta");
     let mut metadata_checkpoint_archive_prefix =
@@ -568,6 +737,7 @@ fn parse(args: Vec<String>) -> Result<(Config, Command), CliError> {
     let mut history_gc_interval = HistoryGcOptions::default().interval;
     let mut history_gc_limit = HistoryGcOptions::default().limit;
     let mut server_bind = DEFAULT_SERVER_BIND;
+    let mut control = ControlCliConfig::default();
     let mut index = 0;
     while index < args.len() {
         match args[index].as_str() {
@@ -707,6 +877,81 @@ fn parse(args: Vec<String>) -> Result<(Config, Command), CliError> {
                 server_bind =
                     parse_socket_addr(value(&args, index, "--server-bind")?, "server_bind")?;
             }
+            "--control-backend" => {
+                index += 1;
+                control.backend = parse_control_backend(value(&args, index, "--control-backend")?)?;
+            }
+            "--control-etcd-endpoints" => {
+                index += 1;
+                control.backend = ControlBackendKind::Etcd;
+                control.etcd_endpoints = Some(parse_etcd_endpoints(value(
+                    &args,
+                    index,
+                    "--control-etcd-endpoints",
+                )?)?);
+            }
+            "--control-etcd-prefix" => {
+                index += 1;
+                control.backend = ControlBackendKind::Etcd;
+                control.etcd_key_prefix =
+                    Some(value(&args, index, "--control-etcd-prefix")?.to_owned());
+            }
+            "--control-etcd-lease-ttl-seconds" => {
+                index += 1;
+                control.backend = ControlBackendKind::Etcd;
+                control.etcd_lease_ttl_seconds = Some(parse_positive_i64(
+                    value(&args, index, "--control-etcd-lease-ttl-seconds")?,
+                    "control_etcd_lease_ttl_seconds",
+                )?);
+            }
+            "--shard-id" => {
+                index += 1;
+                control.shard_id = Some(value(&args, index, "--shard-id")?.to_owned());
+            }
+            "--shard-index" => {
+                index += 1;
+                control.shard_index = Some(parse_u16(
+                    value(&args, index, "--shard-index")?,
+                    "shard_index",
+                )?);
+            }
+            "--node-id" => {
+                index += 1;
+                control.node_id = Some(value(&args, index, "--node-id")?.to_owned());
+            }
+            "--failover-from-epoch" => {
+                index += 1;
+                control.failover_from_epoch = Some(parse_u64(
+                    value(&args, index, "--failover-from-epoch")?,
+                    "failover_from_epoch",
+                )?);
+            }
+            "--no-shard-owner-renewal" => {
+                control.renewal = None;
+            }
+            "--shard-owner-renewal-interval-ms" => {
+                index += 1;
+                let interval_ms = parse_u64(
+                    value(&args, index, "--shard-owner-renewal-interval-ms")?,
+                    "shard_owner_renewal_interval_ms",
+                )?;
+                if interval_ms == 0 {
+                    return Err(CliError::InvalidNumber {
+                        field: "shard_owner_renewal_interval_ms",
+                        value: interval_ms.to_string(),
+                    });
+                }
+                if let Some(renewal) = control.renewal.as_mut() {
+                    renewal.interval = Duration::from_millis(interval_ms);
+                }
+            }
+            "--metadata-shared-log-prefix" => {
+                index += 1;
+                control.shared_log_prefix = Some(parse_archive_prefix(
+                    value(&args, index, "--metadata-shared-log-prefix")?,
+                    "--metadata-shared-log-prefix",
+                )?);
+            }
             "--help" | "-h" => {
                 return Ok((
                     Config {
@@ -727,6 +972,7 @@ fn parse(args: Vec<String>) -> Result<(Config, Command), CliError> {
                         history_gc_interval,
                         history_gc_limit,
                         server_bind,
+                        control: None,
                     },
                     Command::Help,
                 ));
@@ -740,6 +986,7 @@ fn parse(args: Vec<String>) -> Result<(Config, Command), CliError> {
     }
 
     let command = parse_command(&args[index..])?;
+    let control = build_control_options(control, mount, server_bind)?;
     Ok((
         Config {
             meta,
@@ -759,6 +1006,7 @@ fn parse(args: Vec<String>) -> Result<(Config, Command), CliError> {
             history_gc_interval,
             history_gc_limit,
             server_bind,
+            control,
         },
         command,
     ))
@@ -769,6 +1017,104 @@ fn parse_object_backend(raw: &str) -> Result<ObjectBackendKind, CliError> {
         "s3" => Ok(ObjectBackendKind::S3),
         "rustfs" => Ok(ObjectBackendKind::RustFs),
         _ => Err(CliError::UnknownOption(format!("--object-backend {raw}"))),
+    }
+}
+
+fn parse_control_backend(raw: &str) -> Result<ControlBackendKind, CliError> {
+    match raw {
+        "none" => Ok(ControlBackendKind::None),
+        "etcd" => Ok(ControlBackendKind::Etcd),
+        _ => Err(CliError::UnknownOption(format!("--control-backend {raw}"))),
+    }
+}
+
+fn parse_etcd_endpoints(raw: &str) -> Result<Vec<String>, CliError> {
+    let endpoints = raw
+        .split(',')
+        .map(str::trim)
+        .filter(|endpoint| !endpoint.is_empty())
+        .map(ToOwned::to_owned)
+        .collect::<Vec<_>>();
+    if endpoints.is_empty() {
+        return Err(CliError::InvalidOption {
+            field: "control_etcd_endpoints",
+            value: raw.to_owned(),
+        });
+    }
+    Ok(endpoints)
+}
+
+fn parse_positive_i64(raw: &str, field: &'static str) -> Result<i64, CliError> {
+    let value = parse_u64(raw, field)?;
+    if value == 0 || value > i64::MAX as u64 {
+        return Err(CliError::InvalidNumber {
+            field,
+            value: raw.to_owned(),
+        });
+    }
+    Ok(value as i64)
+}
+
+fn build_control_options(
+    control: ControlCliConfig,
+    mount: MountId,
+    server_bind: SocketAddr,
+) -> Result<Option<ServerControlOptions>, CliError> {
+    match control.backend {
+        ControlBackendKind::None => {
+            if control.requires_backend() {
+                return Err(CliError::InvalidOption {
+                    field: "control",
+                    value: "control owner options require --control-backend etcd".to_owned(),
+                });
+            }
+            Ok(None)
+        }
+        ControlBackendKind::Etcd => {
+            let mut store =
+                EtcdControlStoreOptions::new(control.etcd_endpoints.unwrap_or_default());
+            if let Some(prefix) = control.etcd_key_prefix {
+                store = store.with_key_prefix(prefix);
+            }
+            if let Some(ttl_seconds) = control.etcd_lease_ttl_seconds {
+                store = store.with_lease_ttl_seconds(ttl_seconds);
+            }
+            store.validate().map_err(|err| CliError::InvalidOption {
+                field: "control",
+                value: err.to_string(),
+            })?;
+
+            // Couple renewal + self-fence to the etcd lease TTL: renew at most
+            // every TTL/3 (>=1s) so a short TTL never lapses before renewal, and
+            // arm the wall-clock self-fence exactly at the lease TTL so a
+            // partitioned owner stops committing no later than etcd expires it.
+            // A user-set faster interval is respected (we only shrink, never grow).
+            let renewal = control.renewal.map(|mut renewal| {
+                let ttl = Duration::from_secs(store.lease_ttl_seconds().max(1) as u64);
+                renewal.lease_ttl = ttl;
+                renewal.interval = renewal.interval.min((ttl / 3).max(Duration::from_secs(1)));
+                renewal
+            });
+
+            let shard_id = control
+                .shard_id
+                .unwrap_or_else(|| format!("mount-{}:/", mount.get()));
+            let node_id = control.node_id.unwrap_or_else(|| server_bind.to_string());
+            let shard_owner = match control.failover_from_epoch {
+                Some(previous_epoch) => {
+                    ServerShardOwnerOptions::failover(shard_id, node_id, previous_epoch)
+                }
+                None => ServerShardOwnerOptions::fresh(shard_id, node_id),
+            }
+            .with_renewal(renewal)
+            .with_shared_log(control.shared_log_prefix.map(ServerSharedLogOptions::new))
+            .with_shard_index(control.shard_index);
+
+            Ok(Some(ServerControlOptions {
+                store: ServerControlStoreOptions::Etcd(store),
+                shard_owner,
+            }))
+        }
     }
 }
 
@@ -846,6 +1192,13 @@ fn parse_command(args: &[String]) -> Result<Command, CliError> {
         "mkdir" => exact_args(args, 2).map(|()| Command::Mkdir {
             path: args[1].clone(),
         }),
+        "register-graft" => exact_args(args, 2).map(|()| Command::RegisterGraft {
+            prefix: args[1].clone(),
+        }),
+        "unregister-graft" => exact_args(args, 2).map(|()| Command::UnregisterGraft {
+            prefix: args[1].clone(),
+        }),
+        "reconcile-grafts" => exact_args(args, 1).map(|()| Command::ReconcileGrafts),
         "put-artifact" => exact_args(args, 3).map(|()| Command::PutArtifact {
             path: args[1].clone(),
             source: PathBuf::from(&args[2]),
@@ -1160,6 +1513,10 @@ fn parse_mount_args(
                 options.writeback.cache_enabled = true;
                 index += 1;
             }
+            "--writeback-async-publish" => {
+                options.writeback.async_publish = true;
+                index += 1;
+            }
             "--writeback-cache-dir" => {
                 index += 1;
                 options.writeback.root =
@@ -1217,6 +1574,14 @@ fn parse_mount_args(
             }
         }
     }
+    if options.writeback.async_publish && !options.writeback.cache_enabled {
+        // Async-publish acks on a durable cache+journal write; it cannot run on
+        // the in-memory write buffer, so it requires --writeback-cache.
+        return Err(CliError::InvalidOption {
+            field: "writeback_async_publish",
+            value: "requires --writeback-cache".to_owned(),
+        });
+    }
     let mountpoint = mountpoint.ok_or(CliError::MissingArgument("mountpoint"))?;
     Ok((options, mountpoint))
 }
@@ -1226,6 +1591,7 @@ fn exact_args(args: &[String], expected: usize) -> Result<(), CliError> {
         return Err(CliError::MissingArgument(
             match args.first().map(String::as_str) {
                 Some("mkdir") | Some("ls") | Some("cat") | Some("rm") | Some("rmdir") => "path",
+                Some("register-graft") | Some("unregister-graft") => "prefix",
                 Some("put-artifact") => "path and source",
                 Some("snapshot") => "path",
                 Some("cat-snapshot") => "snapshot id and path",
@@ -1250,6 +1616,13 @@ fn value<'a>(args: &'a [String], index: usize, option: &'static str) -> Result<&
     args.get(index)
         .map(String::as_str)
         .ok_or(CliError::MissingValue(option))
+}
+
+fn parse_u16(raw: &str, field: &'static str) -> Result<u16, CliError> {
+    raw.parse::<u16>().map_err(|_| CliError::InvalidNumber {
+        field,
+        value: raw.to_owned(),
+    })
 }
 
 fn parse_u32(raw: &str, field: &'static str) -> Result<u32, CliError> {
@@ -1342,6 +1715,9 @@ fn print_help(out: &mut impl Write) -> io::Result<()> {
 Usage:\n\
   nokv [--server-bind ADDR] [--object-backend s3|rustfs] [--mount ID] init\n\
   nokv [--server-bind ADDR] [--object-backend s3|rustfs] [--mount ID] mkdir PATH\n\
+  nokv [--server-bind ADDR] [--object-backend s3|rustfs] [--mount ID] register-graft PREFIX\n\
+  nokv [--server-bind ADDR] [--object-backend s3|rustfs] [--mount ID] unregister-graft PREFIX\n\
+  nokv [--server-bind ADDR] [--object-backend s3|rustfs] [--mount ID] reconcile-grafts\n\
   nokv [--server-bind ADDR] [--object-backend s3|rustfs] [--mount ID] put-artifact PATH SOURCE\n\
   nokv [--server-bind ADDR] [--object-backend s3|rustfs] [--mount ID] ls PATH\n\
   nokv [--server-bind ADDR] [--object-backend s3|rustfs] [--mount ID] cat PATH\n\
@@ -1351,7 +1727,7 @@ Usage:\n\
   nokv [--server-bind ADDR] [--object-backend s3|rustfs] [--mount ID] rename-replace SOURCE DESTINATION\n\
   nokv [--server-bind ADDR] [--object-backend s3|rustfs] [--mount ID] mount [--read-only] [--no-kernel-cache] [--direct-io] [--entry-ttl-ms MS] [--attr-ttl-ms MS] [--writeback-cache] MOUNTPOINT\n\
   nokv [--server-bind ADDR] [--object-backend s3|rustfs] [--mount ID] mount-snapshot SNAPSHOT_ID [--no-kernel-cache] [--direct-io] [--entry-ttl-ms MS] [--attr-ttl-ms MS] [--writeback-cache] MOUNTPOINT\n\
-  nokv [--meta PATH] [--object-backend s3|rustfs] [--mount ID] serve\n\
+  nokv [--meta PATH] [--object-backend s3|rustfs] [--mount ID] [--control-backend etcd] serve\n\
   nokv [--server-bind ADDR] [--object-backend s3|rustfs] [--mount ID] backup\n\
   nokv [--meta PATH] [--object-backend s3|rustfs] [--mount ID] restore\n\
   nokv [--server-bind ADDR] [--object-backend s3|rustfs] [--mount ID] fsck\n\
@@ -1381,6 +1757,24 @@ Object backends:\n\
   --history-gc-limit LIMIT         Max history records removed per GC iteration\n\
   --server-bind ADDR              Metadata service address for client commands and serve bind\n\
 \n\
+Control plane options:\n\
+  --control-backend none|etcd       Shard ownership backend for serve; default none\n\
+  --control-etcd-endpoints URLS     Comma-separated etcd endpoints; implies --control-backend etcd\n\
+  --control-etcd-prefix PREFIX      etcd key prefix; default /nokv/control\n\
+  --control-etcd-lease-ttl-seconds N\n\
+                                    etcd owner lease TTL in seconds; default 10\n\
+  --shard-id ID                     Metadata shard id; default mount-<mount>:/\n\
+  --shard-index N                   Stable shard index this process registers and owns;\n\
+                                    default adopts the registered index (0 for the default shard).\n\
+                                    Set per process to run a multi-shard fleet over one mount.\n\
+  --node-id ID                      Owner node id; default server bind address\n\
+  --failover-from-epoch N           Acquire the shard after failed owner epoch N\n\
+  --no-shard-owner-renewal          Disable background owner lease renewal\n\
+  --shard-owner-renewal-interval-ms MS\n\
+                                    Background owner lease renewal interval\n\
+  --metadata-shared-log-prefix PREFIX\n\
+                                    Object prefix for synchronous metadata log archive; requires control backend\n\
+\n\
 Mount cache options:\n\
   --no-kernel-cache              Do not ask FUSE to keep file/directory cache on open\n\
   --direct-io                    Ask FUSE to bypass kernel page cache for file handles\n\
@@ -1394,12 +1788,13 @@ Mount cache options:\n\
   --block-cache-bytes N          Max object block cache bytes\n\
   --block-cache-items N          Max object block cache entries\n\
   --block-cache-ttl-ms MS        Object block cache TTL; 0 means no TTL\n\
-  --no-prefetch                  Disable sequential object prefetch\n\
-  --prefetch-workers N           Sequential object prefetch worker count\n\
-  --prefetch-queue-capacity N    Sequential object prefetch queue capacity\n\
+  --no-prefetch                  Disable object prefetch\n\
+  --prefetch-workers N           Object prefetch worker count\n\
+  --prefetch-queue-capacity N    Object prefetch queue capacity\n\
   --max-readahead-bytes N        Max sequential read-ahead bytes per hint\n\
   --writeback-cache              Stage completed write blocks in the disk cache before object upload\n\
   --no-writeback-cache           Use the default in-memory write buffer and direct object upload\n\
+  --writeback-async-publish      Ack flush/close on the durable cache+journal; upload+publish in the background (requires --writeback-cache)\n\
   --writeback-cache-dir PATH     Directory for staged object upload cache\n\
   --writeback-cache-bytes N      Max staged object upload cache bytes\n\
   --writeback-cache-items N      Max staged object upload cache entries\n\
@@ -1418,6 +1813,7 @@ Defaults:\n\
   --history-gc-interval-ms 30000\n\
   --history-gc-limit 1024\n\
   --server-bind 127.0.0.1:7777\n\
+  --control-backend none\n\
   --metadata-checkpoint-archive-prefix metadata/checkpoints\n\
   --no-metadata-checkpoint-archive\n\
   --mount 1"
@@ -1433,6 +1829,7 @@ impl fmt::Display for CliError {
             Self::MissingArgument(arg) => write!(f, "missing {arg}"),
             Self::TooManyArguments => write!(f, "too many arguments"),
             Self::InvalidMount(value) => write!(f, "invalid mount id {value}"),
+            Self::InvalidOption { field, value } => write!(f, "invalid {field} option {value}"),
             Self::InvalidAddress { field, value } => write!(f, "invalid {field} address {value}"),
             Self::InvalidNumber { field, value } => write!(f, "invalid {field} value {value}"),
             Self::Io(err) => write!(f, "io error: {err}"),
@@ -1494,6 +1891,7 @@ mod tests {
                 limit: 128,
                 run_immediately: false,
             },
+            control: None,
         })
         .unwrap();
         thread::spawn(move || {
@@ -1516,6 +1914,7 @@ mod tests {
             Some(DEFAULT_METADATA_CHECKPOINT_ARCHIVE_PREFIX)
         );
         assert_eq!(config.server_bind, DEFAULT_SERVER_BIND);
+        assert_eq!(config.control, None);
         assert_eq!(command, Command::Ls { path: s("/") });
     }
 
@@ -1591,6 +1990,110 @@ mod tests {
             "127.0.0.1:17777".parse::<SocketAddr>().unwrap()
         );
         assert_eq!(command, Command::Mkdir { path: s("/runs") });
+    }
+
+    #[test]
+    fn parse_etcd_control_options() {
+        let (config, command) = parse(vec![
+            s("--mount"),
+            s("7"),
+            s("--server-bind"),
+            s("127.0.0.1:17777"),
+            s("--control-etcd-endpoints"),
+            s("http://127.0.0.1:2379,http://127.0.0.2:2379"),
+            s("--control-etcd-prefix"),
+            s("/nokv/test"),
+            s("--control-etcd-lease-ttl-seconds"),
+            s("3"),
+            s("--shard-id"),
+            s("mount-7:/datasets/train"),
+            s("--shard-index"),
+            s("3"),
+            s("--node-id"),
+            s("node-a"),
+            s("--failover-from-epoch"),
+            s("4"),
+            s("--no-shard-owner-renewal"),
+            s("--metadata-shared-log-prefix"),
+            s("metadata/shared-log"),
+            s("serve"),
+        ])
+        .unwrap();
+        assert_eq!(command, Command::Serve);
+        let control = config.control.unwrap();
+        let ServerControlStoreOptions::Etcd(store) = control.store;
+        assert_eq!(
+            store.endpoints(),
+            &[
+                "http://127.0.0.1:2379".to_owned(),
+                "http://127.0.0.2:2379".to_owned(),
+            ]
+        );
+        assert_eq!(store.key_prefix(), "/nokv/test");
+        assert_eq!(store.lease_ttl_seconds(), 3);
+        assert_eq!(
+            control.shard_owner.shard_id.as_str(),
+            "mount-7:/datasets/train"
+        );
+        assert_eq!(control.shard_owner.node_id.as_str(), "node-a");
+        assert_eq!(
+            control.shard_owner.acquisition,
+            nokv_server::ServerShardAcquisition::Failover { previous_epoch: 4 }
+        );
+        assert_eq!(control.shard_owner.shard_index, Some(3));
+        assert_eq!(control.shard_owner.renewal, None);
+        assert_eq!(
+            control.shard_owner.shared_log.unwrap().archive_prefix,
+            "metadata/shared-log"
+        );
+    }
+
+    #[test]
+    fn parse_etcd_control_defaults_owner_identity() {
+        let (config, command) = parse(vec![
+            s("--mount"),
+            s("9"),
+            s("--server-bind"),
+            s("127.0.0.1:19999"),
+            s("--control-backend"),
+            s("etcd"),
+            s("--control-etcd-endpoints"),
+            s("http://127.0.0.1:2379"),
+            s("serve"),
+        ])
+        .unwrap();
+        assert_eq!(command, Command::Serve);
+        let control = config.control.unwrap();
+        assert_eq!(control.shard_owner.shard_id.as_str(), "mount-9:/");
+        assert_eq!(control.shard_owner.node_id.as_str(), "127.0.0.1:19999");
+        assert_eq!(control.shard_owner.shard_index, None);
+        assert_eq!(
+            control.shard_owner.acquisition,
+            nokv_server::ServerShardAcquisition::Fresh
+        );
+        // The etcd backend couples renewal to the lease TTL (default 10s): renew at
+        // ttl/3 so a short TTL never lapses, and arm the self-fence at the TTL.
+        let renewal = control.shard_owner.renewal.unwrap();
+        assert_eq!(renewal.lease_ttl, Duration::from_secs(10));
+        // ttl/3 (capped down from the 5s default) so the lease never lapses.
+        assert_eq!(renewal.interval, Duration::from_secs(10) / 3);
+        assert!(renewal.interval <= renewal.lease_ttl / 3);
+        assert!(!renewal.run_immediately);
+    }
+
+    #[test]
+    fn parse_shared_log_requires_control_backend() {
+        assert!(matches!(
+            parse(vec![
+                s("--metadata-shared-log-prefix"),
+                s("metadata/shared-log"),
+                s("serve"),
+            ]),
+            Err(CliError::InvalidOption {
+                field: "control",
+                ..
+            })
+        ));
     }
 
     #[test]
@@ -1847,6 +2350,7 @@ mod tests {
                 queue_capacity: 128,
                 workers: 4,
                 upload_workers_per_request: 2,
+                async_publish: false,
             },
             ..MountCliOptions::default()
         };
@@ -1897,6 +2401,37 @@ mod tests {
             parse(vec![s("mount-snapshot"), s("bad"), s("/tmp/nokv-ro")]),
             Err(CliError::InvalidNumber {
                 field: "snapshot_id",
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn parse_mount_enables_async_publish_with_cache() {
+        let (_config, command) = parse(vec![
+            s("mount"),
+            s("--writeback-cache"),
+            s("--writeback-async-publish"),
+            s("/tmp/nokv-async"),
+        ])
+        .unwrap();
+        let Command::Mount { options, .. } = command else {
+            panic!("expected mount command");
+        };
+        assert!(options.writeback.cache_enabled);
+        assert!(options.writeback.async_publish);
+    }
+
+    #[test]
+    fn parse_mount_rejects_async_publish_without_cache() {
+        assert!(matches!(
+            parse(vec![
+                s("mount"),
+                s("--writeback-async-publish"),
+                s("/tmp/nokv-async"),
+            ]),
+            Err(CliError::InvalidOption {
+                field: "writeback_async_publish",
                 ..
             })
         ));

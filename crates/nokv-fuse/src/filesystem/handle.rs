@@ -13,17 +13,19 @@ use nokv_meta::{
 };
 use nokv_object::{
     chunk_manifests_from_stored_chunks, manifest_digest_uri, DirtyChunkExtent, FileReadPipeline,
-    ObjectError, ObjectReadBlock, PendingChunkedWrite,
+    ObjectError, ObjectReadBlock, PendingChunkedWrite, StagedObjectSet, StoredChunk,
 };
 use nokv_types::{AdvisoryLockRequest, DentryName, FileType, InodeAttr, InodeId};
 
 use crate::attr::file_attr;
 use crate::backend::{FuseBackend, FuseBackendError};
-use crate::invalidation::InvalidationRegistry;
+use crate::invalidation::{InvalidationRegistry, InvalidationTarget, LocalInvalidation};
 
 use super::directory::{DirectoryHandle, FUSE_READDIR_PAGE_SIZE};
 use super::errors::errno;
 use super::locks::{advisory_lock_kind_from_fuse, FuseLockRequest};
+#[cfg(test)]
+use super::merge_fuse_read_stats;
 #[cfg(test)]
 use super::options::FuseObjectPipelineStats;
 use super::options::{FuseOptions, FuseView};
@@ -31,12 +33,14 @@ use super::options::{
     FuseStatfs, STATFS_BLOCK_SIZE, STATFS_NAME_MAX, STATFS_TOTAL_BYTES, STATFS_TOTAL_FILES,
 };
 use super::posix::{inode_id, resolve_fallocate_size};
+use super::publish_journal::{CacheFileRef, PendingPublishRecord};
+use super::publisher::PendingPublish;
 use super::write_session::{
     cleanup_written_objects, forget_staged_blocks, fuse_manifest_id, has_buffered_upload_ready,
     push_buffered_write, select_unstaged_blocks, take_buffered_upload_ranges, BufferedWriteRange,
     PendingBufferedRange, PendingBufferedUpload, WriteHandle, WriteStageReservation,
 };
-use super::{NoKvFuse, ReadHandle};
+use super::{FuseReadStats, NoKvFuse, ReadHandle, ReadHandleState};
 
 impl<B> NoKvFuse<B>
 where
@@ -54,16 +58,68 @@ where
         let fuse = Self {
             backend,
             options,
+            read_stats: Arc::new(FuseReadStats::default()),
             parents: RwLock::new(parents),
             names: RwLock::new(HashMap::new()),
+            attrs: Arc::new(RwLock::new(HashMap::new())),
             next_handle: AtomicU64::new(1),
             read_handles: RwLock::new(HashMap::new()),
             write_handles: RwLock::new(HashMap::new()),
             directory_handles: RwLock::new(HashMap::new()),
             invalidation,
+            writeback_publisher: None,
         };
         fuse.register_watch_scope(fuse.options.view.root());
         fuse
+    }
+
+    /// Enable opt-in async write-back: open the publish journal under the
+    /// writeback root and spawn the background publisher over this mount's
+    /// backend. A no-op unless `options.writeback.async_publish` is set. Fallible
+    /// (journal I/O), so it is driven from `spawn_mount_backend` rather than the
+    /// infallible constructor.
+    pub(crate) fn enable_async_publish(&mut self) -> std::io::Result<()> {
+        if !self.options.writeback.async_publish {
+            return Ok(());
+        }
+        let backend = Arc::clone(&self.backend);
+        let root = self.options.writeback.root.clone();
+        self.writeback_publisher = Some(super::publisher::WritebackPublisher::recover(
+            backend, &root,
+        )?);
+        Ok(())
+    }
+
+    /// Read-after-write barrier (async write-back only): block until any in-flight
+    /// async publish for `inode` commits, surfacing a failed publish as the
+    /// handler's error. A no-op when async publish is off, or when nothing is
+    /// pending for the inode. Only the background worker resolves the wait, and it
+    /// never re-enters a FUSE handler, so a blocked handler cannot deadlock.
+    pub(super) fn wait_pending_publish(&self, inode: InodeId) -> Result<(), Errno> {
+        match self.writeback_publisher.as_ref() {
+            Some(publisher) => publisher.tracker().wait_for(inode),
+            None => Ok(()),
+        }
+    }
+
+    /// `lookup` variant of [`wait_pending_publish`]: blocks on the publish behind
+    /// `(parent, name)`, which the caller has not yet resolved to an inode.
+    pub(super) fn wait_pending_publish_dentry(
+        &self,
+        parent: InodeId,
+        name: &DentryName,
+    ) -> Result<(), Errno> {
+        match self.writeback_publisher.as_ref() {
+            Some(publisher) => publisher.tracker().wait_for_dentry(parent, name),
+            None => Ok(()),
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn writeback_tracker(&self) -> Option<Arc<super::publisher::PendingPublishTracker>> {
+        self.writeback_publisher
+            .as_ref()
+            .map(|publisher| Arc::clone(publisher.tracker()))
     }
 
     pub(super) fn remember_parent(&self, child: InodeId, parent: InodeId) {
@@ -81,8 +137,28 @@ where
     pub(super) fn remember_entry(&self, entry: &DentryWithAttr) {
         self.remember_parent(entry.attr.inode, entry.dentry.parent);
         self.remember_name(entry.attr.inode, &entry.dentry.name);
+        self.remember_attr(&entry.attr);
         if entry.attr.file_type == FileType::Directory {
             self.register_watch_scope(entry.attr.inode);
+        }
+    }
+
+    pub(super) fn remember_attr(&self, attr: &InodeAttr) {
+        if let Ok(mut attrs) = self.attrs.write() {
+            attrs.insert(attr.inode.get(), attr.clone());
+        }
+    }
+
+    pub(super) fn cached_attr(&self, inode: InodeId) -> Option<InodeAttr> {
+        self.attrs
+            .read()
+            .ok()
+            .and_then(|attrs| attrs.get(&inode.get()).cloned())
+    }
+
+    pub(super) fn forget_attr_cache(&self, inode: InodeId) {
+        if let Ok(mut attrs) = self.attrs.write() {
+            attrs.remove(&inode.get());
         }
     }
 
@@ -90,6 +166,7 @@ where
         if inode == self.options.view.root() {
             return;
         }
+        self.forget_attr_cache(inode);
         if let Ok(mut parents) = self.parents.write() {
             parents.remove(&inode.get());
         }
@@ -123,11 +200,30 @@ where
 
     #[cfg(test)]
     pub(crate) fn object_pipeline_stats(&self) -> Result<FuseObjectPipelineStats, Errno> {
-        self.backend.object_pipeline_stats().map_err(errno)
+        let mut stats = self.backend.object_pipeline_stats().map_err(errno)?;
+        merge_fuse_read_stats(&mut stats, &self.read_stats);
+        Ok(stats)
+    }
+
+    pub(super) fn record_fuse_read_request(&self, size: u32) {
+        self.read_stats.requests.fetch_add(1, Ordering::Relaxed);
+        self.read_stats
+            .request_bytes
+            .fetch_add(u64::from(size), Ordering::Relaxed);
     }
 
     pub(super) fn invalidation_registry(&self) -> Arc<InvalidationRegistry> {
         Arc::clone(&self.invalidation)
+    }
+
+    pub(super) fn local_invalidation(&self) -> LocalInvalidation {
+        let attr_cache = Arc::clone(&self.attrs);
+        let local: LocalInvalidation = Arc::new(move |target: InvalidationTarget| {
+            if let Ok(mut attrs) = attr_cache.write() {
+                attrs.remove(&target.inode.get());
+            }
+        });
+        local
     }
 
     pub(super) fn parent_of(&self, inode: InodeId) -> InodeId {
@@ -223,6 +319,22 @@ where
         }
     }
 
+    pub(super) fn live_open_attr(&self, inode: InodeId) -> Result<InodeAttr, Errno> {
+        let attr = self
+            .service_get_attr(inode)
+            .map_err(errno)?
+            .ok_or(Errno::ENOENT)?;
+        self.remember_attr(&attr);
+        Ok(attr)
+    }
+
+    pub(super) fn read_open_attr(&self, inode: InodeId) -> Result<InodeAttr, Errno> {
+        if let Some(attr) = self.cached_attr(inode) {
+            return Ok(attr);
+        }
+        self.live_open_attr(inode)
+    }
+
     pub(super) fn service_lookup_plus(
         &self,
         parent: InodeId,
@@ -311,11 +423,27 @@ where
         offset: u64,
         len: usize,
         pipeline: &mut FileReadPipeline,
+        read_plans: &mut nokv_object::ObjectReadPlanCache,
     ) -> Result<Vec<u8>, FuseBackendError> {
         match self.options.view {
             FuseView::Live => self
                 .backend
-                .read_file_with_known_attr_pipeline(attr, offset, len, pipeline),
+                .read_file_with_known_attr_pipeline(attr, offset, len, pipeline, read_plans),
+            FuseView::Snapshot { snapshot_id, .. } => {
+                self.backend
+                    .read_file_at_snapshot(snapshot_id, attr.inode, offset, len)
+            }
+        }
+    }
+
+    pub(super) fn service_read_file_with_known_attr(
+        &self,
+        attr: &InodeAttr,
+        offset: u64,
+        len: usize,
+    ) -> Result<Vec<u8>, FuseBackendError> {
+        match self.options.view {
+            FuseView::Live => self.backend.read_file_with_known_attr(attr, offset, len),
             FuseView::Snapshot { snapshot_id, .. } => {
                 self.backend
                     .read_file_at_snapshot(snapshot_id, attr.inode, offset, len)
@@ -449,7 +577,9 @@ where
             raw,
             Arc::new(ReadHandle {
                 attr,
-                reader: Mutex::new(FileReadPipeline::new(self.options.read_pipeline)),
+                state: Mutex::new(ReadHandleState::new(FileReadPipeline::new(
+                    self.options.read_pipeline,
+                ))),
             }),
         );
         Ok(FileHandle(raw))
@@ -470,16 +600,45 @@ where
         else {
             return Ok(None);
         };
-        let mut reader = handle.reader.lock().map_err(|_| Errno::EIO)?.clone();
+        // Clamp the requested length to what the handle's known size can serve
+        // before EITHER backend path. A read that starts before EOF but extends
+        // past `attr.size` must be a short read, not a backend range error
+        // (mirrors the write-handle read path in this file).
+        if offset >= handle.attr.size {
+            return Ok(Some(Vec::new()));
+        }
+        let len = u64::from(size)
+            .min(handle.attr.size - offset)
+            .try_into()
+            .map_err(|_| Errno::EINVAL)?;
+        if !self.options.prefetch.enabled {
+            let bytes = self
+                .service_read_file_with_known_attr(&handle.attr, offset, len)
+                .map_err(errno)?;
+            return Ok(Some(bytes));
+        }
+        let mut state = handle.state.lock().map_err(|_| Errno::EIO)?;
+        if !state.reader.needs_stateful_pipeline(offset, len) {
+            state
+                .reader
+                .observe_unpipelined_read(offset, len)
+                .map_err(errno)?;
+            drop(state);
+            let bytes = self
+                .service_read_file_with_known_attr(&handle.attr, offset, len)
+                .map_err(errno)?;
+            return Ok(Some(bytes));
+        }
+        let ReadHandleState { reader, read_plans } = &mut *state;
         let bytes = self
             .service_read_file_with_known_attr_pipeline(
                 &handle.attr,
                 offset,
-                size as usize,
-                &mut reader,
+                len,
+                reader,
+                read_plans,
             )
             .map_err(errno)?;
-        *handle.reader.lock().map_err(|_| Errno::EIO)? = reader;
         Ok(Some(bytes))
     }
 
@@ -666,7 +825,7 @@ where
         if data.is_empty() {
             return Ok(0);
         }
-        {
+        let inode = {
             let mut handles = self.write_handles.write().map_err(|_| Errno::EIO)?;
             let handle = handles.get_mut(&fh.0).ok_or(Errno::EBADF)?;
             if handle.prepared.is_none() {
@@ -690,31 +849,40 @@ where
             push_buffered_write(&mut handle.buffered, offset, data);
             handle.size = handle.size.max(end);
             handle.dirty = true;
-        }
+            handle.inode
+        };
+        self.forget_attr_cache(inode);
         self.flush_handle_buffers(fh, false)?;
         Ok(data.len())
     }
 
     pub(super) fn truncate_handle(&self, fh: FileHandle, size: u64) -> Result<(), Errno> {
-        let mut handles = self.write_handles.write().map_err(|_| Errno::EIO)?;
-        let handle = handles.get_mut(&fh.0).ok_or(Errno::EBADF)?;
-        if handle.prepared.is_none() {
-            handle.prepared = Some(
-                self.backend
-                    .prepare_artifact_replace(handle.parent, handle.name.clone())
-                    .map_err(errno)?,
-            );
-        }
-        if handle.writer.is_none() {
-            let prepared = handle.prepared.as_ref().ok_or(Errno::EIO)?;
-            handle.writer = Some(
-                self.backend
-                    .new_write_pipeline(prepared, &fuse_manifest_id(handle.parent, handle.inode))
-                    .map_err(errno)?,
-            );
-        }
-        handle.size = size;
-        handle.dirty = true;
+        let inode = {
+            let mut handles = self.write_handles.write().map_err(|_| Errno::EIO)?;
+            let handle = handles.get_mut(&fh.0).ok_or(Errno::EBADF)?;
+            if handle.prepared.is_none() {
+                handle.prepared = Some(
+                    self.backend
+                        .prepare_artifact_replace(handle.parent, handle.name.clone())
+                        .map_err(errno)?,
+                );
+            }
+            if handle.writer.is_none() {
+                let prepared = handle.prepared.as_ref().ok_or(Errno::EIO)?;
+                handle.writer = Some(
+                    self.backend
+                        .new_write_pipeline(
+                            prepared,
+                            &fuse_manifest_id(handle.parent, handle.inode),
+                        )
+                        .map_err(errno)?,
+                );
+            }
+            handle.size = size;
+            handle.dirty = true;
+            handle.inode
+        };
+        self.forget_attr_cache(inode);
         Ok(())
     }
 
@@ -1105,6 +1273,12 @@ where
             return Ok(());
         }
         self.flush_handle_buffers(fh, true)?;
+        // Opt-in async write-back: ack once the blocks are durably staged + a
+        // journal record is fsync'd, deferring the object-store drain + manifest
+        // commit to the background publisher. Off by default (synchronous tail).
+        if self.writeback_publisher.is_some() {
+            return self.stage_and_enqueue_publish(fh);
+        }
         self.drain_handle_uploads(fh)?;
         let Some(snapshot) = self
             .write_handles
@@ -1119,50 +1293,25 @@ where
             return Ok(());
         }
         let writer = snapshot.writer.as_ref().ok_or(Errno::EIO)?;
-        let mut prepared = snapshot.prepared.clone().ok_or(Errno::EIO)?;
-        // The replace CAS is guarded by the dentry version captured when the
-        // handle prepared. A `setattr` (chmod/utimes/truncate) on this still-open
-        // file commits through `update_attrs`, which advances the dentry version
-        // out-of-band and would otherwise strand this publish with a stale guard
-        // (PredicateFailed -> EIO). Re-read the live dentry version and rebind the
-        // guard to it; the pinned generation (and the staged object keys derived
-        // from it) is left untouched, so this only re-syncs the CAS to the truth
-        // the metadata store already committed.
-        if self.backend.prepared_is_replace(&prepared) {
-            if let Some(version) = self
-                .backend
-                .current_dentry_version(snapshot.parent, &snapshot.name)
-                .map_err(errno)?
-            {
-                self.backend
-                    .rebind_prepared_dentry_version(&mut prepared, version);
-            }
-        }
-        let digest_uri = manifest_digest_uri(
+        let prepared = snapshot.prepared.clone().ok_or(Errno::EIO)?;
+        let result = publish_staged_session(
+            &*self.backend,
+            prepared,
+            snapshot.parent,
+            snapshot.name.clone(),
+            fuse_manifest_id(snapshot.parent, snapshot.inode),
             snapshot.size,
-            self.backend.prepared_generation(&prepared),
+            snapshot.mode,
+            snapshot.uid,
+            snapshot.gid,
             writer.staged_chunks(),
-        );
-        let chunks = chunk_manifests_from_stored_chunks(writer.staged_chunks());
-        self.backend
-            .publish_prepared_artifact_staged_session(
-                prepared,
-                PublishArtifactStagedSession {
-                    parent: snapshot.parent,
-                    name: snapshot.name,
-                    producer: "nokv-fuse".to_owned(),
-                    digest_uri,
-                    content_type: "application/octet-stream".to_owned(),
-                    manifest_id: fuse_manifest_id(snapshot.parent, snapshot.inode),
-                    size: snapshot.size,
-                    chunks,
-                    staged: writer.staged_objects().clone(),
-                    mode: snapshot.mode,
-                    uid: snapshot.uid,
-                    gid: snapshot.gid,
-                },
-            )
-            .map_err(errno)?;
+            writer.staged_objects(),
+        )?;
+        let entry_inode = result.entry.attr.inode;
+        self.remember_entry(&result.entry);
+        if let Some(replaced) = result.replaced.filter(|old| old.attr.inode != entry_inode) {
+            self.forget_inode_cache(replaced.attr.inode);
+        }
         if let Some(handle) = self
             .write_handles
             .write()
@@ -1179,6 +1328,112 @@ where
         Ok(())
     }
 
+    /// The async-publish ack path: durably record the pending publish + hand the
+    /// staged-block uploads to the background publisher, then reset the handle and
+    /// return — without draining the object-store uploads or committing the
+    /// manifest. The fsync of the journal record is the durability anchor the ack
+    /// rests on; everything after it completes in the worker.
+    fn stage_and_enqueue_publish(&self, fh: FileHandle) -> Result<(), Errno> {
+        let Some(publisher) = self.writeback_publisher.as_ref() else {
+            return Err(Errno::EIO);
+        };
+        // Snapshot + detach the session state under the write lock: take the
+        // in-flight uploads so the worker owns them, and capture the scalars
+        // needed to publish (and to recover after a crash).
+        let staged = {
+            let mut handles = self.write_handles.write().map_err(|_| Errno::EIO)?;
+            let Some(handle) = handles.get_mut(&fh.0) else {
+                return Err(Errno::EBADF);
+            };
+            if !handle.dirty {
+                return Ok(());
+            }
+            let prepared = handle.prepared.clone().ok_or(Errno::EIO)?;
+            let uploads = std::mem::take(&mut handle.pending_uploads);
+            StagedPublish {
+                prepared,
+                inode: handle.inode,
+                parent: handle.parent,
+                name: handle.name.clone(),
+                size: handle.size,
+                mode: handle.mode,
+                uid: handle.uid,
+                gid: handle.gid,
+                uploads,
+            }
+        };
+        let fields = self.backend.prepared_record_fields(&staged.prepared);
+        let manifest_id = fuse_manifest_id(staged.parent, staged.inode);
+        let cache_files = staged
+            .uploads
+            .iter()
+            .flat_map(|upload| upload.pending.cache_entries())
+            .map(|(logical_offset, cache_key, file_name, len)| CacheFileRef {
+                logical_offset,
+                cache_key,
+                file_name,
+                len,
+            })
+            .collect();
+        let record = PendingPublishRecord {
+            inode: staged.inode.get(),
+            parent: staged.parent.get(),
+            name: staged.name.as_bytes().to_vec(),
+            mount: fields.mount,
+            generation: fields.generation,
+            mtime_ms: fields.mtime_ms,
+            ctime_ms: fields.ctime_ms,
+            replace: fields.replace,
+            dentry_version: fields.dentry_version.unwrap_or(0),
+            old_generation: fields.old_generation.unwrap_or(0),
+            size: staged.size,
+            mode: staged.mode,
+            uid: staged.uid,
+            gid: staged.gid,
+            manifest_id: manifest_id.clone(),
+            cache_files,
+        };
+        // Make every staged block's directory entry durable in one batched fsync,
+        // then fsync the journal record. Together these are the ack's durability
+        // anchor: only after both may we return.
+        self.backend.sync_writeback_root().map_err(errno)?;
+        publisher
+            .journal()
+            .append_publish(&record)
+            .map_err(|_| Errno::EIO)?;
+        publisher
+            .tracker()
+            .begin(staged.inode, fields.generation, staged.parent, &staged.name);
+        publisher.enqueue(PendingPublish {
+            prepared: staged.prepared,
+            parent: staged.parent,
+            name: staged.name,
+            manifest_id,
+            inode: staged.inode,
+            generation: fields.generation,
+            size: staged.size,
+            mode: staged.mode,
+            uid: staged.uid,
+            gid: staged.gid,
+            uploads: staged.uploads,
+        });
+        // Reset the session: the write is acked and now owned by the worker.
+        if let Some(handle) = self
+            .write_handles
+            .write()
+            .map_err(|_| Errno::EIO)?
+            .get_mut(&fh.0)
+        {
+            handle.base_size = staged.size;
+            handle.size = staged.size;
+            handle.prepared = None;
+            handle.writer = None;
+            handle.staged_block_offsets.clear();
+            handle.dirty = false;
+        }
+        Ok(())
+    }
+
     pub(super) fn release_handle(&self, fh: FileHandle) -> Result<(), Errno> {
         self.publish_handle(fh)?;
         self.write_handles
@@ -1187,4 +1442,84 @@ where
             .remove(&fh.0);
         Ok(())
     }
+}
+
+/// The detached write-session state captured at an async-publish ack: handed off
+/// to the background publisher so the handle can reset immediately.
+struct StagedPublish<P> {
+    prepared: P,
+    inode: InodeId,
+    parent: InodeId,
+    name: DentryName,
+    size: u64,
+    mode: u32,
+    uid: u32,
+    gid: u32,
+    uploads: Vec<PendingBufferedUpload>,
+}
+
+/// Commit a staged write session as a published artifact generation. This is the
+/// metadata half of a write close, shared by the synchronous `publish_handle`
+/// path and the background write-back [`publisher`](super::publisher) worker so
+/// both build the manifest, re-sync the replace CAS, and commit identically.
+///
+/// `staged_chunks`/`staged_objects` are the fully-uploaded result of the session
+/// (from the handle's writer online, or a writer rebuilt from the upload results
+/// in the worker). The caller owns any post-commit cache updates — this function
+/// touches no `NoKvFuse` state, so it is callable with only an `Arc<B>`.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn publish_staged_session<B>(
+    backend: &B,
+    mut prepared: B::Prepared,
+    parent: InodeId,
+    name: DentryName,
+    manifest_id: String,
+    size: u64,
+    mode: u32,
+    uid: u32,
+    gid: u32,
+    staged_chunks: &[StoredChunk],
+    staged_objects: &StagedObjectSet,
+) -> Result<RenameReplaceResult, Errno>
+where
+    B: FuseBackend,
+{
+    // The replace CAS is guarded by the dentry version captured when the handle
+    // prepared. A `setattr` (chmod/utimes/truncate) on this still-open file
+    // commits through `update_attrs`, which advances the dentry version
+    // out-of-band and would otherwise strand this publish with a stale guard
+    // (PredicateFailed -> EIO). Re-read the live dentry version and rebind the
+    // guard to it; the pinned generation (and the staged object keys derived
+    // from it) is left untouched, so this only re-syncs the CAS to the truth the
+    // metadata store already committed.
+    if backend.prepared_is_replace(&prepared) {
+        if let Some(version) = backend
+            .current_dentry_version(parent, &name)
+            .map_err(errno)?
+        {
+            backend.rebind_prepared_dentry_version(&mut prepared, version);
+        }
+    }
+    let digest_uri =
+        manifest_digest_uri(size, backend.prepared_generation(&prepared), staged_chunks);
+    let chunks = chunk_manifests_from_stored_chunks(staged_chunks);
+    backend
+        .publish_prepared_artifact_staged_session(
+            prepared,
+            PublishArtifactStagedSession {
+                parent,
+                name,
+                producer: "nokv-fuse".to_owned(),
+                digest_uri,
+                content_type: "application/octet-stream".to_owned(),
+                manifest_id,
+                size,
+                chunks,
+                staged: staged_objects.clone(),
+                mode,
+                uid,
+                gid,
+            },
+        )
+        .map_err(errno)
 }

@@ -2,12 +2,16 @@ use nokv_meta::{CreateInDirPathBatch, DentryWithAttr, MetadError};
 use nokv_protocol::{MetadataRpcEnvelope, MetadataRpcRequest, MetadataRpcResult};
 
 use super::wire::{dentry_name, err_envelope, ok_envelope, wire_dentry};
-use crate::server::{Server, ServerError};
+use crate::server::{Server, ServerError, ShardSlot};
 
 pub(super) fn execute_batch(
     server: &Server,
     requests: Vec<MetadataRpcRequest>,
 ) -> Result<MetadataRpcResult, ServerError> {
+    // A batch coalesces into single-shard engine calls, so every sub-request must
+    // route to the same shard. Resolve that single slot up front and reject
+    // cross-shard batches (the client must split them per shard).
+    let slot = resolve_batch_slot(server, &requests)?;
     let mut results = Vec::with_capacity(requests.len());
     let mut iter = requests.into_iter().peekable();
     while let Some(request) = iter.next() {
@@ -29,6 +33,7 @@ pub(super) fn execute_batch(
             }
             results.extend(remove_path_batch_envelopes(
                 server,
+                slot,
                 group.kind,
                 &group.parent_path,
                 group.names,
@@ -59,6 +64,7 @@ pub(super) fn execute_batch(
             let group = groups.pop().expect("one create group");
             results.extend(create_path_batch_envelopes(
                 server,
+                slot,
                 kind,
                 &group.parent_path,
                 group.names,
@@ -67,10 +73,44 @@ pub(super) fn execute_batch(
                 group.gid,
             )?);
         } else {
-            results.extend(create_path_group_envelopes(server, kind, groups)?);
+            results.extend(create_path_group_envelopes(server, slot, kind, groups)?);
         }
     }
     Ok(MetadataRpcResult::Batch { results })
+}
+
+/// Resolve the single shard every sub-request must target, rejecting cross-shard
+/// batches. Nested batches are not allowed either.
+fn resolve_batch_slot<'a>(
+    server: &'a Server,
+    requests: &[MetadataRpcRequest],
+) -> Result<&'a ShardSlot, ServerError> {
+    let mut resolved: Option<&'a ShardSlot> = None;
+    for request in requests {
+        if matches!(request, MetadataRpcRequest::Batch { .. }) {
+            return Err(ServerError::Metadata(MetadError::InvalidQuery(
+                "nested batch is not supported".into(),
+            )));
+        }
+        let slot = server.route(request)?;
+        match resolved {
+            None => resolved = Some(slot),
+            Some(existing) if existing.shard_index() != slot.shard_index() => {
+                return Err(ServerError::Metadata(MetadError::InvalidQuery(
+                    "cross-shard batch".into(),
+                )));
+            }
+            Some(_) => {}
+        }
+    }
+    // An empty batch has no addressable shard; fall back to the default slot.
+    resolved.map(Ok).unwrap_or_else(|| {
+        server.route(&MetadataRpcRequest::BootstrapRoot {
+            mode: 0,
+            uid: 0,
+            gid: 0,
+        })
+    })
 }
 
 fn execute_envelope(server: &Server, request: MetadataRpcRequest) -> MetadataRpcEnvelope {
@@ -156,8 +196,10 @@ impl RemovePathGroup {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn create_path_batch_envelopes(
     server: &Server,
+    slot: &ShardSlot,
     kind: CreatePathKind,
     parent_path: &str,
     names: Vec<String>,
@@ -173,13 +215,11 @@ pub(super) fn create_path_batch_envelopes(
     let coalesced = parsed.and_then(|names| {
         match kind {
             CreatePathKind::Directory => {
-                server
-                    .service()
+                slot.service()
                     .create_dirs_in_dir_path(parent_path, names, mode, uid, gid)
             }
             CreatePathKind::File => {
-                server
-                    .service()
+                slot.service()
                     .create_files_in_dir_path(parent_path, names, mode, uid, gid)
             }
         }
@@ -208,6 +248,7 @@ pub(super) fn create_path_batch_envelopes(
 
 fn remove_path_batch_envelopes(
     server: &Server,
+    slot: &ShardSlot,
     kind: RemovePathKind,
     parent_path: &str,
     names: Vec<String>,
@@ -219,10 +260,8 @@ fn remove_path_batch_envelopes(
         .map_err(ServerError::Metadata);
     let committed = parsed.and_then(|names| {
         match kind {
-            RemovePathKind::File => server
-                .service()
-                .remove_files_in_dir_path(parent_path, names),
-            RemovePathKind::EmptyDir => server
+            RemovePathKind::File => slot.service().remove_files_in_dir_path(parent_path, names),
+            RemovePathKind::EmptyDir => slot
                 .service()
                 .remove_empty_dirs_in_dir_path(parent_path, names),
         }
@@ -247,6 +286,7 @@ fn remove_path_batch_envelopes(
 
 fn create_path_group_envelopes(
     server: &Server,
+    slot: &ShardSlot,
     kind: CreatePathKind,
     groups: Vec<CreatePathGroup>,
 ) -> Result<Vec<MetadataRpcEnvelope>, ServerError> {
@@ -271,8 +311,8 @@ fn create_path_group_envelopes(
 
     let committed = parsed.map(|batches| {
         let results: Vec<Result<Vec<DentryWithAttr>, MetadError>> = match kind {
-            CreatePathKind::Directory => server.service().create_dir_batches_in_dir_path(batches),
-            CreatePathKind::File => server.service().create_file_batches_in_dir_path(batches),
+            CreatePathKind::Directory => slot.service().create_dir_batches_in_dir_path(batches),
+            CreatePathKind::File => slot.service().create_file_batches_in_dir_path(batches),
         };
         results
     });
@@ -290,6 +330,7 @@ fn create_path_group_envelopes(
                     Err(_err) => {
                         out.extend(create_path_batch_envelopes(
                             server,
+                            slot,
                             kind,
                             &group.parent_path,
                             group.names,
@@ -305,6 +346,7 @@ fn create_path_group_envelopes(
             for group in groups {
                 out.extend(create_path_batch_envelopes(
                     server,
+                    slot,
                     kind,
                     &group.parent_path,
                     group.names,

@@ -15,6 +15,8 @@ mod fsck;
 mod gc;
 mod lifecycle;
 mod lock;
+mod log_archive;
+mod log_sync;
 mod namespace;
 mod publish;
 mod read;
@@ -26,6 +28,12 @@ mod xattr;
 pub use self::backup::{MetadataArchiveConfig, MetadataBackupOutcome, MetadataRestoreOutcome};
 pub use self::checkpoint::{CheckpointHandle, CheckpointShard};
 pub use self::fsck::{DanglingBlock, FsckReport};
+pub use self::log_archive::{
+    MetadataLogArchiveConfig, MetadataLogRestoreOutcome, MetadataLogSegmentArchiveOutcome,
+};
+pub use self::log_sync::{
+    MetadataLogSegmentPointer, MetadataLogSyncConfig, MetadataLogSyncSnapshot,
+};
 pub use self::snapshot::DEFAULT_SNAPSHOT_LEASE_MS;
 
 use std::collections::hash_map::DefaultHasher;
@@ -33,7 +41,7 @@ use std::collections::{BTreeMap, HashSet};
 use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::Mutex;
+use std::sync::{Mutex, RwLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use self::lock::AdvisoryLockTable;
@@ -101,7 +109,28 @@ const PATH_INDEX_VALIDATION_CACHE_MAX_ENTRIES_PER_SHARD: usize =
     PATH_INDEX_VALIDATION_CACHE_MAX_ENTRIES / PATH_CACHE_SHARD_COUNT;
 pub(crate) const DEFAULT_READ_LEASE_MS: u64 = 3_600_000;
 
-const ALLOCATOR_RECOVERY_FAMILIES: [RecordFamily; 13] = [
+// Families folded into the fallback allocator rebuild when the durable
+// `allocator_key` System record is absent. Each row contributes its commit
+// version to the recovered high-water (`last_commit_version`), and the Inode /
+// Dentry arms additionally fold any locally-owned inode id.
+//
+// `CommandDedupe` is deliberately EXCLUDED. Two reasons, either of which is
+// sufficient:
+//   1. Encoding: a dedupe row's value is a header-less 24-byte result payload
+//      (`encode_dedupe_result`), not the standard `[version:8][kind:1][..]`
+//      shape every other family uses. The scan path decodes every row through
+//      `decode_current_value`, which rejects it ("unknown kind"), so scanning
+//      `CommandDedupe` here crashes the fallback rebuild on any populated store.
+//   2. Redundancy: the family is keyed by `request_id` and carries no inode, so
+//      it can never raise the inode high-water; and every committed command that
+//      wrote a dedupe row also wrote Inode/Dentry/Gc/Watch/etc. records at the
+//      SAME commit version, all of which are still scanned below. So its commit
+//      version is already covered and dropping it cannot lower the recovered
+//      `last_commit_version`.
+// `CommandDedupe` is the ONLY family with a non-standard value encoding; every
+// other family below writes through `encode_current_value`, so the scan can
+// decode them and recovery stays correct.
+const ALLOCATOR_RECOVERY_FAMILIES: [RecordFamily; 12] = [
     RecordFamily::System,
     RecordFamily::Mount,
     RecordFamily::Inode,
@@ -114,7 +143,6 @@ const ALLOCATOR_RECOVERY_FAMILIES: [RecordFamily; 13] = [
     RecordFamily::Watch,
     RecordFamily::Snapshot,
     RecordFamily::Gc,
-    RecordFamily::CommandDedupe,
 ];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -341,6 +369,9 @@ pub struct MetadataServiceStats {
     pub read_dir_plus_total: u64,
     pub read_dir_plus_entry_total: u64,
     pub read_dir_plus_projection_hit_total: u64,
+    pub metadata_log_segments_archived_total: u64,
+    pub metadata_log_entries_archived_total: u64,
+    pub metadata_log_archive_bytes_total: u64,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -371,6 +402,14 @@ pub struct OpenPathReadPlan {
     pub metadata: PathMetadata,
     pub lease: ReadLease,
     pub plan: BodyReadPlan,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OpenPathReadPlanRequest {
+    pub path: String,
+    pub offset: u64,
+    pub len: usize,
+    pub expected_generation: Option<u64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -457,14 +496,68 @@ pub enum MetadError {
     DirectoryNotEmpty,
     CannotRemoveRoot,
     MissingBodyDescriptor,
+    InvalidOwnerEpoch,
+    StaleOwnerEpoch {
+        owner_epoch: u64,
+        required_epoch: u64,
+    },
+    /// The owner's lease deadline has passed without a successful renewal, so it
+    /// self-fenced. The caller should re-resolve the shard owner and retry.
+    LeaseExpired {
+        now_ms: u64,
+        deadline_ms: u64,
+    },
+    /// The addressed shard is not owned by this node. The caller should
+    /// re-resolve the shard owner (via the control plane / shard map) and retry
+    /// against `endpoint` when present.
+    NotOwner {
+        shard_id: String,
+        endpoint: Option<String>,
+    },
+    /// A rename/hardlink/clone would cross a shard boundary: the two endpoints
+    /// live in different shards' namespaces, so it cannot be a single in-shard
+    /// commit. Surfaced as `EXDEV` to userspace, matching POSIX cross-device
+    /// link/rename semantics, rather than a misleading `NotFound` from resolving
+    /// the destination inside the source shard.
+    CrossShard {
+        source_shard: u16,
+        dest_shard: u16,
+    },
+    /// The target dentry is a cross-shard graft point: its child inode is owned
+    /// by another shard (`child.shard_index() != self.shard_index()`), so its
+    /// contents live in the child shard, not here. A plain remove/rename on the
+    /// parent shard would see a locally-empty subtree and silently orphan the
+    /// entire child namespace. Reject and steer the caller to the lifecycle path
+    /// (`unregister-graft`). Surfaced as `EBUSY` (the entry is a live mount
+    /// point), NOT `EXDEV` — there is no copy+unlink fallback that would be
+    /// correct here.
+    GraftPoint,
+    /// The command was durably committed to the local engine, but archiving its
+    /// logical-log segment failed, so durability could not be acknowledged.
+    /// `committed` distinguishes "applied locally, not durable" from a plain
+    /// failure so a client does not blindly retry data that actually landed.
+    SyncLogArchiveFailed {
+        committed: bool,
+        message: String,
+    },
 }
 
 pub struct NoKvFs<M, O> {
     mount: MountId,
+    /// Stable index of the shard this service owns. Encoded into the high bits
+    /// of every inode it mints (so inodes are globally unique across shards and
+    /// self-routing). The default/root shard is index 0 — unchanged behavior.
+    shard_index: u16,
     metadata: M,
     objects: O,
     allocator_gate: Mutex<()>,
     backup_gate: Mutex<()>,
+    /// Serializes owner-epoch installs/observes against in-flight commits.
+    /// Commits hold a read guard across their fence check + durable apply;
+    /// epoch changes take the write guard. This closes the TOCTOU where a
+    /// failover epoch bump could land between a commit's check and its apply,
+    /// letting a stale owner commit one more time.
+    epoch_fence: RwLock<()>,
     path_resolution_cache: Vec<Mutex<BTreeMap<PathResolutionCacheKey, InodeId>>>,
     path_index_lookup_cache:
         Vec<Mutex<BTreeMap<PathIndexLookupCacheKey, PathIndexLookupCacheValue>>>,
@@ -478,6 +571,21 @@ pub struct NoKvFs<M, O> {
     /// Persisted with every reservation and recovered with fetch_max so it never
     /// regresses; the seam a control plane bumps to fence a stale owner.
     epoch: AtomicU64,
+    /// Lowest control-plane owner epoch allowed to commit through this service.
+    required_owner_epoch: AtomicU64,
+    /// Wall-clock deadline (ms since epoch) past which this owner refuses to
+    /// commit, regardless of control-plane reachability. `0` = disabled
+    /// (single-node dev, or owners with auto-renewal turned off). Refreshed on
+    /// every successful lease renewal; a partitioned owner that stops renewing
+    /// self-fences here even though it can never observe a bumped epoch.
+    lease_deadline_ms: AtomicU64,
+    /// Test/simulation clock override (ms since epoch). `0` = use the system
+    /// clock. Lets lease-deadline fencing be exercised deterministically.
+    clock_override_ms: AtomicU64,
+    metadata_log_sync: Mutex<Option<log_sync::MetadataLogSyncState>>,
+    metadata_log_segments_archived_total: AtomicU64,
+    metadata_log_entries_archived_total: AtomicU64,
+    metadata_log_archive_bytes_total: AtomicU64,
     block_cache: MemoryBlockCache,
     block_cache_enabled: AtomicBool,
     watch_logging_enabled: AtomicBool,
@@ -609,6 +717,7 @@ fn projection(
 fn recover_allocator_state<M: MetadataStore>(
     metadata: &M,
     mount: MountId,
+    shard_index: u16,
 ) -> Result<AllocatorState, MetadError> {
     let max_read = Version::new(u64::MAX)?;
     if let Some(value) = metadata.get(
@@ -630,6 +739,22 @@ fn recover_allocator_state<M: MetadataStore>(
 
     let mut last_commit_version = 1_u64;
     let mut max_inode = InodeId::ROOT_RAW;
+    // Only inodes minted by THIS shard may raise the local allocator floor.
+    // Foreign inodes embedded in this shard's records (a cross-shard graft's
+    // target dir, or any other cross-shard reference) live in another shard's
+    // subspace; folding them here would poison this shard's allocator and let it
+    // hand out ids it doesn't own. For shard 0 every owned id has shard_index 0
+    // (`compose(0, x) == x`), so this guard is a no-op and the single-shard
+    // recovery path is unchanged. Version/generation folding stays unconditional
+    // because the commit clock is shared across the mount.
+    let fold_owned_inode = |max_inode: &mut u64, raw: u64| {
+        if InodeId::new(raw)
+            .map(|inode| inode.shard_index() == shard_index)
+            .unwrap_or(false)
+        {
+            *max_inode = (*max_inode).max(raw);
+        }
+    };
     for family in ALLOCATOR_RECOVERY_FAMILIES {
         let rows = metadata.scan(ScanRequest {
             family,
@@ -646,7 +771,7 @@ fn recover_allocator_state<M: MetadataStore>(
                     let attr = decode_inode_attr(&row.value.0)
                         .map_err(|err| MetadError::Codec(err.to_string()))?;
                     last_commit_version = last_commit_version.max(attr.generation);
-                    max_inode = max_inode.max(attr.inode.get());
+                    fold_owned_inode(&mut max_inode, attr.inode.get());
                 }
                 RecordFamily::Dentry => {
                     let projection = decode_dentry_projection(&row.value.0)
@@ -654,9 +779,8 @@ fn recover_allocator_state<M: MetadataStore>(
                     last_commit_version = last_commit_version
                         .max(projection.attr.generation)
                         .max(projection.dentry.attr_generation);
-                    max_inode = max_inode
-                        .max(projection.attr.inode.get())
-                        .max(projection.dentry.child.get());
+                    fold_owned_inode(&mut max_inode, projection.attr.inode.get());
+                    fold_owned_inode(&mut max_inode, projection.dentry.child.get());
                 }
                 _ => {}
             }
@@ -794,22 +918,31 @@ fn validate_prepared_artifact(
         }
         return Ok(());
     }
-    let expected_chunks = ((body.size - 1) / body.chunk_size) + 1;
-    if chunks.len() as u64 != expected_chunks {
+    let last_chunk = (body.size - 1) / body.chunk_size;
+    // A self-contained generation (base_generation == 0) must cover every chunk
+    // of the file; a delta/sparse generation stores only the chunks it rewrote
+    // (untouched chunks fall through to the base on read).
+    if body.base_generation == 0 && chunks.len() as u64 != last_chunk + 1 {
         return Err(MetadError::InvalidPreparedArtifact(format!(
-            "chunk manifest count {} does not match expected {expected_chunks}",
-            chunks.len()
+            "chunk manifest count {} does not match expected {}",
+            chunks.len(),
+            last_chunk + 1
         )));
     }
-    for (position, chunk) in chunks.iter().enumerate() {
-        let expected_index = position as u64;
-        if chunk.chunk_index != expected_index {
+    let mut seen_chunks = HashSet::new();
+    for chunk in chunks.iter() {
+        let chunk_index = chunk.chunk_index;
+        if chunk_index > last_chunk {
             return Err(MetadError::InvalidPreparedArtifact(format!(
-                "chunk manifest index {} is not the expected contiguous index {expected_index}",
-                chunk.chunk_index
+                "chunk manifest index {chunk_index} exceeds last chunk {last_chunk}"
             )));
         }
-        let expected_offset = expected_index
+        if !seen_chunks.insert(chunk_index) {
+            return Err(MetadError::InvalidPreparedArtifact(format!(
+                "duplicate chunk manifest index {chunk_index}"
+            )));
+        }
+        let expected_offset = chunk_index
             .checked_mul(body.chunk_size)
             .ok_or(ObjectError::InvalidRange)?;
         if chunk.logical_offset != expected_offset {
@@ -970,6 +1103,45 @@ fn merge_session_chunks(
         append_chunk_manifest_slices(&mut chunks, dirty_chunk, size)?;
     }
     Ok(chunks.into_values().collect())
+}
+
+/// Coalesce each chunk's accumulated slices into the minimal newest-wins set.
+/// Used at compaction so slice count does not grow without bound across
+/// compaction cycles (the chain-collapse re-materialize alone keeps every
+/// superseded slice). Metadata-only: the planner emits sub-ranges of existing
+/// block objects, so the coalesced manifest borrows them without copying bytes.
+fn compact_chunk_slices(chunks: Vec<ChunkManifest>) -> Result<Vec<ChunkManifest>, MetadError> {
+    chunks.into_iter().map(coalesce_chunk_slices).collect()
+}
+
+fn coalesce_chunk_slices(chunk: ChunkManifest) -> Result<ChunkManifest, MetadError> {
+    if chunk.slices.len() <= 1 {
+        return Ok(chunk);
+    }
+    let plan = plan_chunk_manifest_reads(
+        std::slice::from_ref(&chunk),
+        chunk.logical_offset,
+        usize::try_from(chunk.len).map_err(|_| ObjectError::InvalidRange)?,
+    )?;
+    let blocks = plan
+        .blocks
+        .into_iter()
+        .map(|read| BlockDescriptor {
+            object_key: read.object_key,
+            logical_offset: chunk.logical_offset + read.output_offset as u64,
+            object_offset: read.object_offset,
+            len: read.len as u64,
+            digest_uri: read.digest_uri,
+        })
+        .collect::<Vec<_>>();
+    let mut coalesced = ChunkManifest {
+        chunk_index: chunk.chunk_index,
+        logical_offset: chunk.logical_offset,
+        len: chunk.len,
+        slices: Vec::new(),
+    };
+    append_contiguous_slices(&mut coalesced, blocks)?;
+    Ok(coalesced)
 }
 
 fn append_chunk_manifest_slices(
@@ -1304,6 +1476,43 @@ impl fmt::Display for MetadError {
             Self::DirectoryNotEmpty => write!(f, "directory is not empty"),
             Self::CannotRemoveRoot => write!(f, "root directory cannot be removed"),
             Self::MissingBodyDescriptor => write!(f, "file is missing body descriptor"),
+            Self::InvalidOwnerEpoch => write!(f, "owner epoch must be non-zero"),
+            Self::StaleOwnerEpoch {
+                owner_epoch,
+                required_epoch,
+            } => write!(
+                f,
+                "owner epoch {owner_epoch} is stale; required owner epoch is {required_epoch}"
+            ),
+            Self::LeaseExpired {
+                now_ms,
+                deadline_ms,
+            } => write!(
+                f,
+                "owner lease expired: now {now_ms}ms is past deadline {deadline_ms}ms"
+            ),
+            Self::NotOwner { shard_id, endpoint } => match endpoint {
+                Some(endpoint) => write!(
+                    f,
+                    "shard {shard_id} is not owned here; current owner endpoint is {endpoint}"
+                ),
+                None => write!(f, "shard {shard_id} is not owned here"),
+            },
+            Self::CrossShard {
+                source_shard,
+                dest_shard,
+            } => write!(
+                f,
+                "cross-shard operation from shard {source_shard} to shard {dest_shard} is not supported (EXDEV)"
+            ),
+            Self::GraftPoint => write!(
+                f,
+                "path is a cross-shard graft point; use unregister-graft"
+            ),
+            Self::SyncLogArchiveFailed { committed, message } => write!(
+                f,
+                "metadata sync log archive failed (committed={committed}): {message}"
+            ),
         }
     }
 }

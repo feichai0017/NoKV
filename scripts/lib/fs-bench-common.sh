@@ -59,6 +59,9 @@ NOKV_MOUNT_OPTIONS="${NOKV_BENCH_NOKV_MOUNT_OPTIONS:-}"
 NOKV_FUSE_THREADS="${NOKV_BENCH_NOKV_FUSE_THREADS:-}"
 NOKV_HOT_OBJECT_ROOT="${NOKV_BENCH_HOT_OBJECT_ROOT:-auto}"
 NOKV_HOT_OBJECT_MAX_BYTES="${NOKV_BENCH_HOT_OBJECT_MAX_BYTES:-}"
+RANGE_STRIDE="${NOKV_BENCH_RANGE_STRIDE:-2}"
+RANGE_COALESCE_GAP_BYTES="${NOKV_BENCH_RANGE_COALESCE_GAP_BYTES:-512}"
+CACHE_STATES="${NOKV_BENCH_CACHE_STATES:-cold,warm}"
 
 # Runtime state (set by the lifecycle functions).
 RUSTFS_PID="" REDIS_PID="" SERVER_PID="" NOKV_MOUNT_PID="" JUICEFS_MOUNT_PID=""
@@ -88,7 +91,7 @@ bench_require_tools() {
 
 bench_nokv_object_backend_label() {
     if [[ -n "$NOKV_HOT_OBJECT_ROOT" && "$NOKV_HOT_OBJECT_ROOT" != "none" ]]; then
-        echo "rustfs+local-hot"
+        echo "rustfs+local-hot+put=cold-then-hot"
     else
         echo "rustfs"
     fi
@@ -339,14 +342,21 @@ bench_run_native() {
     local system="$1" mount="$2" tier="$3" concurrency="$4" emit_header="$5"
     local workloads="${6:-metadata_create_list,checkpoint,training_read}"
     local object_backend="rustfs"
+    local stats_args=()
     [[ "$system" == "nokv" ]] && object_backend="$(bench_nokv_object_backend_label)"
+    if [[ "$system" == "nokv" && -n "${NOKV_MOUNT_STATS_ADDRESS:-}" ]]; then
+        stats_args+=(--stats-url "http://${NOKV_MOUNT_STATS_ADDRESS}/stats")
+    fi
     "$PYTHON_BIN" "$ROOT_DIR/bench/drivers/posix_bench.py" \
         --system "$system" --mount "$mount" --metadata-tier "$tier" --object-backend "$object_backend" \
         --profile "$PROFILE" --concurrency "$concurrency" --workloads "$workloads" \
         --dataset-dirs "${DATASET_DIRS:-8}" --files-per-dir "${FILES_PER_DIR:-64}" \
         --sample-bytes "${SAMPLE_BYTES:-512}" --checkpoint-bytes "${CHECKPOINT_BYTES:-4096}" \
         --checkpoint-steps "${CHECKPOINT_STEPS:-32}" \
-        --fsync "$FSYNC" --emit-header "$emit_header"
+        --range-stride "$RANGE_STRIDE" --range-coalesce-gap-bytes "$RANGE_COALESCE_GAP_BYTES" \
+        --cache-states "$CACHE_STATES" \
+        --fsync "$FSYNC" --emit-header "$emit_header" \
+        "${stats_args[@]}"
 }
 
 # bench_run_real_tools <system> <mount> <tier> <concurrency> <tools> <emit_header>

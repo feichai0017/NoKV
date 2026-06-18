@@ -123,6 +123,7 @@ pub fn encode_dentry_projection(projection: &DentryProjection) -> Vec<u8> {
             put_string(&mut out, &body.content_type);
             put_string(&mut out, &body.manifest_id);
             push_u64(&mut out, body.generation);
+            push_u64(&mut out, body.base_generation);
             push_u64(&mut out, body.chunk_size);
             push_u64(&mut out, body.block_size);
         }
@@ -150,6 +151,7 @@ pub fn decode_dentry_projection(bytes: &[u8]) -> Result<DentryProjection, CodecE
             content_type: input.string()?,
             manifest_id: input.string()?,
             generation: input.u64()?,
+            base_generation: input.u64()?,
             chunk_size: input.u64()?,
             block_size: input.u64()?,
         }),
@@ -177,6 +179,7 @@ pub fn encode_body_descriptor(body: &BodyDescriptor) -> Vec<u8> {
     put_string(&mut out, &body.content_type);
     put_string(&mut out, &body.manifest_id);
     push_u64(&mut out, body.generation);
+    push_u64(&mut out, body.base_generation);
     push_u64(&mut out, body.chunk_size);
     push_u64(&mut out, body.block_size);
     out
@@ -191,6 +194,7 @@ pub fn decode_body_descriptor(bytes: &[u8]) -> Result<BodyDescriptor, CodecError
         content_type: input.string()?,
         manifest_id: input.string()?,
         generation: input.u64()?,
+        base_generation: input.u64()?,
         chunk_size: input.u64()?,
         block_size: input.u64()?,
     };
@@ -690,5 +694,25 @@ mod tests {
             source
         );
         assert!(decode_fork_shadow(b"").is_err());
+    }
+
+    #[test]
+    fn body_descriptor_round_trips_base_generation() {
+        // Distinct generation/base_generation so a dropped or swapped field fails.
+        let body = BodyDescriptor {
+            producer: "producer".to_owned(),
+            digest_uri: "sha256:body".to_owned(),
+            size: 4096,
+            content_type: "application/octet-stream".to_owned(),
+            manifest_id: "manifest-12".to_owned(),
+            generation: 12,
+            base_generation: 11,
+            chunk_size: 64 * 1024 * 1024,
+            block_size: 4 * 1024 * 1024,
+        };
+        let decoded = decode_body_descriptor(&encode_body_descriptor(&body)).unwrap();
+        assert_eq!(decoded, body);
+        assert_eq!(decoded.base_generation, 11);
+        assert_ne!(decoded.base_generation, decoded.generation);
     }
 }

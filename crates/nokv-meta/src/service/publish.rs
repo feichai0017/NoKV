@@ -394,8 +394,8 @@ where
             ));
         }
         let version = Version::new(prepared.generation)?;
-        let old_chunks = self.prepared_old_chunks(&prepared)?;
-        let chunks = merge_session_chunks(request.size, old_chunks.clone(), request.chunks)?;
+        let (chunks, base_generation) =
+            self.resolve_session_chunks(&prepared, request.size, request.chunks)?;
         self.manifest_chunks
             .fetch_add(chunks.len() as u64, Ordering::Relaxed);
         self.manifest_blocks
@@ -407,9 +407,13 @@ where
             content_type: request.content_type,
             manifest_id: request.manifest_id,
             generation: version.get(),
+            base_generation,
             chunk_size: DEFAULT_CHUNK_SIZE,
             block_size: DEFAULT_BLOCK_SIZE as u64,
         };
+        // A delta publish preserves its base generation; the prior generation's
+        // blocks are reclaimed later at chain collapse (compaction), not here.
+        let old_chunks: Vec<ChunkManifest> = Vec::new();
         self.publish_prepared_artifact_impl(PreparedArtifactPublish {
             prepared,
             body,
@@ -490,6 +494,8 @@ where
                 content_type: request.content_type.clone(),
                 manifest_id: written.manifest_id,
                 generation: version.get(),
+                // Fresh write: no prior generation to fall through to.
+                base_generation: 0,
                 chunk_size: written.chunk_size,
                 block_size: written.block_size,
             },
@@ -548,6 +554,9 @@ where
                 content_type: request.content_type.clone(),
                 manifest_id: written.manifest_id,
                 generation: version.get(),
+                // Self-contained today (merge_session_chunks re-materializes);
+                // Phase 2 makes this the delta path and sets the prior gen here.
+                base_generation: 0,
                 chunk_size: DEFAULT_CHUNK_SIZE,
                 block_size: DEFAULT_BLOCK_SIZE as u64,
             },
@@ -583,5 +592,108 @@ where
             version,
             ReadPurpose::WritePlanLocal,
         )
+    }
+
+    /// Resolve the chunk manifests to commit for a write session plus the
+    /// `base_generation` to record on the body.
+    ///
+    /// A fresh / non-replace write produces a self-contained full manifest
+    /// (`base_generation == 0`). A replace over an existing body produces a
+    /// **delta**: only the dirty chunks, each self-contained (its prior blocks
+    /// inherited from the old generation's chain), with `base_generation` set to
+    /// the prior generation so untouched chunks fall through to it on read. A
+    /// partial write therefore commits O(dirty chunks) manifest records instead
+    /// of re-materializing the whole file.
+    fn resolve_session_chunks(
+        &self,
+        prepared: &PreparedArtifact,
+        size: u64,
+        dirty_chunks: Vec<ChunkManifest>,
+    ) -> Result<(Vec<ChunkManifest>, u64), MetadError> {
+        let old_generation = if prepared.replace {
+            prepared.old_generation
+        } else {
+            None
+        };
+        let Some(old_generation) = old_generation else {
+            return Ok((merge_session_chunks(size, Vec::new(), dirty_chunks)?, 0));
+        };
+        let version = self.read_version()?;
+        let Some(old_body) = self.body_descriptor_at_version_for_purpose(
+            prepared.inode,
+            old_generation,
+            version,
+            ReadPurpose::WritePlanLocal,
+        )?
+        else {
+            // The prior generation is gone; fall back to a self-contained write.
+            return Ok((merge_session_chunks(size, Vec::new(), dirty_chunks)?, 0));
+        };
+        let old_chain = self.resolve_generation_chain(
+            prepared.inode,
+            &old_body,
+            version,
+            ReadPurpose::WritePlanLocal,
+        )?;
+        // Compaction trigger: once the fall-through chain reaches the depth
+        // threshold, re-materialize a self-contained generation instead of
+        // extending the chain. This collapses the chain back to length 1 so
+        // reads stay shallow and the chain never approaches the hard read cap.
+        // O(file) at this write, but amortized over the cheap O(write) deltas
+        // between compactions.
+        const COMPACTION_CHAIN_DEPTH: usize = 8;
+        if old_chain.len() >= COMPACTION_CHAIN_DEPTH {
+            let old_chunks = self.chunk_manifests_for_body_at_version(
+                prepared.inode,
+                &old_body,
+                version,
+                ReadPurpose::WritePlanLocal,
+            )?;
+            let chunks = merge_session_chunks(size, old_chunks, dirty_chunks)?;
+            // Coalesce accumulated slices so compaction actually bounds read
+            // amplification, not just chain depth.
+            let chunks = compact_chunk_slices(chunks)?;
+            return Ok((chunks, 0));
+        }
+        let chunks =
+            self.delta_session_chunks(prepared.inode, &old_chain, size, dirty_chunks, version)?;
+        Ok((chunks, old_generation))
+    }
+
+    /// Build self-contained manifests for only the chunks a write touched:
+    /// inherit each dirty chunk's prior blocks from the old generation's chain
+    /// (older slice ids), then append the new blocks (newer slice ids, which win
+    /// on overlap). Chunks that resolve to no blocks are omitted so they fall
+    /// through to the base on read rather than shadowing it with a hole.
+    fn delta_session_chunks(
+        &self,
+        inode: InodeId,
+        old_chain: &[u64],
+        size: u64,
+        dirty_chunks: Vec<ChunkManifest>,
+        version: Version,
+    ) -> Result<Vec<ChunkManifest>, MetadError> {
+        let mut dirty_indexes = std::collections::BTreeSet::<u64>::new();
+        for chunk in &dirty_chunks {
+            for slice in &chunk.slices {
+                dirty_indexes.insert(slice.logical_offset / DEFAULT_CHUNK_SIZE);
+            }
+        }
+        let mut chunks = std::collections::BTreeMap::<u64, ChunkManifest>::new();
+        for &chunk_index in &dirty_indexes {
+            if let Some(old) = self.chain_chunk_manifest(
+                inode,
+                old_chain,
+                chunk_index,
+                version,
+                ReadPurpose::WritePlanLocal,
+            )? {
+                append_chunk_manifest_slices(&mut chunks, old, size)?;
+            }
+        }
+        for chunk in dirty_chunks {
+            append_chunk_manifest_slices(&mut chunks, chunk, size)?;
+        }
+        Ok(chunks.into_values().collect())
     }
 }

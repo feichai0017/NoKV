@@ -10,11 +10,12 @@ use nokv_meta::{
 use nokv_object::{
     plan_chunk_manifest_reads, put_chunked_ranges_parallel, BlockCache, BlockReadOptions,
     BlockReadOutcome, ChunkStore, ChunkWriteOptions, ChunkWriteRange, ChunkedWrite,
-    FileReadPipeline, FileReadRequest, FileWritePipeline, ObjectBlockCache, ObjectError,
-    ObjectPrefetchOptions, ObjectPrefetchRequest, ObjectPrefetcher, ObjectReadBlock,
-    ObjectReadPlan, ObjectReadPlanCache, ObjectReadPlanKey, ObjectStore, ObjectWritebackOptions,
-    ObjectWritebackRequest, ObjectWritebackUploader, PendingChunkedWrite, WritebackCache,
-    WritebackCacheOptions, WritebackUploadRange, DEFAULT_BLOCK_SIZE, DEFAULT_CHUNK_SIZE,
+    FileReadPipeline, FileReadRequest, FileWritePipeline, MemoryBlockCache,
+    MemoryBlockCacheOptions, ObjectBlockCache, ObjectError, ObjectPrefetchOptions,
+    ObjectPrefetchRequest, ObjectPrefetcher, ObjectReadBlock, ObjectReadPlan, ObjectReadPlanCache,
+    ObjectReadPlanKey, ObjectStore, ObjectWritebackOptions, ObjectWritebackRequest,
+    ObjectWritebackUploader, PendingChunkedWrite, WritebackCache, WritebackCacheOptions,
+    WritebackUploadRange, DEFAULT_BLOCK_SIZE, DEFAULT_CHUNK_SIZE,
 };
 use nokv_types::{
     AdvisoryLock, AdvisoryLockRequest, ChunkManifest, DentryName, InodeAttr, InodeId,
@@ -22,6 +23,15 @@ use nokv_types::{
 };
 
 use crate::filesystem::{FuseObjectPipelineStats, FuseOptions, PendingBufferedRange};
+
+const READ_PLAN_CACHE_CAPACITY: usize = 128 * 1024;
+const READ_PLAN_CACHE_SHARDS: usize = 16;
+/// Bounded read-ahead staging buffer used when prefetch is on but the (re-read)
+/// block cache is disabled, so cold sequential reads still pipeline ahead
+/// instead of falling back to serial per-block fetches. Small relative to a large
+/// file, so it stages the read-ahead window without acting as a re-read cache.
+const READAHEAD_BUFFER_BYTES: u64 = 64 * 1024 * 1024;
+const READAHEAD_BUFFER_ITEMS: usize = 4096;
 
 pub(crate) type FuseBackendResult<T> = Result<T, FuseBackendError>;
 
@@ -32,10 +42,38 @@ pub(crate) enum FuseBackendError {
     Object(ObjectError),
 }
 
+/// The prepared-artifact scalars the write-back publish journal must persist to
+/// re-drive (or recover) a generation without the live `WriteHandle`. Extracted
+/// from a `Self::Prepared` via [`FuseBackend::prepared_record_fields`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct PreparedRecordFields {
+    pub mount: u64,
+    pub generation: u64,
+    pub mtime_ms: u64,
+    pub ctime_ms: u64,
+    pub replace: bool,
+    pub dentry_version: Option<u64>,
+    pub old_generation: Option<u64>,
+}
+
+/// One writeback-cache block to re-stage during async-publish mount recovery,
+/// rebuilt from a journal `CacheFileRef`. `cache_key` re-indexes the on-disk
+/// `file_name`; `logical_offset` places it back in the re-upload.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct RecoveredBlock {
+    pub logical_offset: u64,
+    pub cache_key: String,
+    pub file_name: String,
+    pub len: u64,
+}
+
 pub(crate) trait FuseBackend: Send + Sync + 'static {
     type Prepared: Clone + Send + Sync + 'static;
 
     fn prepared_generation(&self, prepared: &Self::Prepared) -> u64;
+    /// The journal-persistable scalars of a prepared artifact, for async-publish
+    /// write-back (recording at ack, reconstructing on recovery).
+    fn prepared_record_fields(&self, prepared: &Self::Prepared) -> PreparedRecordFields;
     /// Whether `prepared` is an artifact-*replace* (vs a fresh create). Only
     /// replaces carry a dentry-version CAS guard that can be invalidated by an
     /// intervening attribute update on the same file.
@@ -104,12 +142,19 @@ pub(crate) trait FuseBackend: Send + Sync + 'static {
         new_name: DentryName,
     ) -> FuseBackendResult<RenameReplaceResult>;
     fn read_file(&self, inode: InodeId, offset: u64, len: usize) -> FuseBackendResult<Vec<u8>>;
+    fn read_file_with_known_attr(
+        &self,
+        attr: &InodeAttr,
+        offset: u64,
+        len: usize,
+    ) -> FuseBackendResult<Vec<u8>>;
     fn read_file_with_known_attr_pipeline(
         &self,
         attr: &InodeAttr,
         offset: u64,
         len: usize,
         pipeline: &mut FileReadPipeline,
+        read_plans: &mut ObjectReadPlanCache,
     ) -> FuseBackendResult<Vec<u8>>;
     fn read_file_at_snapshot(
         &self,
@@ -215,6 +260,36 @@ pub(crate) trait FuseBackend: Send + Sync + 'static {
         ranges: &[PendingBufferedRange],
         block_index_base: u64,
     ) -> FuseBackendResult<PendingChunkedWrite>;
+    /// Re-stage already-cached write blocks after a crash: re-index each in the
+    /// writeback cache and re-upload from there, yielding the pending upload the
+    /// publisher worker drains. Used only by async-publish mount recovery; a
+    /// missing cache file fails the call (recovery then accepts the loss).
+    fn restage_cached_blocks(
+        &self,
+        prepared: &Self::Prepared,
+        manifest_id: &str,
+        blocks: &[RecoveredBlock],
+        block_index_base: u64,
+    ) -> FuseBackendResult<PendingChunkedWrite>;
+    /// Rebuild a prepared artifact from the scalars persisted in the publish
+    /// journal, so recovery can re-drive a generation without the `WriteHandle`.
+    fn prepared_from_record_fields(
+        &self,
+        parent: InodeId,
+        name: DentryName,
+        inode: InodeId,
+        fields: PreparedRecordFields,
+    ) -> Self::Prepared;
+    /// Delete writeback-cache files not referenced by any live journal record
+    /// (staged before a crash recorded them). Returns the count purged.
+    fn purge_cache_orphans(
+        &self,
+        live_file_names: &std::collections::HashSet<String>,
+    ) -> FuseBackendResult<usize>;
+    /// fsync the writeback-cache root, batching the staged blocks' directory
+    /// durability into one call at the async-publish ack. A no-op without a
+    /// writeback cache.
+    fn sync_writeback_root(&self) -> FuseBackendResult<()>;
     fn cleanup_staged_objects(
         &self,
         staged: &nokv_object::StagedObjectSet,
@@ -237,8 +312,14 @@ pub(crate) trait FuseBackend: Send + Sync + 'static {
 pub(crate) struct ClientFuseBackend<O> {
     metadata: MetadataClient,
     objects: Arc<O>,
+    /// User-configured re-read block cache (`None` with `--no-block-cache`). Kept
+    /// distinct from `read_cache` so cache-hit stats reflect the configured cache,
+    /// not the read-ahead staging buffer.
     block_cache: Option<ObjectBlockCache>,
-    read_plan_cache: Mutex<ObjectReadPlanCache>,
+    /// Effective read buffer foreground reads + the prefetcher use: the configured
+    /// block cache, or a small read-ahead buffer when prefetch is on without one.
+    read_cache: Option<ObjectBlockCache>,
+    read_plan_cache: ReadPlanCacheShards,
     read_plan_cache_hits: AtomicU64,
     read_plan_cache_misses: AtomicU64,
     foreground_object_gets: AtomicU64,
@@ -257,6 +338,66 @@ pub(crate) struct ClientFuseBackend<O> {
     upload_workers: usize,
 }
 
+#[derive(Debug)]
+struct ReadPlanCacheShards {
+    shards: Vec<Mutex<ObjectReadPlanCache>>,
+}
+
+impl ReadPlanCacheShards {
+    fn new(total_capacity: usize, shard_count: usize) -> Self {
+        let shard_count = shard_count.max(1);
+        let capacity_per_shard = total_capacity.max(1).div_ceil(shard_count);
+        let shards = (0..shard_count)
+            .map(|_| Mutex::new(ObjectReadPlanCache::new(capacity_per_shard)))
+            .collect();
+        Self { shards }
+    }
+
+    fn get(&self, key: &ObjectReadPlanKey) -> Result<Option<ObjectReadPlan>, ObjectError> {
+        let mut shard = self.shard(key).lock().map_err(|err| {
+            ObjectError::Backend(format!("read plan cache shard lock poisoned: {err}"))
+        })?;
+        Ok(shard.get(key))
+    }
+
+    fn insert(&self, key: ObjectReadPlanKey, plan: ObjectReadPlan) -> Result<(), ObjectError> {
+        self.shard(&key)
+            .lock()
+            .map_err(|err| {
+                ObjectError::Backend(format!("read plan cache shard lock poisoned: {err}"))
+            })?
+            .insert(key, plan);
+        Ok(())
+    }
+
+    fn shard(&self, key: &ObjectReadPlanKey) -> &Mutex<ObjectReadPlanCache> {
+        let index = read_plan_cache_shard_index(key, self.shards.len());
+        &self.shards[index]
+    }
+}
+
+fn read_plan_cache_shard_index(key: &ObjectReadPlanKey, shard_count: usize) -> usize {
+    debug_assert!(shard_count > 0);
+    // Hash only the (inode, generation) identity, NOT offset/len: every plan for
+    // one (inode, generation) must land on the same shard so the covering
+    // full-file plan can be reused for slice reads. Mixing offset/len in would
+    // scatter full-file and slice keys across shards and defeat that reuse.
+    let hash = key.object_id ^ key.generation.rotate_left(17);
+    hash as usize % shard_count
+}
+
+fn full_file_read_plan_key(attr: &InodeAttr) -> Option<ObjectReadPlanKey> {
+    if attr.size == 0 {
+        return None;
+    }
+    Some(ObjectReadPlanKey::new(
+        attr.inode.get(),
+        attr.generation,
+        0,
+        usize::try_from(attr.size).ok()?,
+    ))
+}
+
 impl<O> ClientFuseBackend<O>
 where
     O: ObjectStore + Send + Sync + 'static,
@@ -268,8 +409,25 @@ where
     ) -> FuseBackendResult<Self> {
         let objects = Arc::new(objects);
         let block_cache = options.block_cache.clone().open()?;
+        // The prefetcher stages read-ahead blocks into a cache that foreground
+        // reads then consult. When the (re-read) block cache is disabled but
+        // prefetch is on, give the read path a small bounded read-ahead buffer
+        // anyway — otherwise sequential read-ahead is detected but dropped and
+        // cold reads degrade to serial per-block fetches. The configured block
+        // cache, when present, doubles as this buffer.
+        let read_cache = match &block_cache {
+            Some(cache) => Some(cache.clone()),
+            None if options.prefetch.enabled => Some(ObjectBlockCache::Memory(
+                MemoryBlockCache::new(MemoryBlockCacheOptions {
+                    max_bytes: READAHEAD_BUFFER_BYTES,
+                    max_items: READAHEAD_BUFFER_ITEMS,
+                    ttl: None,
+                }),
+            )),
+            None => None,
+        };
         let prefetcher = if options.prefetch.enabled {
-            block_cache.as_ref().map(|cache| {
+            read_cache.as_ref().map(|cache| {
                 ObjectPrefetcher::new(
                     Arc::clone(&objects),
                     cache.clone(),
@@ -293,6 +451,10 @@ where
             queue_capacity: writeback.queue_capacity.max(1),
             workers: writeback.workers.max(1),
             upload_workers_per_request: writeback.upload_workers_per_request.max(1),
+            // Async-publish keeps cache copies until the background worker commits
+            // the manifest (then evicts them); the synchronous path evicts on
+            // upload as before.
+            retain_cache_on_success: writeback.async_publish,
         };
         let writeback_uploader = Some(match writeback_cache.clone() {
             Some(cache) => {
@@ -304,7 +466,11 @@ where
             metadata,
             objects,
             block_cache,
-            read_plan_cache: Mutex::new(ObjectReadPlanCache::new(4096)),
+            read_cache,
+            read_plan_cache: ReadPlanCacheShards::new(
+                READ_PLAN_CACHE_CAPACITY,
+                READ_PLAN_CACHE_SHARDS,
+            ),
             read_plan_cache_hits: AtomicU64::new(0),
             read_plan_cache_misses: AtomicU64::new(0),
             foreground_object_gets: AtomicU64::new(0),
@@ -398,6 +564,8 @@ where
                 .transpose()?,
             tiered_object: self.objects.tiered_stats()?,
             local_hot: self.objects.local_hot_stats()?,
+            fuse_read_requests: 0,
+            fuse_read_request_bytes: 0,
             foreground_object_gets: self.foreground_object_gets.load(Ordering::Relaxed),
             foreground_object_get_bytes: self.foreground_object_get_bytes.load(Ordering::Relaxed),
             foreground_coalesced_gets: self.foreground_coalesced_gets.load(Ordering::Relaxed),
@@ -427,11 +595,7 @@ where
         len: usize,
     ) -> FuseBackendResult<ObjectReadPlan> {
         let key = ObjectReadPlanKey::new(inode.get(), generation, offset, len);
-        let cached = self
-            .read_plan_cache
-            .lock()
-            .map_err(|err| ObjectError::Backend(format!("read plan cache lock poisoned: {err}")))?
-            .get(&key);
+        let cached = self.read_plan_cache.get(&key)?;
         if let Some(plan) = cached {
             self.read_plan_cache_hits.fetch_add(1, Ordering::Relaxed);
             return Ok(plan);
@@ -445,16 +609,57 @@ where
         Ok(plan)
     }
 
+    fn cached_read_body_plan_for_handle(
+        &self,
+        attr: &InodeAttr,
+        offset: u64,
+        len: usize,
+        local: &mut ObjectReadPlanCache,
+    ) -> FuseBackendResult<ObjectReadPlan> {
+        let key = ObjectReadPlanKey::new(attr.inode.get(), attr.generation, offset, len);
+        if let Some(plan) = local.get_exact(&key) {
+            self.read_plan_cache_hits.fetch_add(1, Ordering::Relaxed);
+            return Ok(plan);
+        }
+
+        if let Some(full_key) = full_file_read_plan_key(attr) {
+            if full_key != key {
+                if let Some(plan) = local.get_slice_from(full_key, key) {
+                    self.read_plan_cache_hits.fetch_add(1, Ordering::Relaxed);
+                    return Ok(plan);
+                }
+                if let Some(full_plan) = self.read_plan_cache.get(&full_key)? {
+                    local.insert(full_key, full_plan);
+                    if let Some(plan) = local.get_slice_from(full_key, key) {
+                        self.read_plan_cache_hits.fetch_add(1, Ordering::Relaxed);
+                        return Ok(plan);
+                    }
+                }
+            }
+        }
+
+        if let Some(plan) = self.read_plan_cache.get(&key)? {
+            self.read_plan_cache_hits.fetch_add(1, Ordering::Relaxed);
+            local.insert(key, plan.clone());
+            return Ok(plan);
+        }
+
+        self.read_plan_cache_misses.fetch_add(1, Ordering::Relaxed);
+        let plan = self
+            .metadata
+            .read_body_plan(attr.inode, attr.generation, offset, len)
+            .map_err(FuseBackendError::from)?;
+        self.cache_read_body_plan(key, plan.clone())?;
+        local.insert(key, plan.clone());
+        Ok(plan)
+    }
+
     fn cache_read_body_plan(
         &self,
         key: ObjectReadPlanKey,
         plan: ObjectReadPlan,
     ) -> FuseBackendResult<()> {
-        self.read_plan_cache
-            .lock()
-            .map_err(|err| ObjectError::Backend(format!("read plan cache lock poisoned: {err}")))?
-            .insert(key, plan);
-        Ok(())
+        self.read_plan_cache.insert(key, plan).map_err(Into::into)
     }
 
     fn cache_published_staged_read_plan(
@@ -568,6 +773,18 @@ where
 
     fn prepared_generation(&self, prepared: &Self::Prepared) -> u64 {
         prepared.generation
+    }
+
+    fn prepared_record_fields(&self, prepared: &Self::Prepared) -> PreparedRecordFields {
+        PreparedRecordFields {
+            mount: prepared.mount,
+            generation: prepared.generation,
+            mtime_ms: prepared.mtime_ms,
+            ctime_ms: prepared.ctime_ms,
+            replace: prepared.replace,
+            dentry_version: prepared.dentry_version,
+            old_generation: prepared.old_generation,
+        }
     }
 
     fn prepared_is_replace(&self, prepared: &Self::Prepared) -> bool {
@@ -694,9 +911,21 @@ where
         else {
             return Err(FuseBackendError::Metadata(MetadError::NotFound));
         };
-        let plan = self.cached_read_body_plan(inode, attr.generation, offset, len)?;
+        self.read_file_with_known_attr(&attr, offset, len)
+    }
+
+    fn read_file_with_known_attr(
+        &self,
+        attr: &InodeAttr,
+        offset: u64,
+        len: usize,
+    ) -> FuseBackendResult<Vec<u8>> {
+        if len == 0 || offset >= attr.size {
+            return Ok(Vec::new());
+        }
+        let plan = self.cached_read_body_plan(attr.inode, attr.generation, offset, len)?;
         let read = self.objects.read_blocks_with_options(
-            self.block_cache.as_ref(),
+            self.read_cache.as_ref(),
             plan.output_len,
             &plan.blocks,
             self.read_options(),
@@ -711,14 +940,15 @@ where
         offset: u64,
         len: usize,
         pipeline: &mut FileReadPipeline,
+        read_plans: &mut ObjectReadPlanCache,
     ) -> FuseBackendResult<Vec<u8>> {
         if len == 0 || offset >= attr.size {
             return Ok(Vec::new());
         }
-        let plan = self.cached_read_body_plan(attr.inode, attr.generation, offset, len)?;
+        let plan = self.cached_read_body_plan_for_handle(attr, offset, len, read_plans)?;
         let read = pipeline.read_blocks_with_options(
             &self.objects,
-            self.block_cache.as_ref(),
+            self.read_cache.as_ref(),
             FileReadRequest {
                 file_size: attr.size,
                 offset,
@@ -1017,6 +1247,100 @@ where
         }
     }
 
+    fn restage_cached_blocks(
+        &self,
+        prepared: &Self::Prepared,
+        manifest_id: &str,
+        blocks: &[RecoveredBlock],
+        block_index_base: u64,
+    ) -> FuseBackendResult<PendingChunkedWrite> {
+        let writeback_uploader = self.writeback_uploader.as_ref().ok_or_else(|| {
+            FuseBackendError::Object(ObjectError::Backend(
+                "async-publish recovery requires a writeback uploader".to_owned(),
+            ))
+        })?;
+        let writeback_cache = self.writeback_cache.as_ref().ok_or_else(|| {
+            FuseBackendError::Object(ObjectError::Backend(
+                "async-publish recovery requires a writeback cache".to_owned(),
+            ))
+        })?;
+        let mut upload_ranges: Vec<WritebackUploadRange> = Vec::with_capacity(blocks.len());
+        for block in blocks.iter().filter(|block| block.len != 0) {
+            // A missing cache file (cache wiped between runs) surfaces here, so the
+            // caller can accept the loss rather than wedge on a record it cannot
+            // re-drive.
+            let ticket = writeback_cache.reinsert(
+                block.cache_key.clone(),
+                block.file_name.clone(),
+                block.len,
+            )?;
+            upload_ranges.push(WritebackUploadRange::cache(block.logical_offset, ticket));
+        }
+        if upload_ranges.is_empty() {
+            return Ok(PendingChunkedWrite::ready(Ok(ChunkedWrite {
+                manifest_id: manifest_id.to_owned(),
+                size: 0,
+                chunk_size: DEFAULT_CHUNK_SIZE,
+                block_size: DEFAULT_BLOCK_SIZE as u64,
+                chunks: Vec::new(),
+                object_puts: 0,
+                object_put_bytes: 0,
+            })));
+        }
+        let request = ObjectWritebackRequest {
+            ranges: upload_ranges,
+            options: ChunkWriteOptions {
+                manifest_id: manifest_id.to_owned(),
+                mount: prepared.mount,
+                inode: prepared.inode.get(),
+                generation: prepared.generation,
+                chunk_size: DEFAULT_CHUNK_SIZE,
+                block_size: DEFAULT_BLOCK_SIZE,
+            },
+            block_index_base,
+        };
+        writeback_uploader.submit(request).map_err(Into::into)
+    }
+
+    fn prepared_from_record_fields(
+        &self,
+        parent: InodeId,
+        name: DentryName,
+        inode: InodeId,
+        fields: PreparedRecordFields,
+    ) -> Self::Prepared {
+        ClientPreparedArtifact {
+            mount: fields.mount,
+            parent,
+            name,
+            path: None,
+            inode,
+            generation: fields.generation,
+            mtime_ms: fields.mtime_ms,
+            ctime_ms: fields.ctime_ms,
+            replace: fields.replace,
+            dentry_version: fields.dentry_version,
+            old_generation: fields.old_generation,
+        }
+    }
+
+    fn purge_cache_orphans(
+        &self,
+        live_file_names: &std::collections::HashSet<String>,
+    ) -> FuseBackendResult<usize> {
+        match &self.writeback_cache {
+            Some(cache) => cache.purge_orphans(live_file_names).map_err(Into::into),
+            None => Ok(0),
+        }
+    }
+
+    fn sync_writeback_root(&self) -> FuseBackendResult<()> {
+        match &self.writeback_cache {
+            Some(cache) => cache.sync_root().map_err(Into::into),
+            None => Ok(()),
+        }
+    }
+
     fn cleanup_staged_objects(
         &self,
         staged: &nokv_object::StagedObjectSet,
@@ -1085,7 +1409,7 @@ mod tests {
 
     use nokv_client::MetadataClientOptions;
     use nokv_object::{MemoryObjectStore, ObjectKey, ObjectStore};
-    use nokv_types::DentryName;
+    use nokv_types::{DentryName, FileType};
 
     use super::*;
 
@@ -1332,6 +1656,111 @@ mod tests {
         let stats = backend.object_pipeline_stats().unwrap();
         assert_eq!(stats.read_plan_cache_hits, 1);
         assert_eq!(stats.read_plan_cache_misses, 0);
+    }
+
+    #[test]
+    fn read_plan_cache_shard_index_groups_one_generation_on_one_shard() {
+        // The full-file covering plan and every slice lookup for the same
+        // (inode, generation) must hash to the same shard, otherwise a slice read
+        // can't find the covering plan another offset seeded.
+        let shard_count = 16;
+        let full = ObjectReadPlanKey::new(42, 7, 0, 4096);
+        let slice_a = ObjectReadPlanKey::new(42, 7, 512, 256);
+        let slice_b = ObjectReadPlanKey::new(42, 7, 3000, 1096);
+        let full_shard = read_plan_cache_shard_index(&full, shard_count);
+        assert_eq!(
+            read_plan_cache_shard_index(&slice_a, shard_count),
+            full_shard
+        );
+        assert_eq!(
+            read_plan_cache_shard_index(&slice_b, shard_count),
+            full_shard
+        );
+
+        // A different generation of the same inode is allowed to land elsewhere;
+        // we only require offset/len to be irrelevant to the shard choice.
+        let next_gen = ObjectReadPlanKey::new(42, 8, 0, 4096);
+        assert_eq!(
+            read_plan_cache_shard_index(&next_gen, shard_count),
+            read_plan_cache_shard_index(&ObjectReadPlanKey::new(42, 8, 99, 1), shard_count),
+        );
+    }
+
+    #[test]
+    fn client_backend_seeds_handle_read_plan_cache_from_full_file_plan() {
+        let metadata = MetadataClient::new(MetadataClientOptions::new(SocketAddr::from((
+            [127, 0, 0, 1],
+            9,
+        ))));
+        let backend =
+            ClientFuseBackend::new(metadata, MemoryObjectStore::new(), &FuseOptions::default())
+                .unwrap();
+        let inode = InodeId::new(42).unwrap();
+        let attr = InodeAttr {
+            inode,
+            file_type: FileType::File,
+            mode: 0o644,
+            uid: 1000,
+            gid: 1000,
+            rdev: 0,
+            nlink: 1,
+            size: 12,
+            generation: 7,
+            mtime_ms: 1,
+            ctime_ms: 1,
+        };
+        backend
+            .cache_read_body_plan(
+                ObjectReadPlanKey::new(inode.get(), attr.generation, 0, attr.size as usize),
+                ObjectReadPlan::new(
+                    attr.size as usize,
+                    vec![ObjectReadBlock {
+                        object_key: "blocks/demo".to_owned(),
+                        digest_uri: "sha256:test".to_owned(),
+                        object_offset: 0,
+                        object_len: attr.size,
+                        len: attr.size as usize,
+                        output_offset: 0,
+                    }],
+                ),
+            )
+            .unwrap();
+
+        let mut local = ObjectReadPlanCache::new(8);
+        let first = backend
+            .cached_read_body_plan_for_handle(&attr, 4, 4, &mut local)
+            .unwrap();
+        assert_eq!(
+            first.blocks,
+            vec![ObjectReadBlock {
+                object_key: "blocks/demo".to_owned(),
+                digest_uri: "sha256:test".to_owned(),
+                object_offset: 4,
+                object_len: attr.size,
+                len: 4,
+                output_offset: 0,
+            }]
+        );
+        assert_eq!(local.len(), 1);
+
+        let second = backend
+            .cached_read_body_plan_for_handle(&attr, 8, 2, &mut local)
+            .unwrap();
+        assert_eq!(
+            second.blocks,
+            vec![ObjectReadBlock {
+                object_key: "blocks/demo".to_owned(),
+                digest_uri: "sha256:test".to_owned(),
+                object_offset: 8,
+                object_len: attr.size,
+                len: 2,
+                output_offset: 0,
+            }]
+        );
+        let stats = backend.object_pipeline_stats().unwrap();
+        assert_eq!(stats.read_plan_cache_hits, 2);
+        assert_eq!(stats.read_plan_cache_misses, 0);
+        assert_eq!(local.len(), 1);
     }
 
     #[test]
