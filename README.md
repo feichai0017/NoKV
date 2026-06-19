@@ -12,8 +12,6 @@ SPDX-License-Identifier: Apache-2.0
 
   <p>
     <a href="https://github.com/feichai0017/NoKV/actions"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/feichai0017/NoKV/rust.yml?branch=main&label=ci" /></a>
-    <a href="https://crates.io/crates/nokv"><img alt="crates.io" src="https://img.shields.io/crates/v/nokv?logo=rust" /></a>
-    <a href="https://docs.rs/nokv"><img alt="docs.rs" src="https://img.shields.io/docsrs/nokv?logo=docs.rs" /></a>
     <img alt="Rust Version" src="https://img.shields.io/badge/rust-1.88%2B-f74c00?logo=rust&logoColor=white" />
   </p>
 
