@@ -121,10 +121,12 @@ by val_loss" report costs two calls — one `catalog`, one `find`. `grep` sweeps
 a subtree and returns line-numbered matches with citable evidence URIs
 (`nokv-native://path@generation:N#L3`).
 
-The verbs are defined in [`nokv-client`](crates/nokv-client/src/agent.rs): the
-tool definitions are LLM-ready JSON schemas, and `execute_agent_tool` routes
-calls over the same `AgentNamespace` trait whether the namespace is remote
-(metadata RPC) or embedded.
+The verbs live in [`nokv-agent`](crates/nokv-agent/src/lib.rs): the tool
+definitions are LLM-ready JSON schemas, and `execute_agent_tool` routes calls
+over the same `AgentNamespace` trait whether the namespace is embedded
+(in-process) or remote (metadata RPC via `nokv-client`). The crate is
+transport-free — it depends only on `nokv-meta`, `nokv-object`, and
+`nokv-types`. See the [contributor handbook](docs/development/nokv-agent.md).
 
 **Today** the agent verbs ship in the Rust SDK; filesystem operations ship in
 the `nokv` CLI and FUSE mount. An **MCP server is in development** — follow
@@ -203,6 +205,7 @@ crates/
   nokv-meta      schema, MetadataCommand, Holt store, service core
   nokv-control   shard ownership, epochs, and failover coordination
   nokv-object    S3-compatible object body storage helpers
+  nokv-agent     transport-free agent tool surface (the seven read verbs)
   nokv-client    Rust SDK over metadata service and object backend
   nokv-fuse      low-level FUSE frontend
   nokv-server    long-running metad process and framed RPC service
@@ -285,6 +288,7 @@ covered by the FUSE smoke test.
 | [`nokv-object`](https://crates.io/crates/nokv-object) | S3-compatible object body storage |
 | [`nokv-meta`](https://crates.io/crates/nokv-meta) | Schema, `MetadataCommand`, Holt store, service core |
 | [`nokv-control`](https://crates.io/crates/nokv-control) | Shard ownership, epochs, and failover coordination |
+| [`nokv-agent`](https://crates.io/crates/nokv-agent) | Transport-free agent tool surface (the seven verbs) |
 | [`nokv-client`](https://crates.io/crates/nokv-client) | Rust SDK over the metadata service |
 | [`nokv-fuse`](https://crates.io/crates/nokv-fuse) | Low-level FUSE frontend |
 | [`nokv-server`](https://crates.io/crates/nokv-server) | Long-running metad process and framed RPC |
@@ -306,7 +310,8 @@ Implemented today:
 - Rust SDK and `nokv` CLI for namespace operations, artifact publish,
   metadata server access, and object range reads;
 - the seven-verb agent query surface (`ls`/`stat`/`catalog`/`find`/
-  `aggregate`/`read`/`grep`) in the Rust SDK, with LLM-ready tool definitions;
+  `aggregate`/`read`/`grep`) in the dedicated `nokv-agent` crate, re-exported
+  through the Rust SDK, with LLM-ready tool definitions;
 - long-running `nokv-server` with health, readiness, stats, manual GC, and
   framed binary metadata RPC;
 - `nokv-control` shard ownership store (in-memory plus optional etcd-backed
