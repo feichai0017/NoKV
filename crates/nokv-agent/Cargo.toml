@@ -1,24 +1,16 @@
 [package]
-name = "nokv-client"
+name = "nokv-agent"
 version = "0.1.0"
-description = "Rust SDK for NoKV metadata and object access."
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 repository.workspace = true
 homepage.workspace = true
+description = "NoKV agent tool surface: transport-free dispatch over the metadata namespace verbs."
 
 [dependencies]
-nokv-agent.workspace = true
-nokv-control.workspace = true
 nokv-meta.workspace = true
 nokv-object.workspace = true
-nokv-protocol.workspace = true
 nokv-types.workspace = true
 serde_json.workspace = true
-sha2.workspace = true
-
-[dev-dependencies]
-nokv-server.workspace = true
-tempfile.workspace = true

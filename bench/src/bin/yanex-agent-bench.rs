@@ -16,9 +16,9 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use flate2::read::GzDecoder;
+use nokv_agent::{agent_tool_definitions, execute_agent_tool};
 use nokv_client::{
-    agent_tool_definitions, execute_agent_tool, ArtifactBackend, ArtifactMetadata,
-    ArtifactRepository, ArtifactRepositoryOptions, ClientError,
+    ArtifactBackend, ArtifactMetadata, ArtifactRepository, ArtifactRepositoryOptions, ClientError,
 };
 use nokv_meta::{
     DentryWithAttr, HoltMetadataStore, MetadError, MetadataStore, NamespaceFindField,
